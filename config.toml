@@ -1,0 +1,22 @@
+[shop]
+name = "Chaska Corner"
+# ISO 4217 code. Item rates are whole units of this currency.
+currency = "PKR"
+# Locale used to format money and the clock.
+locale = "en-PK"
+
+# In-store EAN-13 labels. 13 digits, valid check digit.
+# Layout: prefix + item code + 5-digit value + check digit.
+# The item code matches the item barcode, ignoring leading zeros.
+# weight: value is weight, rate is the price per `scale` units. Stock is in the same unit as value.
+# price: value is the line price in whole currency units when scale is 1. Stock drops by one sale.
+
+[[barcode.rules]]
+prefix = "21"
+mode = "weight"
+scale = 1000
+
+[[barcode.rules]]
+prefix = "22"
+mode = "price"
+scale = 1
