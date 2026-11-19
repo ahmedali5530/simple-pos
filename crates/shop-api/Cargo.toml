@@ -9,7 +9,7 @@ axum = { version = "0.8", features = ["multipart"] }
 axum-frontend = { version = "0.2", optional = true }
 shop-core = { path = "../shop-core" }
 dotenvy = "0.15"
-libc = "0.2"
+getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
 rust-embed = { version = "8", optional = true }
 serde = { version = "1", features = ["derive"] }

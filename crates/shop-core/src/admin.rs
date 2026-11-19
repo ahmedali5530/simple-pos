@@ -539,10 +539,7 @@ pub async fn logout(pool: &PgPool, token: &str) -> Result<(), AppError> {
 
 fn new_token() -> Result<String, AppError> {
     let mut bytes = [0_u8; 32];
-    let mut file = std::fs::File::open("/dev/urandom").map_err(|_| {
-        AppError::BadRequest("Could not start the session.".into())
-    })?;
-    std::io::Read::read_exact(&mut file, &mut bytes).map_err(|_| {
+    getrandom::getrandom(&mut bytes).map_err(|_| {
         AppError::BadRequest("Could not start the session.".into())
     })?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())

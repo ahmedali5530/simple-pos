@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use postgresql_embedded::{PostgreSQL, SettingsBuilder};
@@ -95,25 +94,34 @@ fn default_home() -> PathBuf {
             return PathBuf::from(dir).join("shop-till");
         }
     }
+    if let Ok(dir) = std::env::var("LOCALAPPDATA") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir).join("shop-till");
+        }
+    }
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home).join(".local/share/shop-till");
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        if !profile.trim().is_empty() {
+            return PathBuf::from(profile).join("AppData/Local/shop-till");
+        }
     }
     PathBuf::from("data/till")
 }
 
 fn lock_till(home: &Path) -> Result<fs::File, String> {
     use std::io::Write;
-    use std::os::unix::io::AsRawFd;
     let mut file = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(home.join("till.lock"))
         .map_err(|err| err.to_string())?;
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc != 0 {
-        return Err("The till is already open.".into());
-    }
+    file.try_lock().map_err(|err| match err {
+        std::fs::TryLockError::WouldBlock => "The till is already open.".to_string(),
+        std::fs::TryLockError::Error(err) => err.to_string(),
+    })?;
     let _ = file.write_all(std::process::id().to_string().as_bytes());
     Ok(file)
 }
@@ -153,15 +161,19 @@ fn stop_leftover(home: &Path) -> Result<(), String> {
 }
 
 fn find_pg_ctl(installation: &Path) -> Option<PathBuf> {
-    let direct = installation.join("bin/pg_ctl");
-    if direct.is_file() {
-        return Some(direct);
+    for name in ["pg_ctl", "pg_ctl.exe"] {
+        let direct = installation.join("bin").join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
     }
     let entries = fs::read_dir(installation).ok()?;
     for entry in entries.flatten() {
-        let candidate = entry.path().join("bin/pg_ctl");
-        if candidate.is_file() {
-            return Some(candidate);
+        for name in ["pg_ctl", "pg_ctl.exe"] {
+            let candidate = entry.path().join("bin").join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
@@ -196,8 +208,7 @@ fn load_or_create_password(path: &Path) -> Result<String, String> {
 
 fn random_password() -> Result<String, String> {
     let mut bytes = [0u8; 24];
-    let mut file = fs::File::open("/dev/urandom").map_err(|err| err.to_string())?;
-    file.read_exact(&mut bytes).map_err(|err| err.to_string())?;
+    getrandom::getrandom(&mut bytes).map_err(|err| err.to_string())?;
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     Ok(bytes
         .iter()

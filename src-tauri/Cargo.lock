@@ -506,41 +506,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shop-api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "axum-frontend",
- "shop-core",
- "dotenvy",
- "libc",
- "postgresql_embedded",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.8.23",
- "tower-http 0.6.11",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "shop-core"
-version = "0.1.0"
-dependencies = [
- "bcrypt",
- "calamine",
- "chrono",
- "rust_xlsxwriter",
- "serde",
- "serde_json",
- "serialport",
- "sqlx 0.8.6",
- "tokio",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4313,10 +4278,46 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 name = "shop"
 version = "0.1.0"
 dependencies = [
- "shop-api",
  "libc",
+ "shop-api",
  "tauri",
  "tauri-build",
+ "tokio",
+]
+
+[[package]]
+name = "shop-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-frontend",
+ "dotenvy",
+ "getrandom 0.2.17",
+ "postgresql_embedded",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "tokio",
+ "toml 0.8.23",
+ "tower-http 0.6.11",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "shop-core"
+version = "0.1.0"
+dependencies = [
+ "bcrypt",
+ "calamine",
+ "chrono",
+ "getrandom 0.2.17",
+ "rust_xlsxwriter",
+ "serde",
+ "serde_json",
+ "serialport",
+ "sqlx 0.8.6",
  "tokio",
 ]
 

@@ -7,6 +7,7 @@ struct Running {
 }
 
 fn main() {
+    #[cfg(unix)]
     block_stop_signals();
     std::env::set_var("API_ADDR", "127.0.0.1:8788");
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -19,19 +20,22 @@ fn main() {
     });
     let url: tauri::Url = till.url().parse().expect("till address");
     let slot = Arc::new(Mutex::new(Some((runtime, till))));
-    let watched = Arc::clone(&slot);
-    std::thread::spawn(move || {
-        let mut received = 0;
-        unsafe {
-            let mut set = std::mem::zeroed();
-            libc::sigemptyset(&mut set);
-            libc::sigaddset(&mut set, libc::SIGINT);
-            libc::sigaddset(&mut set, libc::SIGTERM);
-            libc::sigwait(&set, &mut received);
-        }
-        stop_till(&watched);
-        std::process::exit(0);
-    });
+    #[cfg(unix)]
+    {
+        let watched = Arc::clone(&slot);
+        std::thread::spawn(move || {
+            let mut received = 0;
+            unsafe {
+                let mut set = std::mem::zeroed();
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGINT);
+                libc::sigaddset(&mut set, libc::SIGTERM);
+                libc::sigwait(&set, &mut received);
+            }
+            stop_till(&watched);
+            std::process::exit(0);
+        });
+    }
     let running = Running { inner: slot };
 
     tauri::Builder::default()
@@ -63,6 +67,7 @@ fn stop_till(slot: &Mutex<Option<(tokio::runtime::Runtime, shop_api::Till)>>) {
     runtime.block_on(till.stop());
 }
 
+#[cfg(unix)]
 fn block_stop_signals() {
     unsafe {
         let mut set = std::mem::zeroed();
