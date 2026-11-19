@@ -5,6 +5,7 @@ pub enum AppError {
     Db(sqlx::Error),
     BadRequest(String),
     NotFound(String),
+    Unauthorized(String),
 }
 
 impl From<sqlx::Error> for AppError {
@@ -17,7 +18,9 @@ impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AppError::Db(err) => write!(f, "{err}"),
-            AppError::BadRequest(message) | AppError::NotFound(message) => write!(f, "{message}"),
+            AppError::BadRequest(message)
+            | AppError::NotFound(message)
+            | AppError::Unauthorized(message) => write!(f, "{message}"),
         }
     }
 }

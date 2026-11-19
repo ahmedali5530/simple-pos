@@ -3,8 +3,10 @@ use sqlx::PgPool;
 use crate::barcode::{codes_match, embedded_sale, parse_embedded, prompt_sale};
 use crate::error::AppError;
 use crate::models::{
-    BillLineInput, Category, ItemPromptRequest, ItemVariant, LockedItem, LockedVariant, PosItem,
-    PosSection, PosSnapshot, PostedBill, SectionChoice, SectionLayout, ShopConfig,
+    BarcodeRule, BillLineInput, Category, ItemForm, ItemPromptRequest, ItemVariant, LockedItem,
+    LockedVariant, PosItem, PosSection, PosSnapshot, PosUser, PostedBill, PrinterSettings, SavedItem,
+    SectionChoice,
+    SectionLayout, ShopConfig,
 };
 
 struct Sale {
@@ -16,6 +18,7 @@ struct Sale {
     units: i32,
     stock_units: i32,
     amount: i32,
+    cost_total: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -27,6 +30,7 @@ struct ItemRow {
     barcode: Option<String>,
     name: String,
     rate: i32,
+    avg_cost: i64,
     stock: i32,
     portion: String,
     group_name: Option<String>,
@@ -34,6 +38,8 @@ struct ItemRow {
     prompt: String,
     base_rate: Option<i32>,
     scale: i32,
+    image_ext: Option<String>,
+    image_rev: i32,
 }
 
 pub async fn connect(database_url: &str) -> Result<PgPool, AppError> {
@@ -45,7 +51,62 @@ pub async fn connect(database_url: &str) -> Result<PgPool, AppError> {
     Ok(pool)
 }
 
+#[derive(sqlx::FromRow)]
+struct ShopRow {
+    name: String,
+    currency: String,
+    locale: String,
+    bill_prefix: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct PrinterRow {
+    print_enabled: bool,
+    printer_kind: String,
+    printer_target: String,
+    printer_port: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct RuleRow {
+    prefix: String,
+    mode: String,
+    scale: i32,
+}
+
+pub async fn current_shop(pool: &PgPool, fallback: &ShopConfig) -> Result<ShopConfig, AppError> {
+    let row = sqlx::query_as::<_, ShopRow>(
+        "SELECT name, currency, locale, bill_prefix FROM shop_settings WHERE id = 1",
+    )
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return Ok(fallback.clone());
+    };
+    let rules = sqlx::query_as::<_, RuleRow>(
+        "SELECT prefix, mode, scale FROM barcode_rules ORDER BY sort_order, id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(ShopConfig {
+        name: row.name,
+        currency: row.currency,
+        locale: row.locale,
+        bill_prefix: row.bill_prefix,
+        barcode_rules: rules
+            .into_iter()
+            .map(|rule| BarcodeRule {
+                prefix: rule.prefix,
+                mode: rule.mode,
+                scale: rule.scale,
+            })
+            .collect(),
+    })
+}
+
 pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, AppError> {
+    let shop = current_shop(pool, shop).await?;
+    let shop = &shop;
     let all_sections = sqlx::query_as::<_, SectionChoice>(
         r#"
         SELECT id, name, short_name, kind, accent, show_on_pos, pos_order
@@ -76,13 +137,16 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
             i.barcode,
             i.name,
             i.rate,
+            i.avg_cost,
             i.stock,
             i.portion,
             i.group_name,
             i.signature,
             i.prompt,
             i.base_rate,
-            i.scale
+            i.scale,
+            i.image_ext,
+            i.image_rev
         FROM items i
         JOIN categories c ON c.id = i.category_id
         JOIN sections s ON s.id = i.section_id
@@ -120,6 +184,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
             barcode: row.barcode,
             name: row.name,
             rate: row.rate,
+            cost: row.avg_cost,
             stock: row.stock,
             portion: row.portion,
             group_name: row.group_name,
@@ -127,6 +192,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
             prompt: row.prompt,
             base_rate: row.base_rate,
             scale: row.scale,
+            image_url: item_image_url(row.id, row.image_ext.as_deref(), row.image_rev),
             variants: variants
                 .iter()
                 .filter(|variant| variant.item_id == row.id)
@@ -135,12 +201,40 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         })
         .collect();
 
+    let users = sqlx::query_as::<_, PosUser>(
+        "SELECT id, name, role, active FROM users ORDER BY lower(name), id",
+    )
+    .fetch_all(pool)
+    .await?;
+
     let last_section_id = sqlx::query_scalar::<_, Option<i32>>(
         "SELECT last_section_id FROM pos_state WHERE id = 1",
     )
     .fetch_optional(pool)
     .await?
     .flatten();
+
+    let printer = sqlx::query_as::<_, PrinterRow>(
+        r#"
+        SELECT print_enabled, printer_kind, printer_target, printer_port
+        FROM shop_settings
+        WHERE id = 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(|row| PrinterSettings {
+        enabled: row.print_enabled,
+        kind: row.printer_kind,
+        target: row.printer_target,
+        port: row.printer_port,
+    })
+    .unwrap_or(PrinterSettings {
+        enabled: false,
+        kind: "network".into(),
+        target: String::new(),
+        port: 9100,
+    });
 
     let sections = all_sections
         .iter()
@@ -160,12 +254,15 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
 
     Ok(PosSnapshot {
         shop_name: shop.name.clone(),
+        bill_prefix: shop.bill_prefix.clone(),
         currency: shop.currency.clone(),
         locale: shop.locale.clone(),
         barcode_rules: shop.barcode_rules.clone(),
+        printer,
         sections,
         all_sections,
         categories,
+        users,
         last_section_id,
     })
 }
@@ -296,17 +393,364 @@ pub async fn set_item_prompt(
     load_pos(pool, shop).await
 }
 
+fn clean_code(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
+}
+
+fn map_catalog_error(err: sqlx::Error) -> AppError {
+    let constraint = err
+        .as_database_error()
+        .and_then(|db| db.constraint().map(str::to_string));
+    match constraint.as_deref() {
+        Some("items_barcode_key") | Some("item_variants_barcode_key") => {
+            AppError::BadRequest("That barcode is already used.".into())
+        }
+        Some("item_variants_item_id_name_key") => {
+            AppError::BadRequest("Each option needs its own name.".into())
+        }
+        _ => AppError::Db(err),
+    }
+}
+
+pub async fn save_item(
+    pool: &PgPool,
+    shop: &ShopConfig,
+    item_id: Option<i32>,
+    request: &ItemForm,
+) -> Result<SavedItem, AppError> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Enter an item name.".into()));
+    }
+    if request.rate < 1 {
+        return Err(AppError::BadRequest("Enter a shelf rate above 0.".into()));
+    }
+    if request.cost < 0 || request.cost > 10_000_000_000 {
+        return Err(AppError::BadRequest(
+            "Enter a cost of 0 or more.".into(),
+        ));
+    }
+    let barcode = clean_code(&request.barcode);
+    let prompt = request.prompt.trim();
+    if prompt != "none" && prompt != "quantity" && prompt != "price" {
+        return Err(AppError::BadRequest(
+            "Choose off, quantity or weight, or price.".into(),
+        ));
+    }
+    if !request.variants.is_empty() && prompt != "none" {
+        return Err(AppError::BadRequest(
+            "An item with options uses those rates. Turn asking off, or remove the options.".into(),
+        ));
+    }
+    let (base_rate, scale) = if prompt == "none" {
+        (None, 1)
+    } else {
+        let base_rate = request.base_rate.unwrap_or(0);
+        if base_rate < 1 {
+            return Err(AppError::BadRequest("Set a base rate above 0.".into()));
+        }
+        if request.scale < 1 {
+            return Err(AppError::BadRequest("Stock per 1 must be at least 1.".into()));
+        }
+        (Some(base_rate), request.scale)
+    };
+
+    let mut names = std::collections::HashSet::new();
+    let mut codes = std::collections::HashSet::new();
+    if let Some(code) = &barcode {
+        codes.insert(code.clone());
+    }
+    let mut options = Vec::new();
+    for (index, variant) in request.variants.iter().enumerate() {
+        let variant_name = variant.name.trim();
+        if variant_name.is_empty() {
+            return Err(AppError::BadRequest("Name each option.".into()));
+        }
+        if !names.insert(variant_name.to_lowercase()) {
+            return Err(AppError::BadRequest("Each option needs its own name.".into()));
+        }
+        if variant.rate < 1 {
+            return Err(AppError::BadRequest(
+                format!("{variant_name} needs a rate above 0."),
+            ));
+        }
+        if variant.units < 1 {
+            return Err(AppError::BadRequest(
+                format!("{variant_name} must take at least 1 from stock."),
+            ));
+        }
+        let variant_barcode = clean_code(&variant.barcode);
+        if let Some(code) = &variant_barcode {
+            if !codes.insert(code.clone()) {
+                return Err(AppError::BadRequest(
+                    "That barcode is used more than once on this item.".into(),
+                ));
+            }
+        }
+        options.push((index as i32, variant.id, variant_name.to_string(), variant.rate, variant.units, variant_barcode));
+    }
+
+    let section_ok = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM sections WHERE id = $1)")
+        .bind(request.section_id)
+        .fetch_one(pool)
+        .await?;
+    if !section_ok {
+        return Err(AppError::NotFound("That section is no longer in the catalog.".into()));
+    }
+    let category_ok = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1)")
+        .bind(request.category_id)
+        .fetch_one(pool)
+        .await?;
+    if !category_ok {
+        return Err(AppError::NotFound("That category is no longer in the catalog.".into()));
+    }
+
+    let mut tx = pool.begin().await?;
+    let saved_id = if let Some(id) = item_id {
+        let updated = sqlx::query(
+            r#"
+            UPDATE items
+            SET section_id = $1, category_id = $2, barcode = NULL, name = $3, rate = $4,
+                prompt = $5, base_rate = $6, scale = $7, avg_cost = $8
+            WHERE id = $9 AND active
+            "#,
+        )
+        .bind(request.section_id)
+        .bind(request.category_id)
+        .bind(name)
+        .bind(request.rate)
+        .bind(prompt)
+        .bind(base_rate)
+        .bind(scale)
+        .bind(request.cost)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_catalog_error)?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::NotFound("That item is not in the catalog.".into()));
+        }
+        let keep: Vec<i32> = options.iter().filter_map(|option| option.1).collect();
+        sqlx::query("DELETE FROM item_variants WHERE item_id = $1 AND NOT (id = ANY($2))")
+            .bind(id)
+            .bind(&keep)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_catalog_error)?;
+        sqlx::query("UPDATE item_variants SET barcode = NULL WHERE item_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_catalog_error)?;
+        sqlx::query("UPDATE items SET barcode = $1 WHERE id = $2")
+            .bind(&barcode)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_catalog_error)?;
+        for (sort_order, variant_id, variant_name, rate, units, variant_barcode) in &options {
+            if let Some(variant_id) = variant_id {
+                let changed = sqlx::query(
+                    r#"
+                    UPDATE item_variants
+                    SET name = $1, rate = $2, units = $3, barcode = $4, sort_order = $5
+                    WHERE id = $6 AND item_id = $7
+                    "#,
+                )
+                .bind(variant_name)
+                .bind(rate)
+                .bind(units)
+                .bind(variant_barcode)
+                .bind(sort_order)
+                .bind(variant_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_catalog_error)?;
+                if changed.rows_affected() == 0 {
+                    return Err(AppError::BadRequest(
+                        "One of those options is not on this item.".into(),
+                    ));
+                }
+            } else {
+                sqlx::query(
+                    r#"
+                    INSERT INTO item_variants (item_id, name, rate, units, barcode, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    "#,
+                )
+                .bind(id)
+                .bind(variant_name)
+                .bind(rate)
+                .bind(units)
+                .bind(variant_barcode)
+                .bind(sort_order)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_catalog_error)?;
+            }
+        }
+        id
+    } else {
+        let sort_order = sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM items WHERE section_id = $1",
+        )
+        .bind(request.section_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let id = sqlx::query_scalar::<_, i32>(
+            r#"
+            INSERT INTO items (
+                section_id, category_id, barcode, name, rate, stock, prompt, base_rate, scale, avg_cost, sort_order
+            )
+            VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+            RETURNING id
+            "#,
+        )
+        .bind(request.section_id)
+        .bind(request.category_id)
+        .bind(&barcode)
+        .bind(name)
+        .bind(request.rate)
+        .bind(prompt)
+        .bind(base_rate)
+        .bind(scale)
+        .bind(request.cost)
+        .bind(sort_order)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_catalog_error)?;
+        for (sort_order, _, variant_name, rate, units, variant_barcode) in &options {
+            sqlx::query(
+                r#"
+                INSERT INTO item_variants (item_id, name, rate, units, barcode, sort_order)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(id)
+            .bind(variant_name)
+            .bind(rate)
+            .bind(units)
+            .bind(variant_barcode)
+            .bind(sort_order)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_catalog_error)?;
+        }
+        id
+    };
+    tx.commit().await?;
+    let pos = load_pos(pool, shop).await?;
+    Ok(SavedItem {
+        item_id: saved_id,
+        pos,
+    })
+}
+
+fn item_image_url(id: i32, ext: Option<&str>, rev: i32) -> Option<String> {
+    let ext = ext?;
+    if !matches!(ext, "jpg" | "png" | "webp" | "gif") {
+        return None;
+    }
+    Some(format!("/api/items/{id}/image?v={rev}"))
+}
+
+pub async fn item_image_ext(pool: &PgPool, item_id: i32) -> Result<Option<String>, AppError> {
+    let row = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT image_ext FROM items WHERE id = $1 AND active",
+    )
+    .bind(item_id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        None => Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        )),
+        Some(ext) => Ok(ext),
+    }
+}
+
+pub async fn set_item_image(
+    pool: &PgPool,
+    shop: &ShopConfig,
+    item_id: i32,
+    ext: &str,
+) -> Result<SavedItem, AppError> {
+    if !matches!(ext, "jpg" | "png" | "webp" | "gif") {
+        return Err(AppError::BadRequest(
+            "Use a JPEG, PNG, WebP, or GIF.".into(),
+        ));
+    }
+    let updated = sqlx::query(
+        r#"
+        UPDATE items
+        SET image_ext = $1, image_rev = image_rev + 1
+        WHERE id = $2 AND active
+        "#,
+    )
+    .bind(ext)
+    .bind(item_id)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
+    }
+    Ok(SavedItem {
+        item_id,
+        pos: load_pos(pool, shop).await?,
+    })
+}
+
+pub async fn clear_item_image(
+    pool: &PgPool,
+    shop: &ShopConfig,
+    item_id: i32,
+) -> Result<SavedItem, AppError> {
+    let exists = sqlx::query_scalar::<_, i32>("SELECT id FROM items WHERE id = $1 AND active")
+        .bind(item_id)
+        .fetch_optional(pool)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
+    }
+    sqlx::query("UPDATE items SET image_ext = NULL WHERE id = $1")
+        .bind(item_id)
+        .execute(pool)
+        .await?;
+    Ok(SavedItem {
+        item_id,
+        pos: load_pos(pool, shop).await?,
+    })
+}
+
 pub async fn post_bill(
     pool: &PgPool,
     shop: &ShopConfig,
+    user_id: i32,
     section_id: i32,
     lines: &[BillLineInput],
+    customer: Option<&str>,
 ) -> Result<PostedBill, AppError> {
     if lines.is_empty() {
         return Err(AppError::BadRequest(
             "Add at least one item before posting the bill.".into(),
         ));
     }
+    let customer = customer.map(str::trim).filter(|name| !name.is_empty());
+    if customer.is_some_and(|name| name.chars().count() > 80) {
+        return Err(AppError::BadRequest(
+            "Keep the customer name to 80 characters.".into(),
+        ));
+    }
+    let shop = current_shop(pool, shop).await?;
+    let shop = &shop;
 
     let mut tx = pool.begin().await?;
     let section_name = sqlx::query_scalar::<_, String>(
@@ -342,6 +786,7 @@ pub async fn post_bill(
                     barcode,
                     stock,
                     rate,
+                    avg_cost,
                     (SELECT COUNT(*) FROM item_variants WHERE item_id = items.id)::int AS variant_count,
                     prompt,
                     base_rate,
@@ -458,6 +903,9 @@ pub async fn post_bill(
         let amount = line.rate.checked_mul(line.qty).ok_or_else(|| {
             AppError::BadRequest("That line amount is too large.".into())
         })?;
+        let cost_total = i64::from(stock_units).checked_mul(item.avg_cost).ok_or_else(|| {
+            AppError::BadRequest("That line cost is too large.".into())
+        })?;
         total = total.checked_add(amount).ok_or_else(|| {
             AppError::BadRequest("That bill total is too large.".into())
         })?;
@@ -470,23 +918,26 @@ pub async fn post_bill(
             units,
             stock_units,
             amount,
+            cost_total,
         });
     }
 
     let bill_id = sqlx::query_scalar::<_, i32>("SELECT nextval('bills_id_seq')::int")
         .fetch_one(&mut *tx)
         .await?;
-    let bill_no = format!("CC-{}", 1000 + bill_id);
+    let bill_no = format!("{}-{}", shop.bill_prefix, 1000 + bill_id);
     sqlx::query(
         r#"
-        INSERT INTO bills (id, bill_no, section_id, total)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO bills (id, bill_no, section_id, user_id, total, customer)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
     .bind(bill_id)
     .bind(&bill_no)
     .bind(section_id)
+    .bind(user_id)
     .bind(total)
+    .bind(customer)
     .execute(&mut *tx)
     .await?;
 
@@ -500,8 +951,8 @@ pub async fn post_bill(
     for sale in &prepared {
         sqlx::query(
             r#"
-            INSERT INTO bill_lines (bill_id, item_id, variant_id, name, rate, qty, units, amount)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO bill_lines (bill_id, item_id, variant_id, name, rate, qty, units, amount, cost_total)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(bill_id)
@@ -512,6 +963,7 @@ pub async fn post_bill(
         .bind(sale.qty)
         .bind(sale.units)
         .bind(sale.amount)
+        .bind(sale.cost_total)
         .execute(&mut *tx)
         .await?;
         sqlx::query(

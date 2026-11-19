@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "Shop till"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+shop-api = { path = "../crates/shop-api", features = ["bundle"] }
+libc = "0.2"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

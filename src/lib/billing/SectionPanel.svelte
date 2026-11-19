@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import ItemPicture from './ItemPicture.svelte'
+  import VirtualGrid from './VirtualGrid.svelte'
   import { formatMoney } from '../money'
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../types'
 
@@ -22,6 +24,10 @@
     onClear: () => void
     onPost: () => void
     posting: boolean
+    customer: string
+    onCustomer: (name: string) => void
+    skipPrint: boolean
+    onSkipPrint: (skip: boolean) => void
   }
 
   let {
@@ -43,6 +49,10 @@
     onClear,
     onPost,
     posting,
+    customer,
+    onCustomer,
+    skipPrint,
+    onSkipPrint,
   }: Props = $props()
 
   let scanCode = $state('')
@@ -260,42 +270,49 @@
     {/each}
   </div>
 
-  <div class="items">
-    <div class="grid">
-      {#each visibleItems as item (item.id)}
-        <button
-          type="button"
-          class="card"
-          class:out={!sellable(item)}
-          disabled={!sellable(item)}
-          aria-label={
-            item.variants.length
-              ? `Choose ${item.name}`
-              : item.prompt === 'quantity'
-                ? `Enter quantity for ${item.name}`
-                : item.prompt === 'price'
-                  ? `Enter price for ${item.name}`
-                  : `Add ${item.name}`
-          }
-          onclick={() => onAdd(item)}
-        >
-          <span class="meta">
-            {#if item.barcode}#{item.barcode} · {/if}Stock {item.stock}
-          </span>
-          <strong>{item.name}</strong>
-          {#if item.variants.length}
-            <span class="options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
-          {:else if item.prompt === 'quantity'}
-            <span class="options">Asks quantity / weight</span>
-          {:else if item.prompt === 'price'}
-            <span class="options">Asks price</span>
+  <VirtualGrid class="items" items={visibleItems} estimate={150} min={200} gap={12} reset="{section.id}:{filter}" key={(item) => item.id}>
+    {#snippet children(item)}
+      <button
+        type="button"
+        class="card"
+        class:out={!sellable(item)}
+        disabled={!sellable(item)}
+        aria-label={
+          item.variants.length
+            ? `Choose ${item.name}`
+            : item.prompt === 'quantity'
+              ? `Enter quantity for ${item.name}`
+              : item.prompt === 'price'
+                ? `Enter price for ${item.name}`
+                : `Add ${item.name}`
+        }
+        style:--accent={section.accent}
+        onclick={() => onAdd(item)}
+      >
+        <span class="card-body" class:has-photo={!!item.image_url}>
+          <span class="card-name">{item.name}</span>
+          {#if item.image_url}
+            <ItemPicture class="card-thumb" src={item.image_url} />
           {/if}
-          <span class="price">{priceLabel(item)}</span>
-          <span class="category">{item.category_name}</span>
-        </button>
-      {/each}
-    </div>
-  </div>
+          <span class="card-sub">
+            <span>{item.category_name}</span>
+            {#if item.barcode}<span class="card-code">{item.barcode}</span>{/if}
+          </span>
+          {#if item.variants.length}
+            <span class="card-options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
+          {:else if item.prompt === 'quantity'}
+            <span class="card-tag">Asks quantity / weight</span>
+          {:else if item.prompt === 'price'}
+            <span class="card-tag ask-price">Asks price</span>
+          {/if}
+          <span class="card-foot">
+            <span class="price">{priceLabel(item)}</span>
+            <span class="card-stock">{item.stock} on hand</span>
+          </span>
+        </span>
+      </button>
+    {/snippet}
+  </VirtualGrid>
   </div>
 
   <footer class="bill">
@@ -334,6 +351,27 @@
           </div>
         {/each}
       {/if}
+    </div>
+    <label class="bill-customer">
+      Customer
+      <input
+        maxlength="80"
+        placeholder="Optional"
+        value={customer}
+        oninput={(event) => onCustomer(event.currentTarget.value)}
+      />
+    </label>
+    <div class="skip-print">
+      <button
+        type="button"
+        class="switch"
+        class:on={skipPrint}
+        role="switch"
+        aria-checked={skipPrint}
+        aria-label="Skip receipt"
+        onclick={() => onSkipPrint(!skipPrint)}
+      ><i></i></button>
+      Skip receipt
     </div>
     <div class="total-row">
       <div>

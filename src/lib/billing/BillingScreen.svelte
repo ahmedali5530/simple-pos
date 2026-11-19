@@ -1,12 +1,28 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { loadPos, postBill, rememberSection, saveItemPrompt } from '../api'
+  import {
+    currentSession,
+    loadPos,
+    logout,
+    postBill,
+    rememberSection,
+    removeItemPicture,
+    saveCatalogItem,
+    saveItemPicture,
+    type CatalogItem,
+  } from '../api'
   import { embeddedSale, findEmbedded, parseEmbedded } from '../barcode'
   import { formatMoney } from '../money'
+  import { printReceipt } from '../print'
+  import { followLink, location, reportsPage, screenOf, settingsPage } from '../route.svelte'
+  import { session, signOut } from '../session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../types'
   import AttentionDialog from './AttentionDialog.svelte'
-  import ItemSetup from './ItemSetup.svelte'
   import MeasureDialog from './MeasureDialog.svelte'
+  import CashScreen from './CashScreen.svelte'
+  import ReportsScreen from './ReportsScreen.svelte'
+  import SettingsScreen from './SettingsScreen.svelte'
+  import StockScreen from './StockScreen.svelte'
   import SectionPanel from './SectionPanel.svelte'
   import VariantDialog from './VariantDialog.svelte'
 
@@ -17,10 +33,11 @@
   let filters = $state<Record<number, number | 'all'>>({})
   let posted = $state<Record<number, string>>({})
   let focusId = $state<number | null>(null)
-  let setupOpen = $state(false)
   let savingItem = $state(false)
   let measure = $state<{ sectionId: number; itemId: number } | null>(null)
   let postingId = $state<number | null>(null)
+  let customers = $state<Record<number, string>>({})
+  let skipPrint = $state(false)
   let now = $state(new Date())
   let pending = $state<{ sectionId: number; itemId: number } | null>(null)
   let lastKey = $state<Record<number, string>>({})
@@ -28,23 +45,30 @@
 
   const sections = $derived(snapshot?.sections ?? [])
   const active = $derived(sections.find((section) => section.id === focusId) ?? sections[0] ?? null)
-  const subtitle = $derived(active?.name ?? 'No sections on this till')
+  const screen = $derived(screenOf(location.path))
+  const subtitle = $derived(
+    screen === 'settings'
+      ? 'Settings'
+      : screen === 'stock'
+        ? 'Stock'
+        : screen === 'reports'
+          ? 'Reports'
+          : screen === 'cash'
+            ? 'Cash closing'
+          : screen === 'missing'
+            ? 'Not found'
+            : (active?.name ?? 'No sections on this till'),
+  )
 
   $effect(() => {
-    const timer = setInterval(() => {
-      now = new Date()
-    }, 1000)
-    return () => clearInterval(timer)
-  })
-
-  $effect(() => {
+    if (session.user) currentSession().catch(() => {})
     loadPos()
       .then(async (pos) => {
         snapshot = pos
         const saved = pos.sections.some((section) => section.id === pos.last_section_id)
         focusId = saved ? pos.last_section_id : (pos.sections[0]?.id ?? null)
         await tick()
-        if (focusId != null) {
+        if (screenOf(location.path) === 'billing' && focusId != null) {
           document.querySelector<HTMLInputElement>(`[data-scan="${focusId}"]`)?.focus()
         }
       })
@@ -288,9 +312,16 @@
   async function post(sectionId: number) {
     const lines = linesFor(sectionId)
     if (lines.length === 0) return
+    if (!session.user || !snapshot) {
+      attention = { tone: 'warning', message: 'Sign in before posting the bill.' }
+      return
+    }
+    const printer = snapshot.printer
+    const printThis = printer.enabled && !skipPrint
     postingId = sectionId
     attention = null
     try {
+      const customer = (customers[sectionId] ?? '').trim()
       const result = await postBill(
         sectionId,
         lines.map((line) => ({
@@ -301,12 +332,22 @@
           code: line.code,
           entry: line.entry,
         })),
+        customer || null,
       )
       snapshot = result.pos
       carts = { ...carts, [sectionId]: [] }
+      customers = { ...customers, [sectionId]: '' }
       posted = {
         ...posted,
         [sectionId]: `${result.bill_no} posted · ${formatMoney(result.total, result.pos.currency, result.pos.locale)}`,
+      }
+      try {
+        if (printThis) await printReceipt(result.bill_no)
+      } catch (error) {
+        attention = {
+          tone: 'warning',
+          message: error instanceof Error ? error.message : 'The receipt did not print. The sale is saved.',
+        }
       }
     } catch (error) {
       attention = {
@@ -318,23 +359,56 @@
     }
   }
 
+  async function leave() {
+    try {
+      await logout()
+    } catch {
+      // The local session still closes.
+    }
+    signOut()
+  }
+
   async function saveItem(
-    itemId: number,
-    body: { prompt: 'none' | 'quantity' | 'price'; base_rate: number | null; scale: number },
+    itemId: number | null,
+    body: CatalogItem,
+    picture: { file: File | null; remove: boolean },
   ) {
     savingItem = true
     try {
-      snapshot = await saveItemPrompt(itemId, body)
+      const saved = await saveCatalogItem(itemId, body)
+      snapshot = saved.pos
       attention = null
-    } catch (error) {
-      attention = {
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not save the item.',
+      let pictureError: string | null = null
+      try {
+        if (picture.remove && !picture.file) {
+          snapshot = (await removeItemPicture(saved.item_id)).pos
+        }
+        if (picture.file) {
+          snapshot = (await saveItemPicture(saved.item_id, picture.file)).pos
+        }
+      } catch (error) {
+        pictureError = error instanceof Error ? error.message : 'Could not save the picture.'
       }
+      const item = snapshot.sections
+        .flatMap((section) => section.items)
+        .find((entry) => entry.id === saved.item_id)
+      if (!item) throw new Error('The saved item did not come back from the till.')
+      return { item, pictureError }
     } finally {
       savingItem = false
     }
   }
+
+  function applyPos(pos: PosSnapshot) {
+    snapshot = pos
+    if (focusId != null && !pos.sections.some((section) => section.id === focusId)) {
+      focusId = pos.last_section_id ?? pos.sections[0]?.id ?? null
+    }
+  }
+
+  $effect(() => {
+    document.title = snapshot?.shop_name.trim() || 'Shop'
+  })
 
   function initials(name: string) {
     const words = name.trim().split(/\s+/).filter(Boolean)
@@ -342,9 +416,16 @@
     return letters.toUpperCase()
   }
 
+  async function openBilling(event: MouseEvent) {
+    followLink(event, '/billing')
+    await tick()
+    if (focusId != null) document.querySelector<HTMLInputElement>(`[data-scan="${focusId}"]`)?.focus()
+  }
+
   function onKeydown(event: KeyboardEvent) {
     if (attention) return
     if (!snapshot) return
+    if (screen !== 'billing' || !session.user) return
     if (event.key === 'F12') {
       event.preventDefault()
       if (focusId != null) void post(focusId)
@@ -372,10 +453,6 @@
         measure = null
         return
       }
-      if (setupOpen) {
-        setupOpen = false
-        return
-      }
       if (focusId != null) carts = { ...carts, [focusId]: [] }
     }
   }
@@ -394,35 +471,54 @@
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="mark">{initials(snapshot?.shop_name ?? 'Chaska Corner')}</div>
+      <div class="mark">{initials(snapshot?.shop_name ?? 'Shop')}</div>
       <div>
         <h1>
-          {snapshot?.shop_name ?? 'Chaska Corner'}
-          <span class="badge">POS & STOCK</span>
+          {snapshot?.shop_name ?? 'Shop'}
         </h1>
-        <p>{subtitle}</p>
       </div>
     </div>
     <nav class="nav" aria-label="Main">
-      <button type="button" class="active">POS Billing</button>
-      <button type="button" disabled title="Stock comes after billing">Stock In / Out</button>
-      <button type="button" disabled title="Reports come after billing">Reports & Summary</button>
+      <a href="/billing" class:active={screen === 'billing'} onclick={openBilling}>POS Billing</a>
+      <a href="/stock" class:active={screen === 'stock'} onclick={(event) => followLink(event, '/stock')}>Stock In / Out</a>
+      <a href="/reports/sales" class:active={screen === 'reports'} onclick={(event) => followLink(event, '/reports/sales')}>Reports & Summary</a>
+      <a href="/cash" class:active={screen === 'cash'} onclick={(event) => followLink(event, '/cash')}>Cash Closing</a>
+      <a href="/settings/items" class:active={screen === 'settings'} onclick={(event) => followLink(event, '/settings/items')}>Settings</a>
     </nav>
     <div class="top-actions">
-      <button type="button" class="sections-button" onclick={() => (setupOpen = true)} disabled={!snapshot}>
-        Items
-      </button>
-      <div class="clock">
-        <div>
-          {now.toLocaleDateString(snapshot?.locale ?? 'en', { day: '2-digit', month: 'short', year: 'numeric' })}
-          · {now.toLocaleTimeString(snapshot?.locale ?? 'en', { hour: '2-digit', minute: '2-digit' })}
-        </div>
-        <div class="ready"><i></i>System Ready{#if snapshot} ({snapshot.currency}){/if}</div>
-      </div>
+      {#if session.user}
+        <span class="who">{session.user.name}</span>
+        <button type="button" class="sections-button" onclick={leave}>Sign out</button>
+      {:else}
+        <a class="sections-button" href="/login" onclick={(event) => followLink(event, '/login')}>Sign in</a>
+      {/if}
     </div>
   </header>
 
-  {#if snapshot}
+  {#if !snapshot && !loadFailed}
+    <p class="loading">Opening the till…</p>
+  {:else if !snapshot}
+    <p class="loading">The till did not open.</p>
+  {:else if screen === 'settings'}
+    <SettingsScreen page={settingsPage(location.path)} {snapshot} saving={savingItem} onSave={saveItem} onChange={applyPos} />
+  {:else if screen === 'stock'}
+    <main class="stage">
+      <StockScreen sections={snapshot.sections} categories={snapshot.categories} currency={snapshot.currency} locale={snapshot.locale} onChange={applyPos} />
+    </main>
+  {:else if screen === 'reports'}
+    <ReportsScreen page={reportsPage(location.path)} currency={snapshot.currency} locale={snapshot.locale} />
+  {:else if screen === 'cash'}
+    <main class="stage">
+      <CashScreen currency={snapshot.currency} locale={snapshot.locale} />
+    </main>
+  {:else if screen === 'missing'}
+    <main class="stage">
+      <section class="place">
+        <h2>That page is not in the till.</h2>
+        <p class="hint"><a href="/billing" onclick={openBilling}>Back to billing</a></p>
+      </section>
+    </main>
+  {:else}
     <div class="section-tabs" role="tablist" aria-label="Sections">
       {#each sections as section, index (section.id)}
         <button
@@ -459,24 +555,29 @@
           onAlert={(message, tone) => (attention = { message, tone })}
           onAdd={(item) => requestAdd(active.id, item)}
           onQty={(key, qty) => setQty(active.id, key, qty)}
-          onClear={() => (carts = { ...carts, [active.id]: [] })}
+          onClear={() => {
+            carts = { ...carts, [active.id]: [] }
+            customers = { ...customers, [active.id]: '' }
+          }}
           onPost={() => post(active.id)}
           posting={postingId === active.id}
+          customer={customers[active.id] ?? ''}
+          onCustomer={(name) => (customers = { ...customers, [active.id]: name })}
+          {skipPrint}
+          onSkipPrint={(skip) => (skipPrint = skip)}
         />
       {/if}
     </main>
-  {:else if !loadFailed}
-    <p class="loading">Opening the till…</p>
-  {:else}
-    <p class="loading">The till did not open.</p>
   {/if}
 
+  {#if screen === 'billing'}
   <footer class="keys">
     <span>F1–F8 switch section</span>
     <span>Enter adds, selects, or applies +qty</span>
     <span>F12 posts the focused bill</span>
     <span>Esc clears it</span>
   </footer>
+  {/if}
 </div>
 
 {#if attention}
@@ -490,17 +591,6 @@
     locale={snapshot.locale}
     onClose={() => (measure = null)}
     onAdd={confirmMeasure}
-  />
-{/if}
-
-{#if setupOpen && snapshot}
-  <ItemSetup
-    sections={snapshot.sections}
-    currency={snapshot.currency}
-    locale={snapshot.locale}
-    saving={savingItem}
-    onClose={() => (setupOpen = false)}
-    onSave={saveItem}
   />
 {/if}
 

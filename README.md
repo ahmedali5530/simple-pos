@@ -6,7 +6,7 @@ One till for a shop that sells retail and food. Each section has its own bill. T
 
 ```sh
 docker start chaska-pos-db
-cargo run -p chaska-api
+cargo run -p shop-api
 npm install
 npm run dev
 ```
