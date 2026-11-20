@@ -239,7 +239,8 @@ fn restore_real_postgres(install_dir: &Path) -> Result<(), String> {
     if !server.exists() {
         return Ok(());
     }
-    fs::copy(&server, &postgres).map_err(|err| format!("{}: {err}", postgres.display()))
+    fs::copy(&server, &postgres).map_err(|err| format!("{}: {err}", postgres.display()))?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -269,7 +270,6 @@ fn install_postgres_launcher(install_dir: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 async fn windows_initdb(install_dir: &Path, home: &Path, password: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
     let data = home.join("pgdata");
     fs::create_dir_all(&data).map_err(|err| err.to_string())?;
     let pwfile = home.join("pgpass");
