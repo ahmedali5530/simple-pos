@@ -29,7 +29,7 @@ jobs:
         run: npm ci
 
       - name: Build the database launcher
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin pgwrap
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml -p pgwrap
 
       - name: Embed the database launcher
         run: Copy-Item -Force src-tauri\target\release\pgwrap.exe src-tauri\pgwrap.exe

@@ -1,0 +1,9 @@
+[package]
+name = "pgwrap"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "pgwrap"
+path = "src/main.rs"
