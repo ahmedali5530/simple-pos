@@ -22,8 +22,19 @@ fn relay() -> Option<i32> {
     let mut command = std::process::Command::new(real);
     command.args(std::env::args_os().skip(1));
     #[cfg(target_os = "windows")]
-    hide_without_dropping_stdio(&mut command);
+    hide_without_dropping_stdio(&mut command, keeps_a_window());
     command.status().ok()?.code()
+}
+
+/// initdb's one-shot helpers read and write the console pipes. Hiding those
+/// processes is what crashes post-bootstrap setup. The long-running server
+/// is every other launch.
+#[cfg(target_os = "windows")]
+fn keeps_a_window() -> bool {
+    std::env::args_os().skip(1).any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--boot" || arg == "--single" || arg == "--describe-config"
+    })
 }
 
 fn server_name() -> &'static str {
@@ -35,19 +46,22 @@ fn server_name() -> &'static str {
 }
 
 #[cfg(target_os = "windows")]
-fn hide_without_dropping_stdio(command: &mut std::process::Command) {
+fn hide_without_dropping_stdio(command: &mut std::process::Command, keep_window: bool) {
     use std::os::windows::process::CommandExt;
 
     // Explicit handles make Rust set STARTF_USESTDHANDLES. CREATE_NO_WINDOW
     // alone leaves the server with no standard input, and initdb's SQL pipe
-    // never arrives.
+    // never arrives. One-shot initdb launches keep a window so that pipe stays
+    // a real console handle.
     unsafe {
         command
             .stdin(stdio_from(STD_INPUT_HANDLE))
             .stdout(stdio_from(STD_OUTPUT_HANDLE))
             .stderr(stdio_from(STD_ERROR_HANDLE));
     }
-    command.creation_flags(0x0800_0000);
+    if !keep_window {
+        command.creation_flags(0x0800_0000);
+    }
 }
 
 #[cfg(target_os = "windows")]

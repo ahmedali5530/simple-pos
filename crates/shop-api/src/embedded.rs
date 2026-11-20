@@ -70,16 +70,20 @@ impl EmbeddedDb {
         #[cfg(target_os = "windows")]
         let install_dir = server.settings().installation_dir.clone();
         stop_leftover(&home)?;
-        #[cfg(target_os = "windows")]
-        install_postgres_launcher(&install_dir)?;
+        // initdb must run the real postgres.exe. The stand-in has no console,
+        // and the post-bootstrap step then crashes with 0xC0000005. Put the
+        // stand-in in place only after the data directory exists.
         #[cfg(target_os = "windows")]
         if init_on_windows {
             if !cluster_is_complete(&home.join("pgdata")) {
                 fs::remove_dir_all(home.join("pgdata"))
                     .map_err(|err| format!("Could not reset the shop database: {err}"))?;
             }
+            restore_real_postgres(&install_dir)?;
             windows_initdb(&install_dir, &home, &password).await?;
         }
+        #[cfg(target_os = "windows")]
+        install_postgres_launcher(&install_dir)?;
         server
             .start()
             .await
@@ -228,14 +232,30 @@ fn with_database_log(home: &Path, mut message: String) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn restore_real_postgres(install_dir: &Path) -> Result<(), String> {
+    let bin = postgres_bin(install_dir)?;
+    let postgres = bin.join("postgres.exe");
+    let server = bin.join("postgres-server.exe");
+    if !server.exists() {
+        return Ok(());
+    }
+    fs::copy(&server, &postgres).map_err(|err| format!("{}: {err}", postgres.display()))
+}
+
+#[cfg(target_os = "windows")]
+fn postgres_bin(install_dir: &Path) -> Result<PathBuf, String> {
+    find_bin(install_dir, &["pg_ctl.exe", "pg_ctl"])
+        .and_then(|program| program.parent().map(Path::to_path_buf))
+        .ok_or_else(|| "Could not find the shop database programs.".to_string())
+}
+
+#[cfg(target_os = "windows")]
 fn install_postgres_launcher(install_dir: &Path) -> Result<(), String> {
     let bytes = PG_LAUNCHER.get().copied().unwrap_or(&[]);
     if bytes.is_empty() {
         return Err("This build cannot start the shop database without a terminal.".to_string());
     }
-    let bin = find_bin(install_dir, &["pg_ctl.exe", "pg_ctl"])
-        .and_then(|program| program.parent().map(Path::to_path_buf))
-        .ok_or_else(|| "Could not find the shop database programs.".to_string())?;
+    let bin = postgres_bin(install_dir)?;
     let postgres = bin.join("postgres.exe");
     let server = bin.join("postgres-server.exe");
     if !server.exists() {
