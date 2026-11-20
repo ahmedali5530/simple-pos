@@ -9,6 +9,9 @@ on:
 jobs:
   nsis:
     runs-on: windows-latest
+    env:
+      POSTGRESQL_VERSION: "=16.16.0"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +36,9 @@ jobs:
 
       - name: Embed the database launcher
         run: Copy-Item -Force src-tauri\target\release\pgwrap.exe src-tauri\pgwrap.exe
+
+      - name: Drop a cached database bundle
+        run: Get-ChildItem -Path src-tauri\target -Recurse -Directory -Filter "postgresql_embedded-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
       - name: Build the NSIS installer
         run: npm exec --yes --package=@tauri-apps/cli@2.12.6 -- tauri build --bundles nsis

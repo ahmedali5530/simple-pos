@@ -1,0 +1,5 @@
+[env]
+# Bundled with the Windows till. Keep this equal to POSTGRES_VERSION in
+# crates/shop-api/src/embedded.rs. PostgreSQL 18 initdb crashes on that PC.
+# force overrides a leftover POSTGRESQL_VERSION from the shell.
+POSTGRESQL_VERSION = { value = "=16.16.0", force = true }

@@ -5,9 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use postgresql_embedded::{PostgreSQL, SettingsBuilder};
+use postgresql_embedded::{PostgreSQL, SettingsBuilder, VersionReq};
 
 const DATABASE: &str = "shop";
+/// Same string as `POSTGRESQL_VERSION` in `.cargo/config.toml`.
+/// PostgreSQL 18's initdb dies on the shop Windows PC during post-bootstrap
+/// (`0xC0000005`), including with checksums turned off. 16 matches the shop
+/// database and gets through that step.
+const POSTGRES_VERSION: &str = "=16.16.0";
 #[cfg(target_os = "windows")]
 static PG_LAUNCHER: OnceLock<&'static [u8]> = OnceLock::new();
 
@@ -62,16 +67,18 @@ impl EmbeddedDb {
         }
         // Stop a database left open before replacing postgres.exe. Windows will
         // not let us rewrite a program that is still running.
+        #[cfg(target_os = "windows")]
+        let install_dir = server.settings().installation_dir.clone();
         stop_leftover(&home)?;
         #[cfg(target_os = "windows")]
-        install_postgres_launcher(&home)?;
+        install_postgres_launcher(&install_dir)?;
         #[cfg(target_os = "windows")]
         if init_on_windows {
             if !cluster_is_complete(&home.join("pgdata")) {
                 fs::remove_dir_all(home.join("pgdata"))
                     .map_err(|err| format!("Could not reset the shop database: {err}"))?;
             }
-            windows_initdb(&home, &password).await?;
+            windows_initdb(&install_dir, &home, &password).await?;
         }
         server
             .start()
@@ -178,6 +185,7 @@ fn database_server(home: &Path, password: &str, port: u16) -> PostgreSQL {
         .password(password)
         .temporary(false)
         .timeout(Some(Duration::from_secs(180)))
+        .version(VersionReq::parse(POSTGRES_VERSION).expect("postgres version"))
         .configuration(configuration)
         .build();
     PostgreSQL::new(settings)
@@ -220,12 +228,12 @@ fn with_database_log(home: &Path, mut message: String) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn install_postgres_launcher(home: &Path) -> Result<(), String> {
+fn install_postgres_launcher(install_dir: &Path) -> Result<(), String> {
     let bytes = PG_LAUNCHER.get().copied().unwrap_or(&[]);
     if bytes.is_empty() {
         return Err("This build cannot start the shop database without a terminal.".to_string());
     }
-    let bin = find_bin(&home.join("postgres"), &["pg_ctl.exe", "pg_ctl"])
+    let bin = find_bin(install_dir, &["pg_ctl.exe", "pg_ctl"])
         .and_then(|program| program.parent().map(Path::to_path_buf))
         .ok_or_else(|| "Could not find the shop database programs.".to_string())?;
     let postgres = bin.join("postgres.exe");
@@ -240,13 +248,13 @@ fn install_postgres_launcher(home: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-async fn windows_initdb(home: &Path, password: &str) -> Result<(), String> {
+async fn windows_initdb(install_dir: &Path, home: &Path, password: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let data = home.join("pgdata");
     fs::create_dir_all(&data).map_err(|err| err.to_string())?;
     let pwfile = home.join("pgpass");
     fs::write(&pwfile, password).map_err(|err| format!("{}: {err}", pwfile.display()))?;
-    let initdb = find_bin(&home.join("postgres"), &["initdb.exe", "initdb"])
+    let initdb = find_bin(install_dir, &["initdb.exe", "initdb"])
         .ok_or_else(|| "Could not find initdb.exe in the shop database install.".to_string())?;
     let log_path = home.join("initdb.log");
     let log_file =
