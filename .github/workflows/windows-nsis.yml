@@ -31,10 +31,10 @@ jobs:
       - name: Install the till dependencies
         run: npm ci
 
-      - name: Build the database launcher
+      - name: Build the windowless command shell
         run: cargo build --release --manifest-path src-tauri/Cargo.toml -p pgwrap
 
-      - name: Embed the database launcher
+      - name: Embed the windowless command shell
         run: Copy-Item -Force src-tauri\target\release\pgwrap.exe src-tauri\pgwrap.exe
 
       - name: Drop a cached database bundle

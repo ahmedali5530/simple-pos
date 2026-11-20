@@ -416,6 +416,81 @@
     return letters.toUpperCase()
   }
 
+  function scanField() {
+    if (focusId == null) return null
+    return document.querySelector<HTMLInputElement>(`[data-scan="${focusId}"]`)
+  }
+
+  function dialogOpen() {
+    return attention != null || measure != null || pending != null
+  }
+
+  function scrollbarClick(event: MouseEvent) {
+    let element = event.target instanceof Element ? event.target : null
+    while (element) {
+      if (element instanceof HTMLElement) {
+        const rect = element.getBoundingClientRect()
+        const x = event.clientX - rect.left
+        const y = event.clientY - rect.top
+        const vertical = element.scrollHeight > element.clientHeight + 1 && x > element.clientLeft + element.clientWidth
+        const horizontal = element.scrollWidth > element.clientWidth + 1 && y > element.clientTop + element.clientHeight
+        if (vertical || horizontal) return true
+      }
+      element = element.parentElement
+    }
+    return false
+  }
+
+  function keepTyping(target: EventTarget | null) {
+    return (
+      target instanceof Element &&
+      !!target.closest(
+        'input, textarea, select, label, a[href], [role="dialog"], [role="alertdialog"], .sheet, .attention',
+      )
+    )
+  }
+
+  $effect(() => {
+    const restore = () => {
+      if (screenOf(location.path) !== 'billing' || focusId == null || dialogOpen()) return
+      if (keepTyping(document.activeElement)) return
+      scanField()?.focus({ preventScroll: true })
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (screen !== 'billing' || focusId == null || dialogOpen()) return
+      if (keepTyping(event.target) || scrollbarClick(event)) return
+      // Focus would move on this press. Cancelling it keeps the scan field,
+      // and the button under the pointer still receives the click.
+      event.preventDefault()
+      restore()
+    }
+    const onPointerUp = (event: PointerEvent) => {
+      if (screen !== 'billing' || focusId == null || dialogOpen()) return
+      if (keepTyping(event.target) || scrollbarClick(event)) return
+      // The click focuses the button after pointerdown. Put the scan field
+      // back once that click has finished.
+      setTimeout(restore, 0)
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('pointerup', onPointerUp, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('pointerup', onPointerUp, true)
+    }
+  })
+
+  $effect(() => {
+    const billing = screen === 'billing' && focusId != null
+    const blocked = dialogOpen()
+    if (!billing || blocked) return
+    const id = focusId
+    queueMicrotask(() => {
+      if (screenOf(location.path) !== 'billing' || dialogOpen()) return
+      if (keepTyping(document.activeElement)) return
+      document.querySelector<HTMLInputElement>(`[data-scan="${id}"]`)?.focus({ preventScroll: true })
+    })
+  })
+
   async function openBilling(event: MouseEvent) {
     followLink(event, '/billing')
     await tick()
@@ -441,8 +516,9 @@
     }
     if (event.key === 'Escape') {
       const target = event.target
-      if (target instanceof HTMLInputElement) {
-        target.blur()
+      if (target instanceof HTMLInputElement && !target.hasAttribute('data-scan') && focusId != null) {
+        event.preventDefault()
+        document.querySelector<HTMLInputElement>(`[data-scan="${focusId}"]`)?.focus({ preventScroll: true })
         return
       }
       if (pending) {
@@ -548,7 +624,6 @@
           posted={posted[active.id] ?? ''}
           currency={snapshot.currency}
           locale={snapshot.locale}
-          onFocus={(scan) => focusSection(active.id, scan)}
           onFilter={(filter) => (filters = { ...filters, [active.id]: filter })}
           onScan={(code, qty) => scan(active.id, code, qty)}
           onPick={(item, variant, qty) => pick(active.id, item, variant, qty)}

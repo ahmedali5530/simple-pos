@@ -14,7 +14,6 @@ const DATABASE: &str = "shop";
 /// database and gets through that step.
 const POSTGRES_VERSION: &str = "=16.16.0";
 #[cfg(target_os = "windows")]
-#[allow(dead_code)] // The stand-in is not installed. Replacing postgres.exe breaks child startup.
 static PG_LAUNCHER: OnceLock<&'static [u8]> = OnceLock::new();
 
 pub(crate) fn set_pg_launcher(bytes: &'static [u8]) {
@@ -24,6 +23,43 @@ pub(crate) fn set_pg_launcher(bytes: &'static [u8]) {
     }
     #[cfg(not(target_os = "windows"))]
     let _ = bytes;
+}
+
+/// Writes the windowless `cmd.exe` stand-in and points `COMSPEC` at it until
+/// the guard drops. `pg_ctl` reads `COMSPEC` when it starts the server.
+#[cfg(target_os = "windows")]
+fn hide_database_console(home: &Path) -> Result<RestoreComspec, String> {
+    let bytes = PG_LAUNCHER.get().copied().unwrap_or(&[]);
+    if bytes.is_empty() {
+        return Err("This installer is missing the windowless database launcher.".into());
+    }
+    let path = home.join("shop-cmd.exe");
+    if fs::read(&path).ok().as_deref() != Some(bytes) {
+        fs::write(&path, bytes).map_err(|err| {
+            format!(
+                "Could not install the windowless database launcher at {}: {err}",
+                path.display()
+            )
+        })?;
+    }
+    let previous = std::env::var("COMSPEC").ok();
+    std::env::set_var("COMSPEC", &path);
+    Ok(RestoreComspec { previous })
+}
+
+#[cfg(target_os = "windows")]
+struct RestoreComspec {
+    previous: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for RestoreComspec {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var("COMSPEC", value),
+            None => std::env::remove_var("COMSPEC"),
+        }
+    }
 }
 
 pub struct EmbeddedDb {
@@ -73,8 +109,7 @@ impl EmbeddedDb {
         stop_leftover(&home)?;
         // postgres.exe has to stay the real server. Windows reserves a memory
         // address in that program before each child starts, and a stand-in
-        // makes the child fail with error 487. Marking the programs as
-        // windowed stops Windows from opening a console for them.
+        // makes the child fail with error 487.
         #[cfg(target_os = "windows")]
         prepare_postgres_programs(&install_dir)?;
         #[cfg(target_os = "windows")]
@@ -85,6 +120,11 @@ impl EmbeddedDb {
             }
             windows_initdb(&install_dir, &home, &password).await?;
         }
+        // pg_ctl starts the server through COMSPEC, which is cmd.exe. That
+        // console stays open for the whole session. Point COMSPEC at the
+        // windowless stand-in for this launch only.
+        #[cfg(target_os = "windows")]
+        let _command_shell = hide_database_console(&home)?;
         server
             .start()
             .await

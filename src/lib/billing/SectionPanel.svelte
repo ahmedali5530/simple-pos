@@ -14,7 +14,6 @@
     posted: string
     currency: string
     locale: string
-    onFocus: (scan: boolean) => void
     onFilter: (filter: number | 'all') => void
     onScan: (code: string, qty: number) => 'done' | 'rejected' | 'search'
     onPick: (item: PosItem, variant: ItemVariant | null, qty: number) => boolean
@@ -39,7 +38,6 @@
     posted,
     currency,
     locale,
-    onFocus,
     onFilter,
     onScan,
     onPick,
@@ -204,11 +202,6 @@
   style="--accent: {section.accent}"
   role="group"
   aria-label={section.name}
-  tabindex="0"
-  onclick={() => onFocus(false)}
-  onkeydown={(event) => {
-    if (event.key === 'Enter' && event.target === event.currentTarget) onFocus(true)
-  }}
 >
   <div class="catalog">
   <div class="scan">

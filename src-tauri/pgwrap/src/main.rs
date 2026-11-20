@@ -1,114 +1,247 @@
-//! Stands in for `postgres.exe` so the database never opens a terminal.
+//! Stands in for `cmd.exe` when PostgreSQL starts the database.
 //!
-//! Postgres is a console program. Windows gives it a terminal when it is
-//! started from the shop window, and closing that terminal stops the database.
-//! Every launch of postgres goes through this program, which starts the real
-//! server with no window.
-//!
-//! initdb feeds the post-bootstrap SQL to that process on standard input.
-//! Hiding the window without passing those handles makes postgres crash with
-//! 0xC0000005 at "performing post-bootstrap initialization".
+//! `pg_ctl` launches the server as
+//! `COMSPEC /D /C "postgres ... < nul >> start.log 2>&1"`.
+//! `cmd.exe` is a console program, so Windows opens a terminal for it and
+//! leaves that terminal open until the database stops. This program is a
+//! windowed replacement: it runs that one command with no window and waits.
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 fn main() {
-    let code = relay().unwrap_or(1);
-    std::process::exit(code);
+    std::process::exit(run());
 }
 
-fn relay() -> Option<i32> {
-    let exe = std::env::current_exe().ok()?;
-    let real = exe.parent()?.join(server_name());
-    let mut command = std::process::Command::new(real);
-    command.args(std::env::args_os().skip(1));
+fn run() -> i32 {
     #[cfg(target_os = "windows")]
-    hide_without_dropping_stdio(&mut command, keeps_a_window());
-    command.status().ok()?.code()
+    {
+        let Some(line) = command_line() else {
+            return 1;
+        };
+        let Some(script) = command_script(&line) else {
+            return 1;
+        };
+        return launch(&script);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        1
+    }
 }
 
-/// initdb's one-shot helpers read and write the console pipes. Hiding those
-/// processes is what crashes post-bootstrap setup. The long-running server
-/// is every other launch.
-#[cfg(target_os = "windows")]
-fn keeps_a_window() -> bool {
-    std::env::args_os().skip(1).any(|arg| {
-        let arg = arg.to_string_lossy();
-        arg == "--boot" || arg == "--single" || arg == "--describe-config"
+/// The command `pg_ctl` places after `/C`.
+fn command_script(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let marker = lower.find(" /c ")?;
+    let mut rest = line[marker + 4..].trim();
+    if rest.len() >= 2 && rest.starts_with('"') && rest.ends_with('"') {
+        rest = &rest[1..rest.len() - 1];
+    }
+    let script = rest.trim();
+    if script.is_empty() {
+        None
+    } else {
+        Some(script.to_string())
+    }
+}
+
+struct Launch {
+    program: String,
+    args: Vec<String>,
+    stdin: Option<String>,
+    stdout: Option<String>,
+    append: bool,
+    stderr_to_stdout: bool,
+}
+
+fn parse_launch(script: &str) -> Option<Launch> {
+    let tokens = tokenize(script)?;
+    let mut program = None;
+    let mut args = Vec::new();
+    let mut stdin = None;
+    let mut stdout = None;
+    let mut append = false;
+    let mut stderr_to_stdout = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "<" => {
+                stdin = Some(tokens.get(index + 1)?.clone());
+                index += 2;
+            }
+            ">" => {
+                stdout = Some(tokens.get(index + 1)?.clone());
+                append = false;
+                index += 2;
+            }
+            ">>" => {
+                stdout = Some(tokens.get(index + 1)?.clone());
+                append = true;
+                index += 2;
+            }
+            "2>&1" => {
+                stderr_to_stdout = true;
+                index += 1;
+            }
+            _ => {
+                if program.is_none() {
+                    program = Some(tokens[index].clone());
+                } else {
+                    args.push(tokens[index].clone());
+                }
+                index += 1;
+            }
+        }
+    }
+    Some(Launch {
+        program: program?,
+        args,
+        stdin,
+        stdout,
+        append,
+        stderr_to_stdout,
     })
 }
 
-fn server_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "postgres-server.exe"
-    } else {
-        "postgres-server"
+fn tokenize(input: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for character in input.chars() {
+        match character {
+            '"' => quoted = !quoted,
+            ' ' | '\t' if !quoted => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(character),
+        }
     }
+    if quoted {
+        return None;
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Some(tokens)
 }
 
 #[cfg(target_os = "windows")]
-fn hide_without_dropping_stdio(command: &mut std::process::Command, keep_window: bool) {
-    use std::os::windows::process::CommandExt;
+fn command_line() -> Option<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
 
-    // Explicit handles make Rust set STARTF_USESTDHANDLES. CREATE_NO_WINDOW
-    // alone leaves the server with no standard input, and initdb's SQL pipe
-    // never arrives. One-shot initdb launches keep a window so that pipe stays
-    // a real console handle.
+    unsafe extern "system" {
+        fn GetCommandLineW() -> *const u16;
+    }
     unsafe {
-        command
-            .stdin(stdio_from(STD_INPUT_HANDLE))
-            .stdout(stdio_from(STD_OUTPUT_HANDLE))
-            .stderr(stdio_from(STD_ERROR_HANDLE));
-    }
-    if !keep_window {
-        command.creation_flags(0x0800_0000);
+        let pointer = GetCommandLineW();
+        if pointer.is_null() {
+            return None;
+        }
+        let mut length = 0;
+        while *pointer.add(length) != 0 {
+            length += 1;
+        }
+        let slice = std::slice::from_raw_parts(pointer, length);
+        Some(OsString::from_wide(slice).to_string_lossy().into_owned())
     }
 }
 
 #[cfg(target_os = "windows")]
-const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
-#[cfg(target_os = "windows")]
-const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
-#[cfg(target_os = "windows")]
-const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
-#[cfg(target_os = "windows")]
-const DUPLICATE_SAME_ACCESS: u32 = 0x0000_0002;
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" {
-    fn GetStdHandle(kind: u32) -> *mut core::ffi::c_void;
-    fn GetCurrentProcess() -> *mut core::ffi::c_void;
-    fn DuplicateHandle(
-        source_process: *mut core::ffi::c_void,
-        source: *mut core::ffi::c_void,
-        target_process: *mut core::ffi::c_void,
-        target: *mut *mut core::ffi::c_void,
-        access: u32,
-        inherit: i32,
-        options: u32,
-    ) -> i32;
+fn launch(script: &str) -> i32 {
+    let Some(plan) = parse_launch(script) else {
+        return 1;
+    };
+    match spawn(&plan) {
+        Ok(code) => code,
+        Err(err) => {
+            if let Some(log) = &plan.stdout {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log)
+                    .and_then(|mut file| {
+                        use std::io::Write;
+                        writeln!(file, "Could not start the database: {err}")
+                    });
+            }
+            1
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn stdio_from(kind: u32) -> std::process::Stdio {
-    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+fn spawn(plan: &Launch) -> Result<i32, String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
 
-    let invalid = -1isize as *mut core::ffi::c_void;
-    let source = GetStdHandle(kind);
-    if source.is_null() || source == invalid {
-        return std::process::Stdio::null();
+    let mut command = Command::new(&plan.program);
+    command.args(&plan.args);
+    // The shop window has no console. Without this, Windows opens one for
+    // postgres and leaves it open for the whole session.
+    command.creation_flags(0x0800_0000);
+    if let Some(path) = &plan.stdin {
+        let file = std::fs::File::open(path).map_err(|err| format!("{path}: {err}"))?;
+        command.stdin(Stdio::from(file));
+    } else {
+        command.stdin(Stdio::null());
     }
-    let mut duplicated = std::ptr::null_mut();
-    let copied = DuplicateHandle(
-        GetCurrentProcess(),
-        source,
-        GetCurrentProcess(),
-        &mut duplicated,
-        0,
-        1,
-        DUPLICATE_SAME_ACCESS,
-    );
-    if copied == 0 || duplicated.is_null() {
-        return std::process::Stdio::null();
+    if let Some(path) = &plan.stdout {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true);
+        if plan.append {
+            options.append(true);
+        } else {
+            options.truncate(true);
+        }
+        let file = options
+            .open(path)
+            .map_err(|err| format!("{path}: {err}"))?;
+        if plan.stderr_to_stdout {
+            let errors = file.try_clone().map_err(|err| err.to_string())?;
+            command.stderr(Stdio::from(errors));
+        } else {
+            command.stderr(Stdio::null());
+        }
+        command.stdout(Stdio::from(file));
     }
-    std::process::Stdio::from(OwnedHandle::from_raw_handle(duplicated))
+    let status = command.status().map_err(|err| err.to_string())?;
+    Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_script, parse_launch};
+
+    #[test]
+    fn reads_the_postgres_16_start_line() {
+        let line = r#""C:\Users\ahmed\AppData\Local\shop-till\shop-cmd.exe" /D /C ""C:\Users\ahmed\AppData\Local\shop-till\postgres\16.16.0\bin\postgres.exe" -D "C:\Users\ahmed\AppData\Local\shop-till\pgdata" -F -p 5434 -c listen_addresses=127.0.0.1 < "nul" >> "C:\Users\ahmed\AppData\Local\shop-till\pgdata\start.log" 2>&1""#;
+        let script = command_script(line).unwrap();
+        let launch = parse_launch(&script).unwrap();
+        assert_eq!(
+            launch.program,
+            r"C:\Users\ahmed\AppData\Local\shop-till\postgres\16.16.0\bin\postgres.exe"
+        );
+        assert_eq!(
+            launch.args,
+            [
+                "-D",
+                r"C:\Users\ahmed\AppData\Local\shop-till\pgdata",
+                "-F",
+                "-p",
+                "5434",
+                "-c",
+                "listen_addresses=127.0.0.1",
+            ]
+        );
+        assert_eq!(launch.stdin.as_deref(), Some("nul"));
+        assert_eq!(
+            launch.stdout.as_deref(),
+            Some(r"C:\Users\ahmed\AppData\Local\shop-till\pgdata\start.log")
+        );
+        assert!(launch.append);
+        assert!(launch.stderr_to_stdout);
+    }
 }
