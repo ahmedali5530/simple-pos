@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use postgresql_embedded::{PostgreSQL, SettingsBuilder};
 
@@ -22,24 +23,43 @@ impl EmbeddedDb {
 
         let password = load_or_create_password(&home.join("db.password"))?;
         let port = pg_port()?;
-        let mut configuration = HashMap::new();
-        configuration.insert("listen_addresses".into(), "127.0.0.1".into());
-        let settings = SettingsBuilder::new()
-            .installation_dir(home.join("postgres"))
-            .password_file(home.join("pgpass"))
-            .data_dir(home.join("pgdata"))
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password(password)
-            .temporary(false)
-            .configuration(configuration)
-            .build();
+        // A previous launch can be killed while initdb is still creating files.
+        // Anything without pg_control is not a database yet and cannot be started.
+        discard_incomplete_cluster(&home)?;
+        // The bundled initdb forces UTF-8 and the Windows ANSI locale, which
+        // refuse each other. Plant a conf file so setup only unpacks the
+        // server, then initialize with --no-locale ourselves.
+        #[cfg(target_os = "windows")]
+        let init_on_windows = !cluster_is_complete(&home.join("pgdata"));
+        #[cfg(target_os = "windows")]
+        if init_on_windows {
+            fs::create_dir_all(home.join("pgdata")).map_err(|err| err.to_string())?;
+            fs::write(home.join("pgdata").join("postgresql.conf"), b"")
+                .map_err(|err| err.to_string())?;
+        }
 
-        let mut server = PostgreSQL::new(settings);
-        server.setup().await.map_err(|err| err.to_string())?;
+        let mut server = database_server(&home, &password, port);
+        if let Err(err) = server.setup().await {
+            let message = with_database_log(&home, err.to_string());
+            #[cfg(target_os = "windows")]
+            if init_on_windows {
+                let _ = fs::remove_dir_all(home.join("pgdata"));
+            }
+            return Err(message);
+        }
+        #[cfg(target_os = "windows")]
+        if init_on_windows {
+            if !cluster_is_complete(&home.join("pgdata")) {
+                fs::remove_dir_all(home.join("pgdata"))
+                    .map_err(|err| format!("Could not reset the shop database: {err}"))?;
+            }
+            windows_initdb(&home, &password).await?;
+        }
         stop_leftover(&home)?;
-        server.start().await.map_err(|err| err.to_string())?;
+        server
+            .start()
+            .await
+            .map_err(|err| with_database_log(&home, err.to_string()))?;
         if !server
             .database_exists(DATABASE)
             .await
@@ -126,6 +146,100 @@ fn lock_till(home: &Path) -> Result<fs::File, String> {
     Ok(file)
 }
 
+fn database_server(home: &Path, password: &str, port: u16) -> PostgreSQL {
+    let mut configuration = HashMap::new();
+    configuration.insert("listen_addresses".into(), "127.0.0.1".into());
+    // The crate default kills initdb after 5 seconds. Unpacking and creating
+    // the cluster on a shop PC takes longer than that.
+    let settings = SettingsBuilder::new()
+        .installation_dir(home.join("postgres"))
+        .password_file(home.join("pgpass"))
+        .data_dir(home.join("pgdata"))
+        .host("127.0.0.1")
+        .port(port)
+        .username("postgres")
+        .password(password)
+        .temporary(false)
+        .timeout(Some(Duration::from_secs(180)))
+        .configuration(configuration)
+        .build();
+    PostgreSQL::new(settings)
+}
+
+fn cluster_is_complete(data: &Path) -> bool {
+    data.join("global").join("pg_control").is_file()
+}
+
+fn discard_incomplete_cluster(home: &Path) -> Result<(), String> {
+    let data = home.join("pgdata");
+    if !data.exists() || cluster_is_complete(&data) {
+        return Ok(());
+    }
+    let _ = stop_leftover(home);
+    fs::remove_dir_all(&data).map_err(|err| format!("Could not reset the shop database: {err}"))
+}
+
+fn with_database_log(home: &Path, mut message: String) -> String {
+    for name in ["start.log", "initdb.log"] {
+        let path = home.join("pgdata").join(name);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let tail = text.chars().rev().take(1200).collect::<String>();
+        let tail = tail.chars().rev().collect::<String>();
+        message.push_str("\n\n");
+        message.push_str(&path.display().to_string());
+        message.push_str(":\n");
+        message.push_str(&tail);
+    }
+    if message.contains("deadline has elapsed") {
+        message = format!("Setting up the shop database took too long.\n\n{message}");
+    }
+    message
+}
+
+#[cfg(target_os = "windows")]
+async fn windows_initdb(home: &Path, password: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let data = home.join("pgdata");
+    fs::create_dir_all(&data).map_err(|err| err.to_string())?;
+    let pwfile = home.join("pgpass");
+    fs::write(&pwfile, password).map_err(|err| format!("{}: {err}", pwfile.display()))?;
+    let initdb = find_bin(&home.join("postgres"), &["initdb.exe", "initdb"])
+        .ok_or_else(|| "Could not find initdb.exe in the shop database install.".to_string())?;
+    let mut command = tokio::process::Command::new(initdb);
+    command.creation_flags(0x0800_0000);
+    command
+        .arg("--pgdata")
+        .arg(&data)
+        .arg("--username")
+        .arg("postgres")
+        .arg("--auth")
+        .arg("password")
+        .arg("--pwfile")
+        .arg(&pwfile)
+        .arg("--encoding")
+        .arg("UTF8")
+        .arg("--no-locale")
+        .arg("--no-instructions");
+    let output = tokio::time::timeout(Duration::from_secs(180), command.output())
+        .await
+        .map_err(|_| "Setting up the shop database took too long.".to_string())?
+        .map_err(|err| format!("Could not set up the shop database: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "Could not set up the shop database.\n{stderr}{stdout}"
+    ))
+}
+
 fn stop_leftover(home: &Path) -> Result<(), String> {
     let data = home.join("pgdata");
     let pid = data.join("postmaster.pid");
@@ -135,7 +249,7 @@ fn stop_leftover(home: &Path) -> Result<(), String> {
     let Some(pg_ctl) = find_pg_ctl(&home.join("postgres")) else {
         return Ok(());
     };
-    let running = std::process::Command::new(&pg_ctl)
+    let running = database_command(&pg_ctl)
         .arg("-D")
         .arg(&data)
         .arg("status")
@@ -147,7 +261,7 @@ fn stop_leftover(home: &Path) -> Result<(), String> {
         return Ok(());
     }
     tracing::info!("Stopping a shop database left open by the last run");
-    let stopped = std::process::Command::new(pg_ctl)
+    let stopped = database_command(&pg_ctl)
         .arg("-D")
         .arg(&data)
         .args(["-m", "fast", "stop"])
@@ -161,7 +275,11 @@ fn stop_leftover(home: &Path) -> Result<(), String> {
 }
 
 fn find_pg_ctl(installation: &Path) -> Option<PathBuf> {
-    for name in ["pg_ctl", "pg_ctl.exe"] {
+    find_bin(installation, &["pg_ctl", "pg_ctl.exe"])
+}
+
+fn find_bin(installation: &Path, names: &[&str]) -> Option<PathBuf> {
+    for name in names {
         let direct = installation.join("bin").join(name);
         if direct.is_file() {
             return Some(direct);
@@ -169,7 +287,7 @@ fn find_pg_ctl(installation: &Path) -> Option<PathBuf> {
     }
     let entries = fs::read_dir(installation).ok()?;
     for entry in entries.flatten() {
-        for name in ["pg_ctl", "pg_ctl.exe"] {
+        for name in names {
             let candidate = entry.path().join("bin").join(name);
             if candidate.is_file() {
                 return Some(candidate);
@@ -177,6 +295,20 @@ fn find_pg_ctl(installation: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn database_command(program: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new(program);
+        command.creation_flags(0x0800_0000);
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(program)
+    }
 }
 
 fn pg_port() -> Result<u16, String> {
@@ -204,6 +336,24 @@ fn load_or_create_password(path: &Path) -> Result<String, String> {
             .map_err(|err| format!("{}: {err}", path.display()))?;
     }
     Ok(password)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_interrupted_cluster_has_no_control_file() {
+        let dir = std::env::temp_dir().join(format!("shop-till-cluster-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!cluster_is_complete(&dir));
+        fs::create_dir_all(dir.join("global")).unwrap();
+        fs::write(dir.join("postgresql.conf"), b"").unwrap();
+        assert!(!cluster_is_complete(&dir));
+        fs::write(dir.join("global").join("pg_control"), b"").unwrap();
+        assert!(cluster_is_complete(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 fn random_password() -> Result<String, String> {
