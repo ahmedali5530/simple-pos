@@ -14,6 +14,7 @@ const DATABASE: &str = "shop";
 /// database and gets through that step.
 const POSTGRES_VERSION: &str = "=16.16.0";
 #[cfg(target_os = "windows")]
+#[allow(dead_code)] // The stand-in is not installed. Replacing postgres.exe breaks child startup.
 static PG_LAUNCHER: OnceLock<&'static [u8]> = OnceLock::new();
 
 pub(crate) fn set_pg_launcher(bytes: &'static [u8]) {
@@ -70,20 +71,20 @@ impl EmbeddedDb {
         #[cfg(target_os = "windows")]
         let install_dir = server.settings().installation_dir.clone();
         stop_leftover(&home)?;
-        // initdb must run the real postgres.exe. The stand-in has no console,
-        // and the post-bootstrap step then crashes with 0xC0000005. Put the
-        // stand-in in place only after the data directory exists.
+        // postgres.exe has to stay the real server. Windows reserves a memory
+        // address in that program before each child starts, and a stand-in
+        // makes the child fail with error 487. Marking the programs as
+        // windowed stops Windows from opening a console for them.
+        #[cfg(target_os = "windows")]
+        prepare_postgres_programs(&install_dir)?;
         #[cfg(target_os = "windows")]
         if init_on_windows {
             if !cluster_is_complete(&home.join("pgdata")) {
                 fs::remove_dir_all(home.join("pgdata"))
                     .map_err(|err| format!("Could not reset the shop database: {err}"))?;
             }
-            restore_real_postgres(&install_dir)?;
             windows_initdb(&install_dir, &home, &password).await?;
         }
-        #[cfg(target_os = "windows")]
-        install_postgres_launcher(&install_dir)?;
         server
             .start()
             .await
@@ -251,21 +252,58 @@ fn postgres_bin(install_dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn install_postgres_launcher(install_dir: &Path) -> Result<(), String> {
-    let bytes = PG_LAUNCHER.get().copied().unwrap_or(&[]);
-    if bytes.is_empty() {
-        return Err("This build cannot start the shop database without a terminal.".to_string());
-    }
+fn prepare_postgres_programs(install_dir: &Path) -> Result<(), String> {
+    restore_real_postgres(install_dir)?;
     let bin = postgres_bin(install_dir)?;
-    let postgres = bin.join("postgres.exe");
-    let server = bin.join("postgres-server.exe");
-    if !server.exists() {
-        if !postgres.exists() {
-            return Err("Could not find postgres.exe.".to_string());
+    for name in ["postgres.exe", "pg_ctl.exe", "initdb.exe"] {
+        let path = bin.join(name);
+        if path.is_file() {
+            mark_windowed(&path)?;
         }
-        fs::rename(&postgres, &server).map_err(|err| format!("{}: {err}", postgres.display()))?;
     }
-    fs::write(&postgres, bytes).map_err(|err| format!("{}: {err}", postgres.display()))
+    Ok(())
+}
+
+/// Windows opens a console for a console-subsystem program started from the
+/// shop window. The shop window has no console to hand over. A windowed
+/// subsystem keeps the same program, which PostgreSQL must re-execute itself.
+#[cfg(target_os = "windows")]
+fn mark_windowed(path: &Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut dos = [0u8; 64];
+    file.read_exact(&mut dos)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if &dos[0..2] != b"MZ" {
+        return Err(format!("{} is not a Windows program.", path.display()));
+    }
+    let pe_offset = u32::from_le_bytes(dos[0x3C..0x40].try_into().unwrap()) as u64;
+    file.seek(SeekFrom::Start(pe_offset))
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut signature = [0u8; 4];
+    file.read_exact(&mut signature)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if &signature != b"PE\0\0" {
+        return Err(format!("{} is not a Windows program.", path.display()));
+    }
+    let subsystem_at = pe_offset + 24 + 68;
+    file.seek(SeekFrom::Start(subsystem_at))
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut subsystem = [0u8; 2];
+    file.read_exact(&mut subsystem)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if u16::from_le_bytes(subsystem) == 2 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::Start(subsystem_at))
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    file.write_all(&2u16.to_le_bytes())
+        .map_err(|err| format!("{}: {err}", path.display()))
 }
 
 #[cfg(target_os = "windows")]
