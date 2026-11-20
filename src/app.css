@@ -6,6 +6,7 @@
 :root {
   color: #0f172a;
   background: #e7eef5;
+  font-size: 15px;
   font-family: "Segoe UI", "Avenir Next", "Trebuchet MS", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -68,14 +69,14 @@ button:disabled {
 
 .brand h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.1;
 }
 
 .brand p {
   margin: 3px 0 0;
   color: #94a3b8;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .badge {
@@ -140,7 +141,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 .clock {
   text-align: right;
   color: #cbd5e1;
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -191,7 +192,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 
 .attention .kicker {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -199,7 +200,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 
 .attention.warning .kicker { color: #c2410c; }
 .attention.error .kicker { color: #b91c1c; }
-.attention p:last-child { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.35; }
+.attention p:last-child { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.35; }
 
 .section-tabs {
   display: flex;
@@ -230,7 +231,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 
 .section-tabs .key,
 .section-tabs .count {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   opacity: 0.85;
 }
@@ -288,7 +289,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 
 .panel-head h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.15;
 }
 
@@ -330,14 +331,14 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
   gap: 12px;
 }
 
-.suggest button strong { font-size: 16px; }
+.suggest button strong { font-size: 14px; }
 .suggest button span { color: #64748b; font-weight: 700; }
 .suggest button.active { background: color-mix(in srgb, var(--accent) 14%, white); }
 
 .scan label {
   display: block;
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
   color: #334155;
@@ -356,7 +357,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
   padding: 0 14px;
   background: white;
   width: 100%;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .scan-row input { flex: 1; }
@@ -396,7 +397,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 .chip {
   min-height: 48px;
   padding: 0 16px;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .filters {
@@ -422,7 +423,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 .hint, .empty, .field-error, .posted {
   margin: 8px 0 0;
   color: #64748b;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .field-error { color: #b91c1c; font-weight: 700; white-space: pre-wrap; }
@@ -493,7 +494,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 }
 
 .card-name {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.25;
   color: #0f172a;
@@ -509,7 +510,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
   gap: 8px;
   max-width: 100%;
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.2;
 }
@@ -526,7 +527,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 
 .card-options {
   color: #475569;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1.3;
 }
@@ -558,14 +559,14 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
 .card .price {
   margin: 0;
   color: #0f172a;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .card-stock {
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -581,7 +582,7 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
   border-top: 1px solid #e2e8f0;
 }
 
-.variant-row strong { font-size: 22px; }
+.variant-row strong { font-size: 20px; }
 
 .bill {
   flex: 0 0 33.333%;
@@ -620,13 +621,13 @@ a.sections-button { text-decoration: none; display: inline-flex; align-items: ce
   gap: 8px;
 }
 
-.line-main strong { font-size: 16px; line-height: 1.2; }
+.line-main strong { font-size: 14px; line-height: 1.2; }
 .line-main span { font-weight: 800; white-space: nowrap; }
-.line-meta .rate { color: #64748b; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.line-meta .rate { color: #64748b; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
 .bill-head, .total-row { flex-wrap: wrap; }
 
-.bill h3 { margin: 0; flex: 1; min-width: 0; font-size: 14px; letter-spacing: 0.04em; }
+.bill h3 { margin: 0; flex: 1; min-width: 0; font-size: 13px; letter-spacing: 0.04em; }
 
 .link {
   border: 0;
@@ -673,7 +674,7 @@ td {
   border-radius: 12px;
   border: 1px solid #d6dee8;
   background: white;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   text-align: center;
   touch-action: manipulation;
@@ -682,13 +683,13 @@ td {
 .qty .remove {
   color: #b91c1c;
   border-color: #fecaca;
-  font-size: 24px;
+  font-size: 22px;
 }
 
 .bill-customer {
   display: block;
   margin-top: 10px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: #334155;
 }
@@ -701,7 +702,7 @@ td {
   padding: 0 12px;
   background: white;
   color: #0f172a;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
 }
 .skip-print {
@@ -709,7 +710,7 @@ td {
   align-items: center;
   gap: 10px;
   margin-top: 10px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   color: #334155;
 }
@@ -723,14 +724,14 @@ td {
 
 .total-row strong {
   display: block;
-  font-size: 28px;
+  font-size: 25px;
 }
 
 .post { flex: 1 1 160px; padding: 0 16px; }
 
 .loading {
   padding: 48px;
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .sheet-backdrop {
@@ -767,7 +768,7 @@ td {
   border: 1px solid #cbd5e1;
   border-radius: 12px;
   padding: 0 14px;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
 }
 .settings {
@@ -840,8 +841,8 @@ td {
   padding: 18px 18px 22px;
 }
 .stock-form h2,
-.stock-summary h2 { margin: 0; font-size: 20px; }
-.stock-label { margin: 16px 0 8px; font-size: 13px; font-weight: 800; }
+.stock-summary h2 { margin: 0; font-size: 18px; }
+.stock-label { margin: 16px 0 8px; font-size: 12px; font-weight: 800; }
 .stock-label.add { color: #047857; letter-spacing: 0.04em; text-transform: uppercase; }
 .stock-label.add::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 99px; background: #16a34a; }
 .move-type { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -854,7 +855,7 @@ td {
 }
 .move-type button.on { background: #0f172a; color: white; border-color: #0f172a; }
 .move-type button.out.on { background: #e11d48; border-color: #e11d48; }
-.stock-form label { display: block; margin-top: 12px; font-size: 13px; font-weight: 700; color: #334155; }
+.stock-form label { display: block; margin-top: 12px; font-size: 12px; font-weight: 700; color: #334155; }
 .stock-form label input,
 .stock-form label select,
 .head-filter select {
@@ -866,7 +867,7 @@ td {
   padding: 0 12px;
   background: white;
   color: #0f172a;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
 }
 .stock-item { position: relative; }
@@ -894,8 +895,8 @@ td {
   align-items: center;
   gap: 12px;
 }
-.stock-suggest button strong { font-size: 15px; color: #0f172a; }
-.stock-suggest button span { color: #64748b; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.stock-suggest button strong { font-size: 14px; color: #0f172a; }
+.stock-suggest button span { color: #64748b; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .stock-suggest button.active { background: #f1f5f9; }
 .stock-suggest .hint { margin: 10px 12px; }
 .stock-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -908,7 +909,7 @@ td {
   border-radius: 14px;
   color: white;
   font-weight: 800;
-  font-size: 16px;
+  font-size: 14px;
 }
 .stock-update { background: #0f172a; }
 .stock-create { background: #16a34a; }
@@ -921,9 +922,9 @@ td {
 .stock-table th,
 .stock-table td { white-space: nowrap; }
 .stock-table th { position: sticky; top: 0; background: white; z-index: 1; padding: 10px 8px; }
-.stock-table td { padding: 12px 8px; border-top: 1px solid #eef2f6; font-weight: 600; }
-.stock-table .item-cell { font-weight: 800; }
-.stock-table .now-stock { font-weight: 800; }
+.stock-table td { padding: 12px 8px; border-top: 1px solid #eef2f6; font-weight: 400; }
+.stock-table .item-cell,
+.stock-table .now-stock { font-weight: 400; }
 .stock-table tr.picked td { background: #f8fafc; }
 .head-pill {
   display: inline-flex;
@@ -933,7 +934,7 @@ td {
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 14%, white);
   color: var(--accent);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -974,7 +975,7 @@ td {
 }
 .kpi header span {
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -983,10 +984,10 @@ td {
 .kpi strong {
   display: block;
   margin-top: 10px;
-  font-size: 28px;
+  font-size: 25px;
   letter-spacing: -0.03em;
 }
-.kpi p { margin: 4px 0 0; color: #64748b; font-size: 13px; font-weight: 600; }
+.kpi p { margin: 4px 0 0; color: #64748b; font-size: 12px; font-weight: 600; }
 .kpi-icon {
   width: 34px;
   height: 34px;
@@ -1023,7 +1024,7 @@ td {
   padding: 16px 16px 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
-.report-card h2 { margin: 0; font-size: 18px; }
+.report-card h2 { margin: 0; font-size: 16px; }
 .report-scroll { flex: 1; min-height: 0; overflow: auto; }
 .virtual-scroll { overflow-anchor: none; }
 .virtual-space { position: relative; width: 100%; }
@@ -1048,7 +1049,7 @@ td {
   background: white;
   padding: 10px 8px;
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-align: left;
@@ -1057,12 +1058,13 @@ td {
 .bill-log td {
   padding: 12px 8px;
   border-top: 1px solid #eef2f6;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
 }
-.bill-log .bill-no { font-weight: 800; }
+.bill-log .bill-no,
+.bill-log strong,
+.bill-total { font-weight: 400; }
 .summary-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; color: #334155; }
-.bill-total { font-weight: 800; }
 .receipt-btn {
   width: 36px;
   height: 36px;
@@ -1089,10 +1091,10 @@ td {
   padding: 12px 4px;
   border-top: 1px solid #eef2f6;
 }
-.ledger-row strong { display: block; }
-.ledger-row p { margin: 2px 0 0; color: #64748b; font-size: 13px; font-weight: 600; }
+.ledger-row strong { display: block; font-weight: 400; }
+.ledger-row p { margin: 2px 0 0; color: #64748b; font-size: 12px; font-weight: 400; }
 .ledger-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.ledger-meta time { color: #94a3b8; font-size: 12px; font-weight: 700; }
+.ledger-meta time { color: #94a3b8; font-size: 11px; font-weight: 700; }
 .move-badge {
   display: inline-flex;
   align-items: center;
@@ -1118,11 +1120,11 @@ td {
   white-space: nowrap;
   border: 0;
 }
-.on-hand { margin: 8px 0 0; font-size: 40px; font-weight: 700; letter-spacing: -0.03em; }
-.on-hand span { font-size: 16px; font-weight: 600; color: #64748b; }
+.on-hand { margin: 8px 0 0; font-size: 36px; font-weight: 700; letter-spacing: -0.03em; }
+.on-hand span { font-size: 14px; font-weight: 600; color: #64748b; }
 .qty-in { color: #047857; }
 .qty-out { color: #b91c1c; }
-.place h2 { margin: 0 0 6px; }
+.place h2 { margin: 0 0 6px; font-size: 18px; }
 .login {
   min-height: 100%;
   display: grid;
@@ -1132,7 +1134,7 @@ td {
 }
 .login .sheet { display: flex; flex-direction: column; }
 .login .mark { margin-bottom: 12px; }
-.login h1 { margin: 0; color: #0f172a; }
+.login h1 { margin: 0; color: #0f172a; font-size: 22px; }
 .login label { display: block; margin-top: 12px; font-weight: 700; }
 .login label input {
   width: 100%;
@@ -1141,7 +1143,7 @@ td {
   border: 1px solid #cbd5e1;
   border-radius: 12px;
   padding: 0 14px;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
 }
 .login a { margin-top: 14px; font-weight: 800; color: #0f766e; }
@@ -1155,7 +1157,7 @@ td {
   display: flex;
 }
 .settings-page { width: 100%; overflow: auto; padding: 18px 20px; }
-.settings-page h2, .setup-detail h2, .setup-list-pane h2 { margin: 0 0 6px; }
+.settings-page h2, .setup-detail h2, .setup-list-pane h2 { margin: 0 0 6px; font-size: 18px; }
 .record {
   display: flex;
   justify-content: space-between;
@@ -1175,7 +1177,7 @@ td {
   overflow: hidden;
 }
 .catalog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.catalog-head h2 { margin: 0; }
+.catalog-head h2 { margin: 0; font-size: 18px; }
 .catalog-head .save { min-height: 44px; padding: 0 14px; }
 .setup-list-pane {
   flex: 0 0 390px;
@@ -1190,7 +1192,7 @@ td {
   border-right: 1px solid #e2e8f0;
 }
 .option-block { margin-top: 18px; }
-.option-block h3 { margin: 0 0 4px; font-size: 16px; }
+.option-block h3 { margin: 0 0 4px; font-size: 14px; }
 .variant-edit {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1270,8 +1272,8 @@ td {
 .rule-edit .link { margin-bottom: 6px; }
 .who { color: white; font-weight: 700; white-space: nowrap; }
 .setup-detail .prompt-choices { margin-top: 14px; }
-.setup-list button strong { flex: 1; min-width: 0; }
-.setup-list span { color: #64748b; font-weight: 700; }
+.setup-list button strong { flex: 1; min-width: 0; font-weight: 400; }
+.setup-list span { color: #64748b; font-weight: 400; }
 .catalog-thumb {
   width: 40px;
   height: 40px;
@@ -1340,7 +1342,7 @@ td {
 }
 .picture-pick input { display: none; }
 
-.sheet h2 { margin: 0 0 6px; }
+.sheet h2 { margin: 0 0 6px; font-size: 18px; }
 .sheet .hint { margin-bottom: 12px; }
 
 .layout-row {
@@ -1406,7 +1408,7 @@ a.save {
   gap: 14px;
   padding: 8px 18px 12px;
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 }

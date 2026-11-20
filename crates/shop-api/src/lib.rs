@@ -10,16 +10,18 @@ use axum::{
     Json, Router,
 };
 use shop_core::{
-    adjust_stock, cash_desk, clear_item_image, export_items, export_movements, import_items,
-    import_movements, item_image_ext, load_pos, load_reports, login, logout, needs_first_user, open_session,
-    open_shift, post_bill, print_cash_shift, print_product_mix, print_saved_bill, recent_movements, save_shift,
-    remove_category, remove_section, stock_summary, remove_user, reorder_categories, reorder_sections,
-    save_category, save_item, save_section, save_settings, save_user, set_item_image, set_item_prompt,
-    set_pos_focus, set_pos_sections, AppError, CashDesk, CategoryForm, ErrorBody,
-    ItemForm, ItemPromptRequest, LoginForm, OrderForm, PgPool, LoginSession, OpenShift, PosFocus, ShiftForm,
-    PosSnapshot, PosUser, PostBillRequest, PostedBill, Reports, SavedItem, StockBalance, SavedRecord,
-    StockMove, StockMovement, StockPage, ItemImport, MovementImport, PrintOutcome, PrintRequest,
-    SectionForm, SetFocusRequest, SetSectionsRequest, SettingsForm, ShopConfig, UserForm,
+    adjust_stock, cash_desk, clear_item_image, export_categories, export_items, export_movements,
+    import_categories, import_items, import_movements, item_image_ext, load_pos, load_reports,
+    login, logout, needs_first_user, open_session, open_shift, post_bill, print_cash_shift,
+    print_product_mix, print_saved_bill, recent_movements, remove_category, remove_section,
+    remove_user, reorder_categories, reorder_sections, save_category, save_item, save_section,
+    save_settings, save_shift, save_user, set_item_image, set_item_prompt, set_pos_focus,
+    set_pos_sections, stock_summary, AppError, CashDesk, CategoryForm, CategoryImport, ErrorBody,
+    ItemForm, ItemImport, ItemPromptRequest, LoginForm, LoginSession, MovementImport, OpenShift,
+    OrderForm, PgPool, PosFocus, PosSnapshot, PosUser, PostBillRequest, PostedBill, PrintOutcome,
+    PrintRequest, Reports, SavedItem, SavedRecord, SectionForm, SetFocusRequest,
+    SetSectionsRequest, SettingsForm, ShiftForm, ShopConfig, StockBalance, StockMove,
+    StockMovement, StockPage, UserForm,
 };
 use tower_http::cors::{Any, CorsLayer};
 
@@ -56,9 +58,8 @@ fn load_shop_config() -> ShopConfig {
         .find(|candidate| std::path::Path::new(candidate).is_file())
         .and_then(|path| std::fs::read_to_string(path).ok())
         .unwrap_or_else(|| include_str!("../../../config.toml").to_string());
-    let file: FileConfig = toml::from_str(&text).unwrap_or_else(|err| {
-        panic!("could not parse config.toml: {err}")
-    });
+    let file: FileConfig =
+        toml::from_str(&text).unwrap_or_else(|err| panic!("could not parse config.toml: {err}"));
     let mut shop = file.shop.checked().unwrap_or_else(|err| panic!("{err}"));
     shop.barcode_rules = if file.barcode.rules.is_empty() {
         shop_core::BarcodeRule::defaults()
@@ -109,13 +110,20 @@ pub async fn open() -> Result<Till, String> {
     open_with(true).await
 }
 
+/// Windows builds pass the small program that starts Postgres with no terminal.
+pub fn set_pg_launcher(bytes: &'static [u8]) {
+    #[cfg(feature = "bundle")]
+    embedded::set_pg_launcher(bytes);
+    #[cfg(not(feature = "bundle"))]
+    let _ = bytes;
+}
+
 async fn open_with(embedded: bool) -> Result<Till, String> {
     let _ = dotenvy::from_filename(".env");
     let _ = dotenvy::from_filename("../../.env");
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .try_init();
 
@@ -128,7 +136,9 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
     #[cfg(feature = "bundle")]
     let database_url = match &db {
         Some(db) => db.url.clone(),
-        None => std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?,
+        None => {
+            std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?
+        }
     };
     #[cfg(not(feature = "bundle"))]
     let database_url = {
@@ -144,67 +154,85 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
         .map_err(|err| err.to_string())?;
     let shop = load_shop_config();
 
-    let app = serve_till(Router::new()
-        .route("/api/pos", get(get_pos))
-        .route("/api/pos/focus", put(put_focus))
-        .route("/api/pos/sections", put(put_sections))
-        .route("/api/bills", axum::routing::post(post_bill_route))
-        .route("/api/print", post(post_print))
-        .route("/api/print/mix", post(post_print_mix))
-        .route("/api/print/cash", post(post_print_cash))
-        .route("/api/cash", get(get_cash))
-        .route("/api/cash/open", post(post_cash_open))
-        .route("/api/cash/draft", post(post_cash_draft))
-        .route("/api/cash/close", post(post_cash_close))
-        .route("/api/login", post(post_login))
-        .route("/api/logout", post(post_logout))
-        .route("/api/session", get(get_session))
-        .route("/api/bootstrap", get(get_bootstrap))
-        .route("/api/sections", post(post_section))
-        .route("/api/sections/order", put(put_section_order))
-        .route("/api/sections/{id}", put(put_section).delete(delete_section))
-        .route("/api/categories", post(post_category))
-        .route("/api/categories/order", put(put_category_order))
-        .route("/api/categories/{id}", put(put_category).delete(delete_category))
-        .route("/api/users", post(post_user))
-        .route("/api/users/{id}", put(put_user).delete(delete_user))
-        .route("/api/settings", put(put_settings))
-        .route("/api/stock", post(post_stock))
-        .route("/api/stock/movements", get(get_movements))
-        .route("/api/stock/summary", get(get_stock_summary))
-        .route("/api/stock/export", get(get_stock_export))
-        .route(
-            "/api/stock/import",
-            post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-        )
-        .route("/api/reports", get(get_reports))
-        .route("/api/items", post(post_item))
-        .route("/api/items/export", get(get_items_export))
-        .route(
-            "/api/items/import",
-            post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-        )
-        .route("/api/items/{id}", put(put_item))
-        .route("/api/items/{id}/prompt", put(put_item_prompt))
-        .route(
-            "/api/items/{id}/image",
-            get(get_item_image)
-                .post(post_item_image)
-                .delete(delete_item_image)
-                .layer(DefaultBodyLimit::max(3 * 1024 * 1024)),
-        )
-        .layer(from_fn_with_state(
-            AppState {
+    let app = serve_till(
+        Router::new()
+            .route("/api/pos", get(get_pos))
+            .route("/api/pos/focus", put(put_focus))
+            .route("/api/pos/sections", put(put_sections))
+            .route("/api/bills", axum::routing::post(post_bill_route))
+            .route("/api/print", post(post_print))
+            .route("/api/print/mix", post(post_print_mix))
+            .route("/api/print/cash", post(post_print_cash))
+            .route("/api/cash", get(get_cash))
+            .route("/api/cash/open", post(post_cash_open))
+            .route("/api/cash/draft", post(post_cash_draft))
+            .route("/api/cash/close", post(post_cash_close))
+            .route("/api/login", post(post_login))
+            .route("/api/logout", post(post_logout))
+            .route("/api/session", get(get_session))
+            .route("/api/bootstrap", get(get_bootstrap))
+            .route("/api/sections", post(post_section))
+            .route("/api/sections/order", put(put_section_order))
+            .route(
+                "/api/sections/{id}",
+                put(put_section).delete(delete_section),
+            )
+            .route("/api/categories", post(post_category))
+            .route("/api/categories/order", put(put_category_order))
+            .route("/api/categories/export", get(get_categories_export))
+            .route(
+                "/api/categories/import",
+                post(post_categories_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+            )
+            .route(
+                "/api/categories/{id}",
+                put(put_category).delete(delete_category),
+            )
+            .route("/api/users", post(post_user))
+            .route("/api/users/{id}", put(put_user).delete(delete_user))
+            .route("/api/settings", put(put_settings))
+            .route("/api/stock", post(post_stock))
+            .route("/api/stock/movements", get(get_movements))
+            .route("/api/stock/summary", get(get_stock_summary))
+            .route("/api/stock/export", get(get_stock_export))
+            .route(
+                "/api/stock/import",
+                post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+            )
+            .route("/api/reports", get(get_reports))
+            .route("/api/items", post(post_item))
+            .route("/api/items/export", get(get_items_export))
+            .route(
+                "/api/items/import",
+                post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+            )
+            .route("/api/items/{id}", put(put_item))
+            .route("/api/items/{id}/prompt", put(put_item_prompt))
+            .route(
+                "/api/items/{id}/image",
+                get(get_item_image)
+                    .post(post_item_image)
+                    .delete(delete_item_image)
+                    .layer(DefaultBodyLimit::max(3 * 1024 * 1024)),
+            )
+            .layer(from_fn_with_state(
+                AppState {
+                    pool: pool.clone(),
+                    shop: shop.clone(),
+                },
+                require_user,
+            ))
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods(Any)
+                    .allow_headers(Any),
+            )
+            .with_state(AppState {
                 pool: pool.clone(),
-                shop: shop.clone(),
-            },
-            require_user,
-        ))
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
-        .with_state(AppState {
-            pool: pool.clone(),
-            shop,
-        }));
+                shop,
+            }),
+    );
 
     let addr: SocketAddr = std::env::var("API_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".into())
@@ -259,11 +287,9 @@ async fn wait_for_stop() {
 
 #[cfg(feature = "bundle")]
 fn serve_till(api: Router) -> Router {
-    use axum_frontend::{SpaOptions, embed_router_with};
+    use axum_frontend::{embed_router_with, SpaOptions};
     api.merge(embed_router_with::<TillAssets>(
-        SpaOptions::new()
-            .exclude(["/api"])
-            .immutable(["/assets/"]),
+        SpaOptions::new().exclude(["/api"]).immutable(["/assets/"]),
     ))
 }
 
@@ -288,7 +314,9 @@ async fn put_sections(
     State(state): State<AppState>,
     Json(body): Json<SetSectionsRequest>,
 ) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    Ok(Json(set_pos_sections(&state.pool, &state.shop, &body.sections).await?))
+    Ok(Json(
+        set_pos_sections(&state.pool, &state.shop, &body.sections).await?,
+    ))
 }
 
 #[derive(serde::Serialize)]
@@ -308,7 +336,13 @@ async fn get_bootstrap(State(state): State<AppState>) -> Result<Json<BootstrapSt
 async fn post_login(
     State(state): State<AppState>,
     Json(body): Json<LoginForm>,
-) -> Result<(AppendHeaders<[(header::HeaderName, HeaderValue); 1]>, Json<LoginSession>), ApiError> {
+) -> Result<
+    (
+        AppendHeaders<[(header::HeaderName, HeaderValue); 1]>,
+        Json<LoginSession>,
+    ),
+    ApiError,
+> {
     let session = login(&state.pool, &body).await?;
     Ok((
         AppendHeaders([(header::SET_COOKIE, session_cookie(&session.token, false))]),
@@ -319,7 +353,13 @@ async fn post_login(
 async fn post_logout(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<(AppendHeaders<[(header::HeaderName, HeaderValue); 1]>, StatusCode), ApiError> {
+) -> Result<
+    (
+        AppendHeaders<[(header::HeaderName, HeaderValue); 1]>,
+        StatusCode,
+    ),
+    ApiError,
+> {
     let token = session_token(&headers);
     if !token.is_empty() {
         logout(&state.pool, &token).await?;
@@ -402,7 +442,9 @@ async fn post_section(
     State(state): State<AppState>,
     Json(body): Json<SectionForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_section(&state.pool, &state.shop, None, &body).await?))
+    Ok(Json(
+        save_section(&state.pool, &state.shop, None, &body).await?,
+    ))
 }
 
 async fn put_section(
@@ -410,7 +452,9 @@ async fn put_section(
     Path(id): Path<i32>,
     Json(body): Json<SectionForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_section(&state.pool, &state.shop, Some(id), &body).await?))
+    Ok(Json(
+        save_section(&state.pool, &state.shop, Some(id), &body).await?,
+    ))
 }
 
 async fn delete_section(
@@ -424,14 +468,18 @@ async fn put_section_order(
     State(state): State<AppState>,
     Json(body): Json<OrderForm>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(reorder_sections(&state.pool, &state.shop, &body.ids).await?))
+    Ok(Json(
+        reorder_sections(&state.pool, &state.shop, &body.ids).await?,
+    ))
 }
 
 async fn post_category(
     State(state): State<AppState>,
     Json(body): Json<CategoryForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_category(&state.pool, &state.shop, None, &body).await?))
+    Ok(Json(
+        save_category(&state.pool, &state.shop, None, &body).await?,
+    ))
 }
 
 async fn put_category(
@@ -439,7 +487,9 @@ async fn put_category(
     Path(id): Path<i32>,
     Json(body): Json<CategoryForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_category(&state.pool, &state.shop, Some(id), &body).await?))
+    Ok(Json(
+        save_category(&state.pool, &state.shop, Some(id), &body).await?,
+    ))
 }
 
 async fn delete_category(
@@ -453,14 +503,18 @@ async fn put_category_order(
     State(state): State<AppState>,
     Json(body): Json<OrderForm>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(reorder_categories(&state.pool, &state.shop, &body.ids).await?))
+    Ok(Json(
+        reorder_categories(&state.pool, &state.shop, &body.ids).await?,
+    ))
 }
 
 async fn post_user(
     State(state): State<AppState>,
     Json(body): Json<UserForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_user(&state.pool, &state.shop, None, &body).await?))
+    Ok(Json(
+        save_user(&state.pool, &state.shop, None, &body).await?,
+    ))
 }
 
 async fn put_user(
@@ -468,7 +522,9 @@ async fn put_user(
     Path(id): Path<i32>,
     Json(body): Json<UserForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(save_user(&state.pool, &state.shop, Some(id), &body).await?))
+    Ok(Json(
+        save_user(&state.pool, &state.shop, Some(id), &body).await?,
+    ))
 }
 
 async fn delete_user(
@@ -525,6 +581,21 @@ async fn get_reports(
     ))
 }
 
+async fn get_categories_export(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let bytes = export_categories(&state.pool).await?;
+    Ok(workbook_response("categories.xlsx", bytes))
+}
+
+async fn post_categories_import(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<CategoryImport>, ApiError> {
+    let bytes = workbook_bytes(multipart).await?;
+    Ok(Json(
+        import_categories(&state.pool, &state.shop, &bytes).await?,
+    ))
+}
+
 async fn get_items_export(State(state): State<AppState>) -> Result<Response, ApiError> {
     let bytes = export_items(&state.pool).await?;
     Ok(workbook_response("items.xlsx", bytes))
@@ -548,7 +619,9 @@ async fn post_stock_import(
     multipart: Multipart,
 ) -> Result<Json<MovementImport>, ApiError> {
     let bytes = workbook_bytes(multipart).await?;
-    Ok(Json(import_movements(&state.pool, &state.shop, &bytes).await?))
+    Ok(Json(
+        import_movements(&state.pool, &state.shop, &bytes).await?,
+    ))
 }
 
 fn workbook_response(filename: &str, bytes: Vec<u8>) -> Response {
@@ -594,7 +667,9 @@ async fn post_item(
     State(state): State<AppState>,
     Json(body): Json<ItemForm>,
 ) -> Result<Json<SavedItem>, ApiError> {
-    Ok(Json(save_item(&state.pool, &state.shop, None, &body).await?))
+    Ok(Json(
+        save_item(&state.pool, &state.shop, None, &body).await?,
+    ))
 }
 
 async fn put_item(
@@ -602,7 +677,9 @@ async fn put_item(
     Path(id): Path<i32>,
     Json(body): Json<ItemForm>,
 ) -> Result<Json<SavedItem>, ApiError> {
-    Ok(Json(save_item(&state.pool, &state.shop, Some(id), &body).await?))
+    Ok(Json(
+        save_item(&state.pool, &state.shop, Some(id), &body).await?,
+    ))
 }
 
 async fn put_item_prompt(
@@ -610,7 +687,9 @@ async fn put_item_prompt(
     Path(id): Path<i32>,
     Json(body): Json<ItemPromptRequest>,
 ) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    Ok(Json(set_item_prompt(&state.pool, &state.shop, id, &body).await?))
+    Ok(Json(
+        set_item_prompt(&state.pool, &state.shop, id, &body).await?,
+    ))
 }
 
 fn shop_root() -> PathBuf {
@@ -677,12 +756,10 @@ fn content_type(ext: &str) -> &'static str {
 
 fn write_image(id: i32, ext: &str, bytes: &[u8]) -> Result<(), AppError> {
     let dir = image_root();
-    std::fs::create_dir_all(&dir).map_err(|_| {
-        AppError::BadRequest("The picture folder could not be created.".into())
-    })?;
-    let path = image_file(id, ext).ok_or_else(|| {
-        AppError::BadRequest("Use a JPEG, PNG, WebP, or GIF.".into())
-    })?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|_| AppError::BadRequest("The picture folder could not be created.".into()))?;
+    let path = image_file(id, ext)
+        .ok_or_else(|| AppError::BadRequest("Use a JPEG, PNG, WebP, or GIF.".into()))?;
     let tmp = dir.join(format!("{id}.{ext}.tmp"));
     std::fs::write(&tmp, bytes)
         .map_err(|_| AppError::BadRequest("That picture could not be stored.".into()))?;
@@ -707,8 +784,8 @@ async fn get_item_image(
     let Some(path) = image_file(id, &ext) else {
         return Err(AppError::NotFound("This item has no picture.".into()).into());
     };
-    let bytes = std::fs::read(&path)
-        .map_err(|_| AppError::NotFound("This item has no picture.".into()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|_| AppError::NotFound("This item has no picture.".into()))?;
     Ok((
         StatusCode::OK,
         [
@@ -727,13 +804,16 @@ async fn post_item_image(
 ) -> Result<Json<SavedItem>, ApiError> {
     let previous = item_image_ext(&state.pool, id).await?;
     let mut picture: Option<Vec<u8>> = None;
-    while let Some(field) = multipart.next_field().await.map_err(|_| {
-        AppError::BadRequest("That picture could not be read.".into())
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::BadRequest("That picture could not be read.".into()))?
+    {
         if field.name() == Some("picture") {
-            let data = field.bytes().await.map_err(|_| {
-                AppError::BadRequest("That picture could not be read.".into())
-            })?;
+            let data = field
+                .bytes()
+                .await
+                .map_err(|_| AppError::BadRequest("That picture could not be read.".into()))?;
             picture = Some(data.to_vec());
             break;
         }
@@ -778,7 +858,9 @@ async fn post_print(
     State(state): State<AppState>,
     Json(body): Json<PrintRequest>,
 ) -> Result<Json<PrintOutcome>, ApiError> {
-    Ok(Json(print_saved_bill(&state.pool, &state.shop, &body.bill_no).await?))
+    Ok(Json(
+        print_saved_bill(&state.pool, &state.shop, &body.bill_no).await?,
+    ))
 }
 
 async fn post_print_mix(
@@ -786,7 +868,13 @@ async fn post_print_mix(
     Json(body): Json<ReportQuery>,
 ) -> Result<Json<PrintOutcome>, ApiError> {
     Ok(Json(
-        print_product_mix(&state.pool, &state.shop, body.from.as_deref(), body.to.as_deref()).await?,
+        print_product_mix(
+            &state.pool,
+            &state.shop,
+            body.from.as_deref(),
+            body.to.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -799,7 +887,9 @@ async fn post_print_cash(
     State(state): State<AppState>,
     Json(body): Json<ShiftPrint>,
 ) -> Result<Json<PrintOutcome>, ApiError> {
-    Ok(Json(print_cash_shift(&state.pool, &state.shop, body.id).await?))
+    Ok(Json(
+        print_cash_shift(&state.pool, &state.shop, body.id).await?,
+    ))
 }
 
 async fn get_cash(State(state): State<AppState>) -> Result<Json<CashDesk>, ApiError> {
@@ -821,7 +911,9 @@ async fn post_cash_draft(
     Json(body): Json<ShiftForm>,
 ) -> Result<Json<CashDesk>, ApiError> {
     let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(save_shift(&state.pool, cashier.id, &body, false).await?))
+    Ok(Json(
+        save_shift(&state.pool, cashier.id, &body, false).await?,
+    ))
 }
 
 async fn post_cash_close(
@@ -830,7 +922,9 @@ async fn post_cash_close(
     Json(body): Json<ShiftForm>,
 ) -> Result<Json<CashDesk>, ApiError> {
     let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(save_shift(&state.pool, cashier.id, &body, true).await?))
+    Ok(Json(
+        save_shift(&state.pool, cashier.id, &body, true).await?,
+    ))
 }
 
 async fn post_bill_route(

@@ -28,6 +28,12 @@ jobs:
       - name: Install the till dependencies
         run: npm ci
 
+      - name: Build the database launcher
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin pgwrap
+
+      - name: Embed the database launcher
+        run: Copy-Item -Force src-tauri\target\release\pgwrap.exe src-tauri\pgwrap.exe
+
       - name: Build the NSIS installer
         run: npm exec --yes --package=@tauri-apps/cli@2.12.6 -- tauri build --bundles nsis
 

@@ -8,3 +8,4 @@ target
 *.log
 .DS_Store
 src-tauri/target
+src-tauri/pgwrap.exe

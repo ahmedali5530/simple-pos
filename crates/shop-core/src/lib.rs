@@ -15,7 +15,10 @@ pub use billing::{
 };
 pub use sqlx::PgPool;
 pub use error::{AppError, ErrorBody};
-pub use sheets::{export_items, export_movements, import_items, import_movements, ItemImport, MovementImport};
+pub use sheets::{
+    export_categories, export_items, export_movements, import_categories, import_items, import_movements,
+    CategoryImport, ItemImport, MovementImport,
+};
 pub use ledger::{
     adjust_stock, load_reports, product_mix, recent_movements, stock_summary, MixLine, ProductMix, Reports,
     StockBalance, StockMove, StockMovement, StockPage,

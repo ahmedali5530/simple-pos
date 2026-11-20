@@ -197,7 +197,7 @@
   <aside class="stock-form">
     <h2>Cash Closing</h2>
     {#if error}<p class="field-error">{error}</p>{/if}
-    {#if note}<p class="mt-2 text-[13px] font-bold text-emerald-700">{note}</p>{/if}
+    {#if note}<p class="mt-2 text-[12px] font-bold text-emerald-700">{note}</p>{/if}
     {#if !desk}
       <p class="hint">Opening the cash desk…</p>
     {:else if !desk.open}
@@ -295,7 +295,7 @@
             <div>
               <strong>{shift.closed_at}</strong>
               <p>{shift.closed_by ?? shift.opened_by}</p>
-              <div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[13px] font-bold text-slate-600">
+              <div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] font-bold text-slate-600">
                 <span>Sales {money(shift.sales)}</span>
                 <span>Expenses {money(shift.expenses ?? 0)}</span>
                 <span>Manual {money(shift.manual_count ?? 0)}</span>

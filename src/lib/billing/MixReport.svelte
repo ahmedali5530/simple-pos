@@ -69,7 +69,7 @@
         </div>
         <button type="button" class="save" disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
       </div>
-      {#if printNote}<p class="mt-2 text-[13px] font-bold {printNote.includes('sent') ? 'text-emerald-700' : 'text-rose-700'}">{printNote}</p>{/if}
+      {#if printNote}<p class="mt-2 text-[12px] font-bold {printNote.includes('sent') ? 'text-emerald-700' : 'text-rose-700'}">{printNote}</p>{/if}
       <input class="mb-2 mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search items" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={mix} estimate={49} columns={6} reset={query} key={(line) => line.id}>
         {#snippet header()}

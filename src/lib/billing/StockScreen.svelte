@@ -419,7 +419,7 @@
       </label>
     </div>
     <p class="hint">Add rows with a blank id. Direction in adds stock and out deducts it.</p>
-    {#if sheetNote}<p class="mt-2 text-[13px] font-bold text-emerald-700">{sheetNote}</p>{/if}
+    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
 
     <div class="new-item">
       <p class="stock-label add">Add new item to inventory</p>

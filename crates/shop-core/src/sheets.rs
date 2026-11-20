@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 use calamine::{Data, Reader, Xlsx};
@@ -24,6 +24,15 @@ pub struct ItemImport {
 #[derive(Debug, Serialize)]
 pub struct MovementImport {
     pub applied: i64,
+    pub pos: PosSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoryImport {
+    pub created: i64,
+    pub updated: i64,
+    pub removed: i64,
+    pub reordered: bool,
     pub pos: PosSnapshot,
 }
 
@@ -88,6 +97,13 @@ struct MoveDraft {
     item_name: String,
     qty: i32,
     note: String,
+}
+
+struct CategoryDraft {
+    row: u32,
+    id: Option<i32>,
+    name: String,
+    remove: bool,
 }
 
 pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
@@ -581,6 +597,187 @@ pub async fn import_movements(
     })
 }
 
+pub async fn export_categories(pool: &PgPool) -> Result<Vec<u8>, AppError> {
+    let rows = sqlx::query_as::<_, CategorySheetRow>(
+        "SELECT id, name, sort_order FROM categories ORDER BY sort_order, id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut workbook = Workbook::new();
+    let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
+    let wrap = Format::new().set_text_wrap();
+    let sheet = workbook.add_worksheet();
+    sheet.set_name("Categories").sheet()?;
+    for (col, name) in ["id", "name", "remove"].iter().enumerate() {
+        sheet.write_string_with_format(0, col as u16, *name, &header).sheet()?;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let line = (index + 1) as u32;
+        sheet.write_number(line, 0, row.id as f64).sheet()?;
+        sheet.write_string(line, 1, &row.name).sheet()?;
+    }
+    sheet.set_freeze_panes(1, 0).sheet()?;
+    set_widths(sheet, &[10.0, 28.0, 12.0])?;
+
+    let guide = workbook.add_worksheet();
+    guide.set_name("Guide").sheet()?;
+    let lines = [
+        "One row per category. Leave id blank to add a category.",
+        "An id updates that category. A name that already exists, with a blank id, updates that category.",
+        "The row order is the catalog order. Categories you leave out stay after the ones in this sheet.",
+        "Put yes in remove to delete that category. Move its items first. Keep at least one category.",
+        "Names are unique, ignoring letter case, and can be up to 40 characters.",
+    ];
+    for (index, line) in lines.iter().enumerate() {
+        guide.write_string_with_format(index as u32, 0, *line, &wrap).sheet()?;
+    }
+    guide.set_column_width(0, 110).sheet()?;
+    workbook.save_to_buffer().sheet()
+}
+
+pub async fn import_categories(
+    pool: &PgPool,
+    shop: &ShopConfig,
+    bytes: &[u8],
+) -> Result<CategoryImport, AppError> {
+    let mut book = open_book(bytes)?;
+    let Some(range) = named_range(&mut book, "Categories")? else {
+        return Err(AppError::BadRequest(
+            "The workbook needs a Categories sheet. Export a fresh file to get the columns.".into(),
+        ));
+    };
+    let rows = read_rows(&range);
+    if rows.len() > MAX_ROWS {
+        return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
+    }
+    let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
+    let mut existing = sqlx::query_as::<_, CategorySheetRow>(
+        "SELECT id, name, sort_order FROM categories ORDER BY sort_order, id",
+    )
+    .fetch_all(pool)
+    .await?;
+    existing.sort_by_key(|category| (category.sort_order, category.id));
+    let mut errors = Vec::new();
+    let mut drafts = parse_categories(&header, &rows, &mut errors);
+    if errors.is_empty() {
+        bind_categories(&mut drafts, &existing, &mut errors);
+    }
+    if !errors.is_empty() {
+        return Err(sheet_errors(errors));
+    }
+    if drafts.is_empty() {
+        return Ok(CategoryImport {
+            created: 0,
+            updated: 0,
+            removed: 0,
+            reordered: false,
+            pos: load_pos(pool, shop).await?,
+        });
+    }
+
+    let created = drafts.iter().filter(|draft| draft.id.is_none()).count() as i64;
+    let updated = drafts
+        .iter()
+        .filter(|draft| !draft.remove)
+        .filter(|draft| {
+            draft.id.is_some_and(|id| {
+                existing
+                    .iter()
+                    .find(|category| category.id == id)
+                    .is_some_and(|category| category.name != draft.name)
+            })
+        })
+        .count() as i64;
+    let removed = drafts.iter().filter(|draft| draft.remove).count() as i64;
+    let mut next_order: Vec<i32> = drafts.iter().filter(|draft| !draft.remove).filter_map(|draft| draft.id).collect();
+    let listed: HashSet<i32> = next_order.iter().copied().collect();
+    let removed_ids: HashSet<i32> = drafts.iter().filter(|draft| draft.remove).filter_map(|draft| draft.id).collect();
+    for category in &existing {
+        if !listed.contains(&category.id) && !removed_ids.contains(&category.id) {
+            next_order.push(category.id);
+        }
+    }
+    let previous_order: Vec<i32> = existing
+        .iter()
+        .filter(|category| !removed_ids.contains(&category.id))
+        .map(|category| category.id)
+        .collect();
+    let reordered = previous_order != next_order;
+
+    let mut tx = pool.begin().await?;
+    for draft in drafts.iter().filter(|draft| draft.id.is_some()) {
+        sqlx::query("UPDATE categories SET name = $1 WHERE id = $2")
+            .bind(format!("\u{1}{}", draft.id.unwrap()))
+            .bind(draft.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(category_sheet_error)?;
+    }
+    for draft in drafts.iter().filter(|draft| draft.remove) {
+        let items = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM items WHERE category_id = $1")
+            .bind(draft.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if items > 0 {
+            return Err(AppError::BadRequest(format!(
+                "Categories row {}: move this category's items before removing it.",
+                draft.row
+            )));
+        }
+        let deleted = sqlx::query("DELETE FROM categories WHERE id = $1")
+            .bind(draft.id)
+            .execute(&mut *tx)
+            .await?;
+        if deleted.rows_affected() == 0 {
+            return Err(AppError::BadRequest(format!(
+                "Categories row {}: that category is not in the catalog.",
+                draft.row
+            )));
+        }
+    }
+    for draft in drafts.iter_mut().filter(|draft| draft.id.is_none()) {
+        let id = sqlx::query_scalar::<_, i32>(
+            "INSERT INTO categories (name, sort_order) VALUES ($1, 0) RETURNING id",
+        )
+        .bind(&draft.name)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(category_sheet_error)?;
+        draft.id = Some(id);
+    }
+    for draft in drafts.iter().filter(|draft| !draft.remove) {
+        sqlx::query("UPDATE categories SET name = $1 WHERE id = $2")
+            .bind(&draft.name)
+            .bind(draft.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(category_sheet_error)?;
+    }
+    let mut ordered: Vec<i32> = drafts.iter().filter(|draft| !draft.remove).filter_map(|draft| draft.id).collect();
+    let listed: HashSet<i32> = ordered.iter().copied().collect();
+    for category in &existing {
+        if !listed.contains(&category.id) && !removed_ids.contains(&category.id) {
+            ordered.push(category.id);
+        }
+    }
+    for (index, id) in ordered.iter().enumerate() {
+        sqlx::query("UPDATE categories SET sort_order = $1 WHERE id = $2")
+            .bind(index as i32)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(CategoryImport {
+        created,
+        updated,
+        removed,
+        reordered,
+        pos: load_pos(pool, shop).await?,
+    })
+}
+
 async fn apply_delta(
     tx: &mut Transaction<'_, Postgres>,
     item_id: i32,
@@ -876,6 +1073,155 @@ fn parse_options(
         });
     }
     drafts
+}
+
+fn parse_categories(
+    header: &HashMap<String, usize>,
+    rows: &[(u32, Vec<Data>)],
+    errors: &mut Vec<String>,
+) -> Vec<CategoryDraft> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let id_col = column(header, &["id"]);
+    let name_col = column(header, &["name", "category"]);
+    let remove_col = column(header, &["remove", "delete"]);
+    if name_col.is_none() {
+        errors.push("The Categories sheet needs a name column.".into());
+        return Vec::new();
+    }
+    let mut drafts = Vec::new();
+    for (excel_row, row) in rows.iter().skip(1) {
+        if errors.len() >= 20 {
+            break;
+        }
+        let id_text = cell_text(row, id_col);
+        let name = cell_text(row, name_col);
+        let remove = is_yes(&cell_text(row, remove_col));
+        if id_text.is_empty() && name.is_empty() && !remove {
+            continue;
+        }
+        let label = format!("Categories row {excel_row}");
+        let id = match whole(&id_text, "id") {
+            Ok(value) => value,
+            Err(message) => {
+                errors.push(format!("{label}: {message}"));
+                continue;
+            }
+        };
+        if !remove && name.is_empty() {
+            errors.push(format!("{label}: enter a category name."));
+            continue;
+        }
+        if name.chars().count() > 40 {
+            errors.push(format!("{label}: keep the category name to 40 characters."));
+            continue;
+        }
+        drafts.push(CategoryDraft {
+            row: *excel_row,
+            id,
+            name,
+            remove,
+        });
+    }
+    drafts
+}
+
+fn bind_categories(drafts: &mut [CategoryDraft], existing: &[CategorySheetRow], errors: &mut Vec<String>) {
+    let mut seen_ids: HashMap<i32, u32> = HashMap::new();
+    for draft in drafts.iter() {
+        if errors.len() >= 20 {
+            return;
+        }
+        let Some(id) = draft.id else { continue };
+        let label = format!("Categories row {}", draft.row);
+        if !existing.iter().any(|category| category.id == id) {
+            errors.push(format!("{label}: that category is not in the catalog."));
+            continue;
+        }
+        if draft.remove {
+            if let Some(category) = existing.iter().find(|category| category.id == id) {
+                if !draft.name.is_empty() && !category.name.eq_ignore_ascii_case(&draft.name) {
+                    errors.push(format!("{label}: that name does not belong to this category."));
+                    continue;
+                }
+            }
+        }
+        if let Some(previous) = seen_ids.insert(id, draft.row) {
+            errors.push(format!("{label}: category {id} is also on row {previous}."));
+        }
+    }
+    if !errors.is_empty() {
+        return;
+    }
+    let mut bindings = Vec::new();
+    for index in 0..drafts.len() {
+        if errors.len() >= 20 {
+            return;
+        }
+        if drafts[index].id.is_some() {
+            continue;
+        }
+        let row = drafts[index].row;
+        let name = drafts[index].name.clone();
+        let remove = drafts[index].remove;
+        let label = format!("Categories row {row}");
+        let Some(category_id) = existing
+            .iter()
+            .find(|category| category.name.eq_ignore_ascii_case(&name))
+            .map(|category| category.id)
+        else {
+            if remove {
+                errors.push(format!("{label}: say which category to remove."));
+            }
+            continue;
+        };
+        if let Some(previous) = seen_ids.get(&category_id).copied() {
+            let owner_keeps = drafts.iter().any(|other| {
+                other.row == previous && !other.remove && other.name.eq_ignore_ascii_case(&name)
+            });
+            if remove || owner_keeps {
+                errors.push(format!(
+                    "{label}: category {category_id} is also on row {previous}."
+                ));
+            }
+            continue;
+        }
+        seen_ids.insert(category_id, row);
+        bindings.push((index, category_id));
+    }
+    for (index, id) in bindings {
+        drafts[index].id = Some(id);
+    }
+    if !errors.is_empty() {
+        return;
+    }
+    let touched: HashSet<i32> = drafts.iter().filter_map(|draft| draft.id).collect();
+    let mut seen_names: HashMap<String, u32> = HashMap::new();
+    for draft in drafts.iter() {
+        if errors.len() >= 20 {
+            return;
+        }
+        if draft.remove {
+            continue;
+        }
+        let label = format!("Categories row {}", draft.row);
+        let key = draft.name.to_lowercase();
+        if let Some(previous) = seen_names.insert(key, draft.row) {
+            errors.push(format!("{label}: that name is also on row {previous}."));
+            continue;
+        }
+        if existing.iter().any(|category| {
+            category.name.eq_ignore_ascii_case(&draft.name) && !touched.contains(&category.id)
+        }) {
+            errors.push(format!("{label}: that category name is already used."));
+        }
+    }
+    let removed = drafts.iter().filter(|draft| draft.remove).count();
+    let created = drafts.iter().filter(|draft| draft.id.is_none()).count();
+    if existing.len() + created < removed + 1 {
+        errors.push("Keep at least one category.".into());
+    }
 }
 
 fn parse_movements(
@@ -1195,6 +1541,18 @@ fn sheet_errors(errors: Vec<String>) -> AppError {
     AppError::BadRequest(errors.into_iter().take(20).collect::<Vec<_>>().join("\n"))
 }
 
+fn category_sheet_error(err: sqlx::Error) -> AppError {
+    let constraint = err
+        .as_database_error()
+        .and_then(|db| db.constraint().map(str::to_string));
+    match constraint.as_deref() {
+        Some("categories_name_key") | Some("categories_name_lower_idx") => {
+            AppError::BadRequest("That category name is already used.".into())
+        }
+        _ => AppError::Db(err),
+    }
+}
+
 fn catalog_error(err: sqlx::Error) -> AppError {
     let constraint = err
         .as_database_error()
@@ -1364,6 +1722,13 @@ struct OptionSheetRow {
     barcode: Option<String>,
     rate: i32,
     units: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct CategorySheetRow {
+    id: i32,
+    name: String,
+    sort_order: i32,
 }
 
 #[derive(sqlx::FromRow)]

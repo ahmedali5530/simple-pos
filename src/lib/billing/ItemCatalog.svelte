@@ -288,7 +288,7 @@
       </label>
     </div>
     <p class="hint">Leave counted blank unless you recounted that item. Options are the second sheet.</p>
-    {#if sheetNote}<p class="mt-2 text-[13px] font-bold text-emerald-700">{sheetNote}</p>{/if}
+    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
     {#if sheetError}<p class="field-error">{sheetError}</p>{/if}
     <input class="setup-search" placeholder="Find an item" bind:value={query} />
     <VirtualList class="setup-list" items={visible} estimate={64} reset={query} key={(row) => row.item.id}>

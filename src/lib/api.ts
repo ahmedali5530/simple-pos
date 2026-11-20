@@ -202,6 +202,20 @@ export async function downloadWorkbook(path: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+export interface CategoryImportResult {
+  created: number
+  updated: number
+  removed: number
+  reordered: boolean
+  pos: PosSnapshot
+}
+
+export function importCategoriesWorkbook(file: File): Promise<CategoryImportResult> {
+  const body = new FormData()
+  body.append('file', file)
+  return request('/api/categories/import', { method: 'POST', body })
+}
+
 export function importItemsWorkbook(file: File): Promise<ItemImportResult> {
   const body = new FormData()
   body.append('file', file)

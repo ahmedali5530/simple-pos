@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { orderCategories, removeCategory, saveCategory } from '../api'
+  import { downloadWorkbook, importCategoriesWorkbook, orderCategories, removeCategory, saveCategory } from '../api'
   import type { Category, PosSnapshot } from '../types'
 
   interface Props {
@@ -16,6 +16,9 @@
   let formError = $state('')
   let confirmRemove = $state(false)
   let saving = $state(false)
+  let sheetBusy = $state(false)
+  let sheetNote = $state('')
+  let sheetError = $state('')
 
   $effect(() => {
     if (editing === loaded) return
@@ -40,6 +43,50 @@
       .finally(() => {
         saving = false
       })
+  }
+
+  async function exportWorkbook() {
+    sheetError = ''
+    sheetNote = ''
+    sheetBusy = true
+    try {
+      await downloadWorkbook('/api/categories/export', 'categories.xlsx')
+      sheetNote = 'The category workbook downloaded.'
+    } catch (error) {
+      sheetError = error instanceof Error ? error.message : 'The workbook did not download.'
+    } finally {
+      sheetBusy = false
+    }
+  }
+
+  async function importWorkbook(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    sheetError = ''
+    sheetNote = ''
+    sheetBusy = true
+    try {
+      const result = await importCategoriesWorkbook(file)
+      onChange(result.pos)
+      if (typeof editing === 'number' && !result.pos.categories.some((category) => category.id === editing)) {
+        editing = null
+      }
+      loaded = null
+      const parts = [
+        result.created ? `${result.created} added` : '',
+        result.updated ? `${result.updated} renamed` : '',
+        result.removed ? `${result.removed} removed` : '',
+      ].filter(Boolean)
+      if (parts.length) sheetNote = `Saved the workbook: ${parts.join(', ')}.`
+      else if (result.reordered) sheetNote = 'Saved the category order.'
+      else sheetNote = 'The workbook matched the catalog.'
+    } catch (error) {
+      sheetError = error instanceof Error ? error.message : 'The workbook was not saved.'
+    } finally {
+      sheetBusy = false
+    }
   }
 
   async function save() {
@@ -83,7 +130,16 @@
       <h2>Categories</h2>
       <button type="button" class="save" onclick={() => (editing = 'new')}>New category</button>
     </div>
-    <p class="hint">Categories filter the catalog inside a section. An item belongs to one category.</p>
+    <div class="mt-2.5 grid grid-cols-2 gap-2">
+      <button type="button" class="inline-flex h-[46px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900" disabled={sheetBusy || saving} onclick={exportWorkbook}>Export Excel</button>
+      <label class="mt-0 inline-flex h-[46px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900">
+        Import Excel
+        <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={sheetBusy || saving} onchange={importWorkbook} />
+      </label>
+    </div>
+    <p class="hint">Categories filter the catalog inside a section. An item belongs to one category. Leave id blank to add one, and put yes in remove to delete one. Row order is the catalog order.</p>
+    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
+    {#if sheetError}<p class="field-error">{sheetError}</p>{/if}
     <div class="setup-list">
       {#each categories as category, index (category.id)}
         <div class="order-row">

@@ -1,11 +1,24 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use postgresql_embedded::{PostgreSQL, SettingsBuilder};
 
 const DATABASE: &str = "shop";
+#[cfg(target_os = "windows")]
+static PG_LAUNCHER: OnceLock<&'static [u8]> = OnceLock::new();
+
+pub(crate) fn set_pg_launcher(bytes: &'static [u8]) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = PG_LAUNCHER.set(bytes);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = bytes;
+}
 
 pub struct EmbeddedDb {
     server: PostgreSQL,
@@ -47,6 +60,11 @@ impl EmbeddedDb {
             }
             return Err(message);
         }
+        // Stop a database left open before replacing postgres.exe. Windows will
+        // not let us rewrite a program that is still running.
+        stop_leftover(&home)?;
+        #[cfg(target_os = "windows")]
+        install_postgres_launcher(&home)?;
         #[cfg(target_os = "windows")]
         if init_on_windows {
             if !cluster_is_complete(&home.join("pgdata")) {
@@ -55,7 +73,6 @@ impl EmbeddedDb {
             }
             windows_initdb(&home, &password).await?;
         }
-        stop_leftover(&home)?;
         server
             .start()
             .await
@@ -203,6 +220,26 @@ fn with_database_log(home: &Path, mut message: String) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn install_postgres_launcher(home: &Path) -> Result<(), String> {
+    let bytes = PG_LAUNCHER.get().copied().unwrap_or(&[]);
+    if bytes.is_empty() {
+        return Err("This build cannot start the shop database without a terminal.".to_string());
+    }
+    let bin = find_bin(&home.join("postgres"), &["pg_ctl.exe", "pg_ctl"])
+        .and_then(|program| program.parent().map(Path::to_path_buf))
+        .ok_or_else(|| "Could not find the shop database programs.".to_string())?;
+    let postgres = bin.join("postgres.exe");
+    let server = bin.join("postgres-server.exe");
+    if !server.exists() {
+        if !postgres.exists() {
+            return Err("Could not find postgres.exe.".to_string());
+        }
+        fs::rename(&postgres, &server).map_err(|err| format!("{}: {err}", postgres.display()))?;
+    }
+    fs::write(&postgres, bytes).map_err(|err| format!("{}: {err}", postgres.display()))
+}
+
+#[cfg(target_os = "windows")]
 async fn windows_initdb(home: &Path, password: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let data = home.join("pgdata");
@@ -211,8 +248,19 @@ async fn windows_initdb(home: &Path, password: &str) -> Result<(), String> {
     fs::write(&pwfile, password).map_err(|err| format!("{}: {err}", pwfile.display()))?;
     let initdb = find_bin(&home.join("postgres"), &["initdb.exe", "initdb"])
         .ok_or_else(|| "Could not find initdb.exe in the shop database install.".to_string())?;
-    let mut command = tokio::process::Command::new(initdb);
+    let log_path = home.join("initdb.log");
+    let log_file =
+        fs::File::create(&log_path).map_err(|err| format!("{}: {err}", log_path.display()))?;
+    let log_err = log_file
+        .try_clone()
+        .map_err(|err| format!("{}: {err}", log_path.display()))?;
+    // CREATE_NO_WINDOW. initdb is only the setup step; the launcher keeps the
+    // server itself from opening a terminal too.
+    let mut command = tokio::process::Command::new(&initdb);
     command.creation_flags(0x0800_0000);
+    if let Some(bin_dir) = initdb.parent() {
+        command.current_dir(bin_dir);
+    }
     command
         .arg("--pgdata")
         .arg(&data)
@@ -225,18 +273,22 @@ async fn windows_initdb(home: &Path, password: &str) -> Result<(), String> {
         .arg("--encoding")
         .arg("UTF8")
         .arg("--no-locale")
-        .arg("--no-instructions");
-    let output = tokio::time::timeout(Duration::from_secs(180), command.output())
+        .arg("--no-data-checksums")
+        .arg("--no-instructions")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_err));
+    let status = tokio::time::timeout(Duration::from_secs(180), command.status())
         .await
         .map_err(|_| "Setting up the shop database took too long.".to_string())?
         .map_err(|err| format!("Could not set up the shop database: {err}"))?;
-    if output.status.success() {
+    if status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let log = fs::read_to_string(&log_path).unwrap_or_default();
     Err(format!(
-        "Could not set up the shop database.\n{stderr}{stdout}"
+        "Could not set up the shop database.\n{}",
+        log.trim()
     ))
 }
 

@@ -8,7 +8,12 @@ struct Running {
     inner: Arc<Mutex<Option<(tokio::runtime::Runtime, shop_api::Till)>>>,
 }
 
+mod pg_launcher {
+    include!(concat!(env!("OUT_DIR"), "/pgwrap.rs"));
+}
+
 fn main() {
+    shop_api::set_pg_launcher(pg_launcher::BYTES);
     #[cfg(unix)]
     block_stop_signals();
     std::env::set_var("API_ADDR", "127.0.0.1:8788");

@@ -151,7 +151,7 @@
           <tr>
             <td class="bill-no">
               {bill.bill_no}
-              {#if bill.customer}<span class="block text-xs font-bold text-slate-500">{bill.customer}</span>{/if}
+              {#if bill.customer}<span class="block text-xs text-slate-500">{bill.customer}</span>{/if}
             </td>
             <td>{clock(bill.created_at)}</td>
             <td><span class="head-pill" style:--accent={bill.accent}>{bill.short_name}</span></td>
