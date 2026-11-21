@@ -6,7 +6,7 @@ use rust_xlsxwriter::{Color, Format, Workbook};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::billing::load_pos;
+use crate::billing::load_pos_tx;
 use crate::error::AppError;
 use crate::models::{PosSnapshot, ShopConfig};
 
@@ -107,6 +107,7 @@ struct CategoryDraft {
 }
 
 pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let items = sqlx::query_as::<_, ItemSheetRow>(
         r#"
         SELECT
@@ -119,7 +120,7 @@ pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
         ORDER BY s.pos_order, i.sort_order, i.id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     let options = sqlx::query_as::<_, OptionSheetRow>(
         r#"
@@ -133,8 +134,9 @@ pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
         ORDER BY s.pos_order, i.sort_order, i.id, v.sort_order, v.id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let mut workbook = Workbook::new();
     let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
@@ -213,6 +215,7 @@ pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
 }
 
 pub async fn export_movements(pool: &PgPool) -> Result<Vec<u8>, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let rows = sqlx::query_as::<_, MovementSheetRow>(
         r#"
         SELECT
@@ -232,8 +235,9 @@ pub async fn export_movements(pool: &PgPool) -> Result<Vec<u8>, AppError> {
         LIMIT 5000
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let mut workbook = Workbook::new();
     let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
@@ -292,18 +296,19 @@ pub async fn import_items(pool: &PgPool, shop: &ShopConfig, bytes: &[u8]) -> Res
         return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
     }
 
+    let mut tx = crate::tenant::begin(pool).await?;
     let sections = sqlx::query_as::<_, SectionRef>(
         "SELECT id, name, short_name FROM sections ORDER BY pos_order, id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     let categories = sqlx::query_as::<_, CategoryRef>("SELECT id, name FROM categories ORDER BY sort_order, id")
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?;
     let existing = sqlx::query_as::<_, LoadedItem>(
         "SELECT id, barcode, name FROM items WHERE active",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     let variants = sqlx::query_as::<_, LoadedVariant>(
         r#"
@@ -313,7 +318,7 @@ pub async fn import_items(pool: &PgPool, shop: &ShopConfig, bytes: &[u8]) -> Res
         WHERE i.active
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let item_header = header_map(item_rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
@@ -332,7 +337,6 @@ pub async fn import_items(pool: &PgPool, shop: &ShopConfig, bytes: &[u8]) -> Res
         return Err(sheet_errors(errors));
     }
 
-    let mut tx = pool.begin().await?;
     let mut created = 0_i64;
     let mut updated = 0_i64;
     let mut id_of_row: HashMap<u32, i32> = HashMap::new();
@@ -503,13 +507,14 @@ pub async fn import_items(pool: &PgPool, shop: &ShopConfig, bytes: &[u8]) -> Res
         apply_delta(&mut tx, id, delta, note).await?;
         counted += 1;
     }
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
     Ok(ItemImport {
         created,
         updated,
         options: options_saved,
         counted,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -529,10 +534,11 @@ pub async fn import_movements(
         return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
     }
     let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
+    let mut tx = crate::tenant::begin(pool).await?;
     let items = sqlx::query_as::<_, LoadedItem>(
         "SELECT id, barcode, name FROM items WHERE active",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     let variant_owners = sqlx::query_as::<_, (Option<String>, i32)>(
         r#"
@@ -542,15 +548,13 @@ pub async fn import_movements(
         WHERE i.active AND v.barcode IS NOT NULL
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     let mut errors = Vec::new();
     let drafts = parse_movements(&header, &rows, &items, &variant_owners, &mut errors);
     if !errors.is_empty() {
         return Err(sheet_errors(errors));
     }
-
-    let mut tx = pool.begin().await?;
     let mut on_hand: HashMap<i32, i32> = HashMap::new();
     let mut ids: Vec<i32> = drafts.iter().map(|draft| draft.item_id).collect();
     ids.sort_unstable();
@@ -590,19 +594,22 @@ pub async fn import_movements(
         apply_delta(&mut tx, draft.item_id, draft.qty, &draft.note).await?;
     }
     let applied = drafts.len() as i64;
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
     Ok(MovementImport {
         applied,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
 pub async fn export_categories(pool: &PgPool) -> Result<Vec<u8>, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let rows = sqlx::query_as::<_, CategorySheetRow>(
         "SELECT id, name, sort_order FROM categories ORDER BY sort_order, id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let mut workbook = Workbook::new();
     let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
@@ -652,10 +659,11 @@ pub async fn import_categories(
         return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
     }
     let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
+    let mut tx = crate::tenant::begin(pool).await?;
     let mut existing = sqlx::query_as::<_, CategorySheetRow>(
         "SELECT id, name, sort_order FROM categories ORDER BY sort_order, id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     existing.sort_by_key(|category| (category.sort_order, category.id));
     let mut errors = Vec::new();
@@ -667,12 +675,14 @@ pub async fn import_categories(
         return Err(sheet_errors(errors));
     }
     if drafts.is_empty() {
+        let pos = load_pos_tx(&mut tx, shop).await?;
+        tx.commit().await?;
         return Ok(CategoryImport {
             created: 0,
             updated: 0,
             removed: 0,
             reordered: false,
-            pos: load_pos(pool, shop).await?,
+            pos,
         });
     }
 
@@ -705,7 +715,6 @@ pub async fn import_categories(
         .collect();
     let reordered = previous_order != next_order;
 
-    let mut tx = pool.begin().await?;
     for draft in drafts.iter().filter(|draft| draft.id.is_some()) {
         sqlx::query("UPDATE categories SET name = $1 WHERE id = $2")
             .bind(format!("\u{1}{}", draft.id.unwrap()))
@@ -768,13 +777,14 @@ pub async fn import_categories(
             .execute(&mut *tx)
             .await?;
     }
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
     Ok(CategoryImport {
         created,
         updated,
         removed,
         reordered,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 

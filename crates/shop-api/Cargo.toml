@@ -8,6 +8,15 @@ license = "MIT"
 axum = { version = "0.8", features = ["multipart"] }
 axum-frontend = { version = "0.2", optional = true }
 shop-core = { path = "../shop-core" }
+platform-kernel = { path = "../platform-kernel" }
+platform-runtime = { path = "../platform-runtime" }
+platform-identity = { path = "../platform-identity" }
+plugin-catalog = { path = "../plugins/catalog" }
+plugin-inventory = { path = "../plugins/inventory" }
+plugin-pos = { path = "../plugins/pos" }
+plugin-cash = { path = "../plugins/cash" }
+plugin-printing = { path = "../plugins/printing" }
+plugin-reports = { path = "../plugins/reports" }
 dotenvy = "0.15"
 getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
@@ -19,9 +28,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["serde"] }
 
 [features]
 # Pages and API in one process, using DATABASE_URL. The web image uses this.
 web = ["dep:axum-frontend", "dep:rust-embed"]
 # Desktop till: the web files plus a private Postgres. Do not use this on a VPS.
 bundle = ["web", "dep:postgresql_embedded"]
+
+[dev-dependencies]
+bcrypt = "0.16"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }

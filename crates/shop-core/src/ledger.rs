@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use crate::billing::load_pos;
+use crate::billing::load_pos_tx;
 use crate::error::AppError;
 use crate::models::{PosSnapshot, ShopConfig};
 
@@ -194,7 +194,7 @@ pub async fn adjust_stock(
     };
     let delta = if inbound { move_request.qty } else { -move_request.qty };
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::tenant::begin(pool).await?;
     let held = sqlx::query_as::<_, (i32, i64)>(
         "SELECT stock, avg_cost FROM items WHERE id = $1 AND active FOR UPDATE",
     )
@@ -248,15 +248,19 @@ pub async fn adjust_stock(
     .bind(&reason)
     .execute(&mut *tx)
     .await?;
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    let movement_list =
+        movements_tx(&mut tx, Some(move_request.item_id), None, None, 40).await?;
     tx.commit().await?;
 
     Ok(StockPage {
-        pos: load_pos(pool, shop).await?,
-        movements: movements(pool, Some(move_request.item_id), None, None, 40).await?,
+        pos,
+        movements: movement_list,
     })
 }
 
 pub async fn stock_summary(pool: &PgPool) -> Result<Vec<StockBalance>, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let rows = sqlx::query_as::<_, BalanceRow>(
         r#"
         SELECT
@@ -279,8 +283,9 @@ pub async fn stock_summary(pool: &PgPool) -> Result<Vec<StockBalance>, AppError>
         ORDER BY s.pos_order, i.sort_order, i.id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -310,7 +315,10 @@ pub async fn recent_movements(
     pool: &PgPool,
     item_id: Option<i32>,
 ) -> Result<Vec<StockMovement>, AppError> {
-    movements(pool, item_id, None, None, 40).await
+    let mut tx = crate::tenant::begin(pool).await?;
+    let result = movements_tx(&mut tx, item_id, None, None, 40).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 pub async fn load_reports(
@@ -318,7 +326,8 @@ pub async fn load_reports(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<Reports, AppError> {
-    check_range(pool, from, to).await?;
+    let mut tx = crate::tenant::begin(pool).await?;
+    check_range_tx(&mut tx, from, to).await?;
     let sections = sqlx::query_as::<_, SectionTotal>(
         r#"
         SELECT
@@ -338,7 +347,7 @@ pub async fn load_reports(
     )
     .bind(from)
     .bind(to)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let bill_count: i64 = sections.iter().map(|section| section.bills).sum();
@@ -352,7 +361,7 @@ pub async fn load_reports(
         WHERE active
         "#,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     let goods = sqlx::query_scalar::<_, i64>(
         r#"
@@ -371,7 +380,7 @@ pub async fn load_reports(
     )
     .bind(from)
     .bind(to)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     let profit = total.saturating_mul(100) - goods;
 
@@ -398,7 +407,7 @@ pub async fn load_reports(
     )
     .bind(from)
     .bind(to)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let bill_ids: Vec<i32> = rows.iter().map(|bill| bill.id).collect();
@@ -414,7 +423,7 @@ pub async fn load_reports(
             "#,
         )
         .bind(&bill_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?
     };
     let cost_rows = if bill_ids.is_empty() {
@@ -437,7 +446,7 @@ pub async fn load_reports(
             "#,
         )
         .bind(&bill_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?
     };
 
@@ -480,10 +489,11 @@ pub async fn load_reports(
     )
     .bind(from)
     .bind(to)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
-    let movements = movements(pool, None, from, to, LIST_LIMIT).await?;
-    let mix = product_mix(pool, from, to).await?;
+    let movements = movements_tx(&mut tx, None, from, to, LIST_LIMIT).await?;
+    let mix = product_mix_tx(&mut tx, from, to).await?;
+    tx.commit().await?;
 
     Ok(Reports {
         sections,
@@ -509,7 +519,18 @@ pub struct ProductMix {
 }
 
 pub async fn product_mix(pool: &PgPool, from: Option<&str>, to: Option<&str>) -> Result<ProductMix, AppError> {
-    check_range(pool, from, to).await?;
+    let mut tx = crate::tenant::begin(pool).await?;
+    let mix = product_mix_tx(&mut tx, from, to).await?;
+    tx.commit().await?;
+    Ok(mix)
+}
+
+async fn product_mix_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<ProductMix, AppError> {
+    check_range_tx(tx, from, to).await?;
     let mut lines = sqlx::query_as::<_, MixLine>(
         r#"
         SELECT
@@ -541,18 +562,22 @@ pub async fn product_mix(pool: &PgPool, from: Option<&str>, to: Option<&str>) ->
     .bind(from)
     .bind(to)
     .bind(MIX_LIMIT + 1)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
     let truncated = lines.len() > MIX_LIMIT as usize;
     lines.truncate(MIX_LIMIT as usize);
     Ok(ProductMix {
         lines,
         truncated,
-        label: range_label(pool, from, to).await?,
+        label: range_label_tx(tx, from, to).await?,
     })
 }
 
-async fn range_label(pool: &PgPool, from: Option<&str>, to: Option<&str>) -> Result<String, AppError> {
+async fn range_label_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<String, AppError> {
     if from.is_none() || to.is_none() {
         return Ok("All dates".into());
     }
@@ -565,13 +590,13 @@ async fn range_label(pool: &PgPool, from: Option<&str>, to: Option<&str>) -> Res
     )
     .bind(from)
     .bind(to)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(label)
 }
 
-async fn movements(
-    pool: &PgPool,
+async fn movements_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     item_id: Option<i32>,
     from: Option<&str>,
     to: Option<&str>,
@@ -603,12 +628,16 @@ async fn movements(
     .bind(from)
     .bind(to)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await
     .map_err(AppError::from)
 }
 
-async fn check_range(pool: &PgPool, from: Option<&str>, to: Option<&str>) -> Result<(), AppError> {
+async fn check_range_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(), AppError> {
     if from.is_none() && to.is_none() {
         return Ok(());
     }
@@ -618,7 +647,7 @@ async fn check_range(pool: &PgPool, from: Option<&str>, to: Option<&str>) -> Res
     sqlx::query("SELECT $1::timestamptz, $2::timestamptz")
         .bind(from)
         .bind(to)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(|_| AppError::BadRequest("That date range could not be read.".into()))?;
     Ok(())

@@ -1,0 +1,10 @@
+[package]
+name = "platform-sheets"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+calamine = "0.38"
+rust_xlsxwriter = "0.102"
+platform-kernel = { path = "../platform-kernel" }

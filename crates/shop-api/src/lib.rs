@@ -37,6 +37,14 @@ struct TillAssets;
 struct AppState {
     pool: PgPool,
     shop: ShopConfig,
+    /// Platform gateway and manifests (optional until boot completes).
+    platform: Option<std::sync::Arc<PlatformState>>,
+}
+
+#[derive(Clone)]
+struct PlatformState {
+    manifests: Vec<platform_kernel::manifest::PluginManifest>,
+    gateway: std::sync::Arc<tokio::sync::Mutex<platform_runtime::CapabilityGateway>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -163,86 +171,8 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
         )
     })?;
     let shop = load_shop_config();
-
-    let app = serve_till(
-        Router::new()
-            .route("/api/pos", get(get_pos))
-            .route("/api/pos/focus", put(put_focus))
-            .route("/api/pos/sections", put(put_sections))
-            .route("/api/bills", axum::routing::post(post_bill_route))
-            .route("/api/print", post(post_print))
-            .route("/api/print/mix", post(post_print_mix))
-            .route("/api/print/cash", post(post_print_cash))
-            .route("/api/cash", get(get_cash))
-            .route("/api/cash/open", post(post_cash_open))
-            .route("/api/cash/draft", post(post_cash_draft))
-            .route("/api/cash/close", post(post_cash_close))
-            .route("/api/login", post(post_login))
-            .route("/api/logout", post(post_logout))
-            .route("/api/session", get(get_session))
-            .route("/api/bootstrap", get(get_bootstrap))
-            .route("/api/sections", post(post_section))
-            .route("/api/sections/order", put(put_section_order))
-            .route(
-                "/api/sections/{id}",
-                put(put_section).delete(delete_section),
-            )
-            .route("/api/categories", post(post_category))
-            .route("/api/categories/order", put(put_category_order))
-            .route("/api/categories/export", get(get_categories_export))
-            .route(
-                "/api/categories/import",
-                post(post_categories_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-            )
-            .route(
-                "/api/categories/{id}",
-                put(put_category).delete(delete_category),
-            )
-            .route("/api/users", post(post_user))
-            .route("/api/users/{id}", put(put_user).delete(delete_user))
-            .route("/api/settings", put(put_settings))
-            .route("/api/stock", post(post_stock))
-            .route("/api/stock/movements", get(get_movements))
-            .route("/api/stock/summary", get(get_stock_summary))
-            .route("/api/stock/export", get(get_stock_export))
-            .route(
-                "/api/stock/import",
-                post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-            )
-            .route("/api/reports", get(get_reports))
-            .route("/api/items", post(post_item))
-            .route("/api/items/export", get(get_items_export))
-            .route(
-                "/api/items/import",
-                post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-            )
-            .route("/api/items/{id}", put(put_item))
-            .route("/api/items/{id}/prompt", put(put_item_prompt))
-            .route(
-                "/api/items/{id}/image",
-                get(get_item_image)
-                    .post(post_item_image)
-                    .delete(delete_item_image)
-                    .layer(DefaultBodyLimit::max(3 * 1024 * 1024)),
-            )
-            .layer(from_fn_with_state(
-                AppState {
-                    pool: pool.clone(),
-                    shop: shop.clone(),
-                },
-                require_user,
-            ))
-            .layer(
-                CorsLayer::new()
-                    .allow_origin(Any)
-                    .allow_methods(Any)
-                    .allow_headers(Any),
-            )
-            .with_state(AppState {
-                pool: pool.clone(),
-                shop,
-            }),
-    );
+    let platform = boot_platform(&database_url).await;
+    let app = serve_till(build_router_with_platform(pool.clone(), shop, platform));
 
     let addr: SocketAddr = std::env::var("API_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".into())
@@ -293,6 +223,157 @@ async fn wait_for_stop() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+async fn boot_platform(database_url: &str) -> Option<std::sync::Arc<PlatformState>> {
+    use platform_kernel::plugin::Plugin;
+    use platform_runtime::{BootConfig, Platform};
+    use std::sync::Arc;
+
+    let plugins: Vec<Arc<dyn Plugin>> = vec![
+        Arc::new(plugin_catalog::CatalogPlugin),
+        Arc::new(plugin_inventory::InventoryPlugin),
+        Arc::new(plugin_pos::PosPlugin),
+        Arc::new(plugin_cash::CashPlugin),
+        Arc::new(plugin_printing::PrintingPlugin),
+        Arc::new(plugin_reports::ReportsPlugin),
+    ];
+    let admin_url = std::env::var("DATABASE_ADMIN_URL").ok();
+    match Platform::boot(
+        BootConfig {
+            database_url: database_url.to_string(),
+            database_admin_url: admin_url,
+            app_password: std::env::var("PLATFORM_APP_PASSWORD").ok(),
+        },
+        plugins,
+        true,
+    )
+    .await
+    {
+        Ok(mut platform) => {
+            let manifests = platform.registry.manifests();
+            let gateway = Arc::new(tokio::sync::Mutex::new(std::mem::replace(
+                &mut platform.gateway,
+                platform_runtime::CapabilityGateway::new(
+                    platform.pools.runtime.clone(),
+                    platform_kernel::capability::CapabilityRegistry::new(),
+                ),
+            )));
+            // Keep dispatcher alive.
+            std::mem::forget(platform);
+            Some(Arc::new(PlatformState { manifests, gateway }))
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "platform boot skipped; legacy API only");
+            None
+        }
+    }
+}
+
+/// Build the HTTP router for the till API. Used by the server and by characterization tests.
+pub fn build_router(pool: PgPool, shop: ShopConfig) -> Router {
+    build_router_inner(pool, shop, None)
+}
+
+fn build_router_with_platform(
+    pool: PgPool,
+    shop: ShopConfig,
+    platform: Option<std::sync::Arc<PlatformState>>,
+) -> Router {
+    build_router_inner(pool, shop, platform)
+}
+
+fn build_router_inner(
+    pool: PgPool,
+    shop: ShopConfig,
+    platform: Option<std::sync::Arc<PlatformState>>,
+) -> Router {
+    let state = AppState {
+        pool: pool.clone(),
+        shop: shop.clone(),
+        platform,
+    };
+    Router::new()
+        .route("/api/pos", get(get_pos))
+        .route("/api/pos/focus", put(put_focus))
+        .route("/api/pos/sections", put(put_sections))
+        .route("/api/bills", axum::routing::post(post_bill_route))
+        .route("/api/print", post(post_print))
+        .route("/api/print/mix", post(post_print_mix))
+        .route("/api/print/cash", post(post_print_cash))
+        .route("/api/cash", get(get_cash))
+        .route("/api/cash/open", post(post_cash_open))
+        .route("/api/cash/draft", post(post_cash_draft))
+        .route("/api/cash/close", post(post_cash_close))
+        .route("/api/login", post(post_login))
+        .route("/api/logout", post(post_logout))
+        .route("/api/session", get(get_session))
+        .route("/api/bootstrap", get(get_bootstrap))
+        .route("/api/sections", post(post_section))
+        .route("/api/sections/order", put(put_section_order))
+        .route(
+            "/api/sections/{id}",
+            put(put_section).delete(delete_section),
+        )
+        .route("/api/categories", post(post_category))
+        .route("/api/categories/order", put(put_category_order))
+        .route("/api/categories/export", get(get_categories_export))
+        .route(
+            "/api/categories/import",
+            post(post_categories_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+        )
+        .route(
+            "/api/categories/{id}",
+            put(put_category).delete(delete_category),
+        )
+        .route("/api/users", post(post_user))
+        .route("/api/users/{id}", put(put_user).delete(delete_user))
+        .route("/api/settings", put(put_settings))
+        .route("/api/stock", post(post_stock))
+        .route("/api/stock/movements", get(get_movements))
+        .route("/api/stock/summary", get(get_stock_summary))
+        .route("/api/stock/export", get(get_stock_export))
+        .route(
+            "/api/stock/import",
+            post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+        )
+        .route("/api/reports", get(get_reports))
+        .route("/api/items", post(post_item))
+        .route("/api/items/export", get(get_items_export))
+        .route(
+            "/api/items/import",
+            post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+        )
+        .route("/api/items/{id}", put(put_item))
+        .route("/api/items/{id}/prompt", put(put_item_prompt))
+        .route(
+            "/api/items/{id}/image",
+            get(get_item_image)
+                .post(post_item_image)
+                .delete(delete_item_image)
+                .layer(DefaultBodyLimit::max(3 * 1024 * 1024)),
+        )
+        // Platform v1 API
+        .route("/api/v1/platform/manifest", get(get_platform_manifest))
+        .route("/api/v1/platform/tokens", post(post_platform_token))
+        .route("/api/v1/platform/plugins/{id}", put(put_platform_plugin))
+        .route("/api/v1/capabilities", get(get_capabilities))
+        .route("/api/v1/capabilities/{id}/invoke", post(post_capability_invoke))
+        .route("/api/v1/mcp", get(get_mcp_descriptor))
+        // Legacy aliases under /api/v1/*
+        .route("/api/v1/pos", get(get_pos))
+        .route("/api/v1/catalog/items", post(post_item))
+        .route("/api/v1/inventory/summary", get(get_stock_summary))
+        .route("/api/v1/cash", get(get_cash))
+        .route("/api/v1/reports", get(get_reports))
+        .layer(from_fn_with_state(state.clone(), require_user))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
+        .with_state(state)
 }
 
 #[cfg(feature = "web")]
@@ -954,6 +1035,231 @@ async fn post_bill_route(
         )
         .await?,
     ))
+}
+
+#[derive(serde::Deserialize)]
+struct TokenForm {
+    name: String,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    allow_destructive: bool,
+}
+
+async fn post_platform_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TokenForm>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+    let actor = platform_kernel::context::Actor {
+        user_id: Some(cashier.id),
+        name: cashier.name,
+        role: cashier.role,
+        permissions: vec!["*".into()],
+    };
+    let (token, id) = platform_identity::create_api_token(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        actor,
+        &body.name,
+        &body.permissions,
+        body.allow_destructive,
+    )
+    .await
+    .map_err(|e| {
+        ApiError(match e {
+            platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
+            platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
+            platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::Db(err) => AppError::Db(err),
+        })
+    })?;
+    Ok(Json(serde_json::json!({ "id": id, "token": token })))
+}
+
+#[derive(serde::Deserialize)]
+struct PluginToggle {
+    enabled: bool,
+}
+
+async fn put_platform_plugin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<PluginToggle>,
+) -> Result<StatusCode, ApiError> {
+    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+    let actor = platform_kernel::context::Actor {
+        user_id: Some(cashier.id),
+        name: cashier.name,
+        role: cashier.role,
+        permissions: vec!["*".into()],
+    };
+    platform_runtime::admin::set_plugin_enabled(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        actor,
+        &id,
+        body.enabled,
+    )
+    .await
+    .map_err(|e| {
+        ApiError(match e {
+            platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
+            platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
+            platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::Db(err) => AppError::Db(err),
+        })
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_mcp_descriptor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let Some(platform) = &state.platform else {
+        return Ok(Json(serde_json::json!({ "tools": [] })));
+    };
+    let gateway = platform.gateway.lock().await;
+    let tools: Vec<_> = gateway
+        .registry
+        .list()
+        .into_iter()
+        .map(|cap| {
+            serde_json::json!({
+                "name": cap.id,
+                "description": cap.description,
+                "inputSchema": cap.input_schema,
+                "annotations": {
+                    "readOnlyHint": matches!(cap.effect, platform_kernel::capability::CapabilityEffect::Read),
+                    "destructiveHint": matches!(cap.effect, platform_kernel::capability::CapabilityEffect::Destructive),
+                }
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "name": "chaska-platform",
+        "version": "0.1.0",
+        "tools": tools
+    })))
+}
+
+async fn get_platform_manifest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(platform) = &state.platform else {
+        return Ok(Json(serde_json::json!({
+            "tenant_id": "00000000-0000-4000-8000-000000000001",
+            "plugins": [],
+            "permissions": ["*"]
+        })));
+    };
+    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let nav: Vec<_> = platform
+        .manifests
+        .iter()
+        .flat_map(|m| m.nav.clone())
+        .collect();
+    let settings_pages: Vec<_> = platform
+        .manifests
+        .iter()
+        .flat_map(|m| m.settings_pages.clone())
+        .collect();
+    let report_pages: Vec<_> = platform
+        .manifests
+        .iter()
+        .flat_map(|m| m.report_pages.clone())
+        .collect();
+    Ok(Json(serde_json::json!({
+        "tenant_id": "00000000-0000-4000-8000-000000000001",
+        "plugins": platform.manifests,
+        "permissions": ["*"],
+        "nav": nav,
+        "settings_pages": settings_pages,
+        "report_pages": report_pages,
+    })))
+}
+
+async fn get_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let Some(platform) = &state.platform else {
+        return Ok(Json(serde_json::json!({ "capabilities": [] })));
+    };
+    let gateway = platform.gateway.lock().await;
+    let caps: Vec<_> = gateway
+        .registry
+        .list()
+        .into_iter()
+        .filter(|c| matches!(c.effect, platform_kernel::capability::CapabilityEffect::Read))
+        .collect();
+    Ok(Json(serde_json::json!({ "capabilities": caps })))
+}
+
+#[derive(serde::Deserialize)]
+struct InvokeBody {
+    #[serde(default)]
+    input: serde_json::Value,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+    #[serde(default)]
+    confirm: Option<bool>,
+}
+
+async fn post_capability_invoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<InvokeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+    let Some(platform) = &state.platform else {
+        return Err(AppError::NotFound("Platform is not available.".into()).into());
+    };
+    let user = platform_runtime::http::auth::AuthUser {
+        tenant_id: platform_kernel::context::TenantId::DEFAULT,
+        user_id: cashier.id,
+        name: cashier.name,
+        role: cashier.role,
+        permissions: vec!["*".into()],
+    };
+    let mut input = body.input;
+    if let Some(confirm) = body.confirm {
+        if let Some(obj) = input.as_object_mut() {
+            obj.insert("confirm".into(), serde_json::json!(confirm));
+        }
+    }
+    let gateway = platform.gateway.lock().await;
+    let output = gateway
+        .invoke(
+            &user,
+            &id,
+            input,
+            body.idempotency_key.as_deref(),
+            true,
+        )
+        .await
+        .map_err(|e| {
+            ApiError(match e {
+                platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
+                platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
+                platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
+                platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
+                platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
+                platform_kernel::error::AppError::Db(err) => AppError::Db(err),
+            })
+        })?;
+    Ok(Json(output))
 }
 
 struct ApiError(AppError);

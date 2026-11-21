@@ -1,0 +1,17 @@
+[package]
+name = "plugin-cash"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json"] }
+platform-kernel = { path = "../../platform-kernel" }
+platform-runtime = { path = "../../platform-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+shop-core = { path = "../../shop-core" }
+sales-contract = { path = "../../contracts/sales-contract" }
+printing-contract = { path = "../../contracts/printing-contract" }

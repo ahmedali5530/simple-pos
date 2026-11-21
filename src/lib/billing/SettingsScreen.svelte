@@ -7,6 +7,7 @@
   import SectionCatalog from './SectionCatalog.svelte'
   import SystemSettings from './SystemSettings.svelte'
   import UserCatalog from './UserCatalog.svelte'
+  import PluginAdmin from '../../plugins/admin/screens/PluginAdmin.svelte'
 
   interface Props {
     snapshot: PosSnapshot
@@ -28,6 +29,7 @@
     { id: 'categories', label: 'Categories' },
     { id: 'users', label: 'Users' },
     { id: 'system', label: 'System' },
+    { id: 'plugins', label: 'Plugins' },
   ]
 
   const sectionCounts = $derived(
@@ -80,6 +82,8 @@
       <CategoryCatalog categories={snapshot.categories} counts={categoryCounts} {onChange} />
     {:else if page === 'users'}
       <UserCatalog users={snapshot.users ?? []} {onChange} />
+    {:else if page === 'plugins'}
+      <PluginAdmin />
     {:else}
       <SystemSettings {snapshot} {onChange} />
     {/if}

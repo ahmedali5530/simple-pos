@@ -46,7 +46,9 @@ pub async fn print_saved_bill(pool: &PgPool, shop: &ShopConfig, bill_no: &str) -
     if bill_no.is_empty() {
         return Err(AppError::BadRequest("That bill has no number.".into()));
     }
-    let Some(printer) = enabled_printer(pool).await? else {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let Some(printer) = enabled_printer_tx(&mut tx).await? else {
+        tx.commit().await?;
         return Ok(PrintOutcome { printed: false });
     };
 
@@ -65,7 +67,7 @@ pub async fn print_saved_bill(pool: &PgPool, shop: &ShopConfig, bill_no: &str) -
         "#,
     )
     .bind(bill_no)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some(header) = header else {
         return Err(AppError::NotFound("That bill is not in the till.".into()));
@@ -74,9 +76,10 @@ pub async fn print_saved_bill(pool: &PgPool, shop: &ShopConfig, bill_no: &str) -
         "SELECT name, qty, rate, amount FROM bill_lines WHERE bill_id = $1 ORDER BY id",
     )
     .bind(header.id)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
-    let shop = crate::billing::current_shop(pool, shop).await?;
+    let shop = crate::billing::current_shop_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     let receipt = Receipt {
         shop_name: shop.name,
         currency: shop.currency,
@@ -106,11 +109,14 @@ pub async fn print_product_mix(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<PrintOutcome, AppError> {
-    let Some(printer) = enabled_printer(pool).await? else {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let Some(printer) = enabled_printer_tx(&mut tx).await? else {
+        tx.commit().await?;
         return Ok(PrintOutcome { printed: false });
     };
     let mix = crate::ledger::product_mix(pool, from, to).await?;
-    let shop = crate::billing::current_shop(pool, shop).await?;
+    let shop = crate::billing::current_shop_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     let lines = mix
         .lines
         .iter()
@@ -126,20 +132,25 @@ pub async fn print_product_mix(
 }
 
 pub async fn print_cash_shift(pool: &PgPool, shop: &ShopConfig, id: i32) -> Result<PrintOutcome, AppError> {
-    let Some(printer) = enabled_printer(pool).await? else {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let Some(printer) = enabled_printer_tx(&mut tx).await? else {
+        tx.commit().await?;
         return Ok(PrintOutcome { printed: false });
     };
     let shift = crate::cash::load_shift(pool, id).await?;
     if shift.closed_at.is_none() {
         return Err(AppError::BadRequest("Close the shift before printing it.".into()));
     }
-    let shop = crate::billing::current_shop(pool, shop).await?;
+    let shop = crate::billing::current_shop_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     let bytes = build_cash_slip(&shop.name, &shop.currency, &shift);
     dispatch(&printer, &bytes, "The closing is saved.")?;
     Ok(PrintOutcome { printed: true })
 }
 
-async fn enabled_printer(pool: &PgPool) -> Result<Option<PrinterRow>, AppError> {
+async fn enabled_printer_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<Option<PrinterRow>, AppError> {
     let printer = sqlx::query_as::<_, PrinterRow>(
         r#"
         SELECT print_enabled, printer_kind, printer_target, printer_port
@@ -147,7 +158,7 @@ async fn enabled_printer(pool: &PgPool) -> Result<Option<PrinterRow>, AppError> 
         WHERE id = 1
         "#,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?;
     Ok(printer.filter(|row| row.print_enabled))
 }

@@ -25,6 +25,13 @@
   import StockScreen from './StockScreen.svelte'
   import SectionPanel from './SectionPanel.svelte'
   import VariantDialog from './VariantDialog.svelte'
+  import PluginAdmin from '../../plugins/admin/screens/PluginAdmin.svelte'
+  import type { UiNavItem } from '../../platform/registry'
+
+  interface Props {
+    pluginNav?: UiNavItem[]
+  }
+  let { pluginNav }: Props = $props()
 
   let snapshot = $state<PosSnapshot | null>(null)
   let loadFailed = $state(false)
@@ -555,11 +562,21 @@
       </div>
     </div>
     <nav class="nav" aria-label="Main">
-      <a href="/billing" class:active={screen === 'billing'} onclick={openBilling}>POS Billing</a>
-      <a href="/stock" class:active={screen === 'stock'} onclick={(event) => followLink(event, '/stock')}>Stock In / Out</a>
-      <a href="/reports/sales" class:active={screen === 'reports'} onclick={(event) => followLink(event, '/reports/sales')}>Reports & Summary</a>
-      <a href="/cash" class:active={screen === 'cash'} onclick={(event) => followLink(event, '/cash')}>Cash Closing</a>
-      <a href="/settings/items" class:active={screen === 'settings'} onclick={(event) => followLink(event, '/settings/items')}>Settings</a>
+      {#if pluginNav && pluginNav.length > 0}
+        {#each pluginNav as item (item.id)}
+          <a
+            href={item.href}
+            class:active={location.path === item.href || location.path.startsWith(item.href + '/') || (item.href.startsWith('/settings') && screen === 'settings' && item.id === 'settings') || (item.href.startsWith('/reports') && screen === 'reports')}
+            onclick={(event) => (item.href === '/billing' ? openBilling(event) : followLink(event, item.href))}
+          >{item.label}</a>
+        {/each}
+      {:else}
+        <a href="/billing" class:active={screen === 'billing'} onclick={openBilling}>POS Billing</a>
+        <a href="/stock" class:active={screen === 'stock'} onclick={(event) => followLink(event, '/stock')}>Stock In / Out</a>
+        <a href="/reports/sales" class:active={screen === 'reports'} onclick={(event) => followLink(event, '/reports/sales')}>Reports & Summary</a>
+        <a href="/cash" class:active={screen === 'cash'} onclick={(event) => followLink(event, '/cash')}>Cash Closing</a>
+        <a href="/settings/items" class:active={screen === 'settings'} onclick={(event) => followLink(event, '/settings/items')}>Settings</a>
+      {/if}
     </nav>
     <div class="top-actions">
       {#if session.user}

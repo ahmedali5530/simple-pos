@@ -87,6 +87,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
+ "axum-macros",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -144,6 +145,17 @@ dependencies = [
  "rust-embed",
  "tower",
  "tower-http 0.7.1",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7aa268c23bfbbd2c4363b9cd302a4f504fb2a9dfe7e3451d66f35dd392e20aca"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -256,6 +268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "catalog-contract"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "platform-kernel",
+ "serde",
+]
+
+[[package]]
 name = "cc"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -297,6 +318,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -511,6 +533,12 @@ name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "either"
@@ -1218,6 +1246,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory-contract"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "platform-kernel",
+ "serde",
+]
+
+[[package]]
 name = "io-kit-sys"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1716,6 +1753,171 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "platform-identity"
+version = "0.1.0"
+dependencies = [
+ "bcrypt",
+ "chrono",
+ "getrandom 0.2.17",
+ "hex",
+ "platform-kernel",
+ "platform-runtime",
+ "serde",
+ "sha2 0.10.9",
+ "sqlx 0.8.6",
+ "uuid",
+]
+
+[[package]]
+name = "platform-kernel"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx 0.8.6",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "platform-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "hex",
+ "platform-kernel",
+ "plugin-cash",
+ "plugin-catalog",
+ "plugin-inventory",
+ "plugin-pos",
+ "plugin-printing",
+ "plugin-reports",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx 0.8.6",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "platform-sheets"
+version = "0.1.0"
+dependencies = [
+ "calamine",
+ "platform-kernel",
+ "rust_xlsxwriter",
+]
+
+[[package]]
+name = "plugin-cash"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "platform-runtime",
+ "printing-contract",
+ "sales-contract",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-catalog"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "catalog-contract",
+ "platform-kernel",
+ "platform-runtime",
+ "platform-sheets",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-inventory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "inventory-contract",
+ "platform-kernel",
+ "platform-runtime",
+ "platform-sheets",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-pos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "catalog-contract",
+ "inventory-contract",
+ "platform-kernel",
+ "platform-runtime",
+ "printing-contract",
+ "sales-contract",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-printing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "platform-kernel",
+ "platform-runtime",
+ "printing-contract",
+ "serde",
+ "serde_json",
+ "serialport",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-reports"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "inventory-contract",
+ "platform-kernel",
+ "platform-runtime",
+ "printing-contract",
+ "sales-contract",
+ "serde",
+ "serde_json",
+ "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
 name = "postgresql_archive"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1786,6 +1988,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "printing-contract"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "platform-kernel",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2151,6 +2363,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "sales-contract"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "platform-kernel",
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2166,6 +2388,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "dyn-clone",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2231,6 +2477,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2351,18 +2608,32 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-frontend",
+ "bcrypt",
  "dotenvy",
  "getrandom 0.2.17",
+ "http-body-util",
+ "platform-identity",
+ "platform-kernel",
+ "platform-runtime",
+ "plugin-cash",
+ "plugin-catalog",
+ "plugin-inventory",
+ "plugin-pos",
+ "plugin-printing",
+ "plugin-reports",
  "postgresql_embedded",
  "rust-embed",
  "serde",
  "serde_json",
  "shop-core",
+ "sqlx 0.8.6",
  "tokio",
  "toml",
+ "tower",
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2489,6 +2760,7 @@ checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -2514,6 +2786,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots 0.26.11",
 ]
 
@@ -2595,7 +2868,9 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx-core 0.8.6",
+ "sqlx-mysql",
  "sqlx-postgres 0.8.6",
+ "sqlx-sqlite",
  "syn 2.0.119",
  "tokio",
  "url",
@@ -2635,6 +2910,7 @@ dependencies = [
  "bitflags 2.13.2",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest 0.10.7",
  "dotenvy",
@@ -2655,6 +2931,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.8",
  "rsa",
+ "serde",
  "sha1",
  "sha2 0.10.9",
  "smallvec",
@@ -2662,6 +2939,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami 1.6.1",
 ]
 
@@ -2675,6 +2953,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera 0.8.0",
@@ -2699,6 +2978,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami 1.6.1",
 ]
 
@@ -2744,6 +3024,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi",
+ "chrono",
  "flume",
  "futures-channel",
  "futures-core",
@@ -2753,11 +3034,13 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "percent-encoding",
+ "serde",
  "serde_urlencoded",
  "sqlx-core 0.8.6",
  "thiserror",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3239,6 +3522,18 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+
+[[package]]
+name = "uuid"
+version = "1.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"

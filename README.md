@@ -33,6 +33,25 @@ The shop name, currency, and locale start in `config.toml`. After the first save
 
 An item belongs to one section and one category. Stock value and profit use the average cost. A missing cost counts as zero.
 
+## Platform plugins
+
+The till is evolving into a business-neutral core with statically linked Rust plugins
+(`catalog`, `inventory`, `pos`, `cash`, `printing`, `reports`). Core enforces tenancy
+with Postgres row-level security, permissions, and plugin lifecycle.
+
+Useful endpoints:
+
+- `GET /api/v1/platform/manifest` — enabled plugins, nav and permissions
+- `GET /api/v1/capabilities` — AI-callable capabilities
+- `POST /api/v1/capabilities/{id}/invoke` — permission-checked capability gateway
+- `GET /api/v1/mcp` — MCP tool descriptor over the same registry
+- `POST /api/v1/platform/tokens` — API tokens for agents
+
+Legacy `/api/*` routes remain for the existing Svelte UI.
+
+Set `DATABASE_ADMIN_URL` for migrations when the runtime connects as `platform_app`.
+See `.env.example`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

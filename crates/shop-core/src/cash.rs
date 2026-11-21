@@ -61,7 +61,8 @@ pub struct CashDesk {
 }
 
 pub async fn cash_desk(pool: &PgPool) -> Result<CashDesk, AppError> {
-    let rows = shifts(pool, 40).await?;
+    let mut tx = crate::tenant::begin(pool).await?;
+    let rows = shifts_tx(&mut tx, 40).await?;
     let suggested_opening = sqlx::query_scalar::<_, i32>(
         r#"
         SELECT cash_left
@@ -71,7 +72,7 @@ pub async fn cash_desk(pool: &PgPool) -> Result<CashDesk, AppError> {
         LIMIT 1
         "#,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
     .unwrap_or(0);
     let mut open = None;
@@ -83,6 +84,7 @@ pub async fn cash_desk(pool: &PgPool) -> Result<CashDesk, AppError> {
             history.push(row);
         }
     }
+    tx.commit().await?;
     Ok(CashDesk {
         open,
         suggested_opening,
@@ -93,6 +95,7 @@ pub async fn cash_desk(pool: &PgPool) -> Result<CashDesk, AppError> {
 pub async fn open_shift(pool: &PgPool, user_id: i32, form: &OpenShift) -> Result<CashDesk, AppError> {
     let opening_cash = whole(form.opening_cash, "Previous till cash")?;
     let petty_cash = whole(form.petty_cash, "Petty cash")?;
+    let mut tx = crate::tenant::begin(pool).await?;
     let inserted = sqlx::query(
         r#"
         INSERT INTO cash_shifts (opened_by, opening_cash, petty_cash)
@@ -103,11 +106,12 @@ pub async fn open_shift(pool: &PgPool, user_id: i32, form: &OpenShift) -> Result
     .bind(user_id)
     .bind(opening_cash)
     .bind(petty_cash)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if inserted.rows_affected() == 0 {
         return Err(AppError::BadRequest("A shift is already open.".into()));
     }
+    tx.commit().await?;
     cash_desk(pool).await
 }
 
@@ -120,7 +124,7 @@ pub async fn save_shift(pool: &PgPool, user_id: i32, form: &ShiftForm, close: bo
         None if close => return Err(AppError::BadRequest("Enter the manual count before closing the day.".into())),
         None => None,
     };
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::tenant::begin(pool).await?;
     let locked = sqlx::query_as::<_, (i32, i32, i32)>(
         "SELECT id, opening_cash, petty_cash FROM cash_shifts WHERE closed_at IS NULL FOR UPDATE",
     )
@@ -217,14 +221,20 @@ pub async fn save_shift(pool: &PgPool, user_id: i32, form: &ShiftForm, close: bo
 }
 
 pub async fn load_shift(pool: &PgPool, id: i32) -> Result<CashShift, AppError> {
-    shifts(pool, 200)
+    let mut tx = crate::tenant::begin(pool).await?;
+    let shift = shifts_tx(&mut tx, 200)
         .await?
         .into_iter()
         .find(|shift| shift.id == id)
-        .ok_or_else(|| AppError::NotFound("That closing is not in the till.".into()))
+        .ok_or_else(|| AppError::NotFound("That closing is not in the till.".into()))?;
+    tx.commit().await?;
+    Ok(shift)
 }
 
-async fn shifts(pool: &PgPool, limit: i64) -> Result<Vec<CashShift>, AppError> {
+async fn shifts_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    limit: i64,
+) -> Result<Vec<CashShift>, AppError> {
     let rows = sqlx::query_as::<_, CashShift>(
         r#"
         SELECT
@@ -257,13 +267,16 @@ async fn shifts(pool: &PgPool, limit: i64) -> Result<Vec<CashShift>, AppError> {
         "#,
     )
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await
     .map_err(AppError::from)?;
-    attach_lines(pool, rows).await
+    attach_lines_tx(tx, rows).await
 }
 
-async fn attach_lines(pool: &PgPool, mut rows: Vec<CashShift>) -> Result<Vec<CashShift>, AppError> {
+async fn attach_lines_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    mut rows: Vec<CashShift>,
+) -> Result<Vec<CashShift>, AppError> {
     if rows.is_empty() {
         return Ok(rows);
     }
@@ -277,7 +290,7 @@ async fn attach_lines(pool: &PgPool, mut rows: Vec<CashShift>) -> Result<Vec<Cas
         "#,
     )
     .bind(&ids)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
     for (shift_id, description, category, amount) in lines {
         if let Some(shift) = rows.iter_mut().find(|shift| shift.id == shift_id) {

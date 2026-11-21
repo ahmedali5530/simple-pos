@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use crate::billing::load_pos;
+use crate::billing::load_pos_tx;
 use crate::error::AppError;
 use crate::models::{
     BarcodeRule, CategoryForm, LoginForm, LoginSession, PosSnapshot, PosUser, SavedRecord,
@@ -34,7 +34,7 @@ fn hex_color(value: &str) -> bool {
 }
 
 async fn taken(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     sql: &str,
     name: &str,
     id: Option<i32>,
@@ -42,7 +42,7 @@ async fn taken(
     let found = sqlx::query_scalar::<_, i32>(sql)
         .bind(name)
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut **tx)
         .await?;
     Ok(found.is_some())
 }
@@ -80,8 +80,9 @@ pub async fn save_section(
     if !hex_color(&accent) {
         return Err(AppError::BadRequest("Choose a color for the section.".into()));
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     if taken(
-        pool,
+        &mut tx,
         "SELECT id FROM sections WHERE lower(short_name) = lower($1) AND id IS DISTINCT FROM $2",
         short_name,
         id,
@@ -102,7 +103,7 @@ pub async fn save_section(
         .bind(&form.kind)
         .bind(&accent)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(friendly_unique)?;
         if updated.rows_affected() == 0 {
@@ -115,7 +116,7 @@ pub async fn save_section(
         let order = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(pos_order), -1) + 1 FROM sections",
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
         sqlx::query_scalar::<_, i32>(
             r#"
@@ -129,14 +130,16 @@ pub async fn save_section(
         .bind(&form.kind)
         .bind(&accent)
         .bind(order)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(friendly_unique)?
     };
 
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     Ok(SavedRecord {
         id: saved_id,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -145,8 +148,9 @@ pub async fn remove_section(
     shop: &ShopConfig,
     id: i32,
 ) -> Result<PosSnapshot, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sections")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if total <= 1 {
         return Err(AppError::BadRequest(
@@ -155,7 +159,7 @@ pub async fn remove_section(
     }
     let exists = sqlx::query_scalar::<_, i32>("SELECT id FROM sections WHERE id = $1")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
     if exists.is_none() {
         return Err(AppError::NotFound(
@@ -164,7 +168,7 @@ pub async fn remove_section(
     }
     let items = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM items WHERE section_id = $1")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if items > 0 {
         return Err(AppError::BadRequest(
@@ -173,7 +177,7 @@ pub async fn remove_section(
     }
     let bills = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bills WHERE section_id = $1")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if bills > 0 {
         return Err(AppError::BadRequest(
@@ -182,9 +186,11 @@ pub async fn remove_section(
     }
     sqlx::query("DELETE FROM sections WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    load_pos(pool, shop).await
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
+    Ok(pos)
 }
 
 pub async fn reorder_sections(
@@ -210,8 +216,9 @@ pub async fn save_category(
             "Keep the category name to 40 characters.".into(),
         ));
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     if taken(
-        pool,
+        &mut tx,
         "SELECT id FROM categories WHERE lower(name) = lower($1) AND id IS DISTINCT FROM $2",
         name,
         id,
@@ -227,7 +234,7 @@ pub async fn save_category(
         let updated = sqlx::query("UPDATE categories SET name = $1 WHERE id = $2")
             .bind(name)
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(friendly_unique)?;
         if updated.rows_affected() == 0 {
@@ -240,21 +247,23 @@ pub async fn save_category(
         let order = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories",
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
         sqlx::query_scalar::<_, i32>(
             "INSERT INTO categories (name, sort_order) VALUES ($1, $2) RETURNING id",
         )
         .bind(name)
         .bind(order)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(friendly_unique)?
     };
 
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     Ok(SavedRecord {
         id: saved_id,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -263,8 +272,9 @@ pub async fn remove_category(
     shop: &ShopConfig,
     id: i32,
 ) -> Result<PosSnapshot, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM categories")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if total <= 1 {
         return Err(AppError::BadRequest(
@@ -273,7 +283,7 @@ pub async fn remove_category(
     }
     let exists = sqlx::query_scalar::<_, i32>("SELECT id FROM categories WHERE id = $1")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
     if exists.is_none() {
         return Err(AppError::NotFound(
@@ -282,7 +292,7 @@ pub async fn remove_category(
     }
     let items = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM items WHERE category_id = $1")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if items > 0 {
         return Err(AppError::BadRequest(
@@ -291,9 +301,11 @@ pub async fn remove_category(
     }
     sqlx::query("DELETE FROM categories WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    load_pos(pool, shop).await
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
+    Ok(pos)
 }
 
 pub async fn reorder_categories(
@@ -343,8 +355,9 @@ pub async fn save_user(
             ));
         }
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     if taken(
-        pool,
+        &mut tx,
         "SELECT id FROM users WHERE lower(name) = lower($1) AND id IS DISTINCT FROM $2",
         name,
         id,
@@ -353,7 +366,7 @@ pub async fn save_user(
     {
         return Err(AppError::BadRequest("That name is already used.".into()));
     }
-    if !keeps_a_manager(pool, id, form.role == "manager" && form.active).await? {
+    if !keeps_a_manager(&mut tx, id, form.role == "manager" && form.active).await? {
         return Err(AppError::BadRequest("Keep at least one manager.".into()));
     }
 
@@ -368,7 +381,7 @@ pub async fn save_user(
             .bind(&form.role)
             .bind(form.active)
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(friendly_unique)?
         } else {
@@ -377,7 +390,7 @@ pub async fn save_user(
                 .bind(&form.role)
                 .bind(form.active)
                 .bind(id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(friendly_unique)?
         };
@@ -400,14 +413,16 @@ pub async fn save_user(
         .bind(hash)
         .bind(&form.role)
         .bind(form.active)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(friendly_unique)?
     };
 
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     Ok(SavedRecord {
         id: saved_id,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -416,19 +431,20 @@ pub async fn remove_user(
     shop: &ShopConfig,
     id: i32,
 ) -> Result<PosSnapshot, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let user = sqlx::query_as::<_, PosUser>("SELECT id, name, role, active FROM users WHERE id = $1")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
     if user.is_none() {
         return Err(AppError::NotFound("That user is no longer saved.".into()));
     }
-    if !keeps_a_manager(pool, Some(id), false).await? {
+    if !keeps_a_manager(&mut tx, Some(id), false).await? {
         return Err(AppError::BadRequest("Keep at least one manager.".into()));
     }
     let sales = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bills WHERE user_id = $1")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if sales > 0 {
         return Err(AppError::BadRequest(
@@ -437,21 +453,26 @@ pub async fn remove_user(
     }
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    load_pos(pool, shop).await
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
+    Ok(pos)
 }
 
 pub async fn needs_first_user(pool: &PgPool) -> Result<bool, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(count == 0)
 }
 
 pub async fn login(pool: &PgPool, form: &LoginForm) -> Result<LoginSession, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if count == 0 {
         return Err(AppError::BadRequest(
@@ -463,7 +484,7 @@ pub async fn login(pool: &PgPool, form: &LoginForm) -> Result<LoginSession, AppE
         "SELECT id, name, password_hash, role, active FROM users WHERE lower(name) = lower($1)",
     )
     .bind(name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((id, stored_name, hash, role, active)) = row else {
         return Err(AppError::BadRequest(
@@ -483,8 +504,9 @@ pub async fn login(pool: &PgPool, form: &LoginForm) -> Result<LoginSession, AppE
     sqlx::query("INSERT INTO sessions (token, user_id) VALUES ($1, $2)")
         .bind(&token)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(LoginSession {
         id,
         name: stored_name,
@@ -507,6 +529,7 @@ pub async fn open_session(pool: &PgPool, token: &str) -> Result<Cashier, AppErro
             "Sign in before posting a bill.".into(),
         ));
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     let row = sqlx::query_as::<_, (i32, String, String, bool)>(
         r#"
         SELECT u.id, u.name, u.role, u.active
@@ -516,7 +539,7 @@ pub async fn open_session(pool: &PgPool, token: &str) -> Result<Cashier, AppErro
         "#,
     )
     .bind(token)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((id, name, role, active)) = row else {
         return Err(AppError::Unauthorized(
@@ -526,14 +549,17 @@ pub async fn open_session(pool: &PgPool, token: &str) -> Result<Cashier, AppErro
     if !active {
         return Err(AppError::Unauthorized("That account is turned off.".into()));
     }
+    tx.commit().await?;
     Ok(Cashier { id, name, role })
 }
 
 pub async fn logout(pool: &PgPool, token: &str) -> Result<(), AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     sqlx::query("DELETE FROM sessions WHERE token = $1")
         .bind(token.trim())
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -600,7 +626,7 @@ pub async fn save_settings(
         ));
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::tenant::begin(pool).await?;
     sqlx::query(
         r#"
         INSERT INTO shop_settings (
@@ -643,8 +669,9 @@ pub async fn save_settings(
         .await
         .map_err(friendly_unique)?;
     }
+    let pos = load_pos_tx(&mut tx, fallback).await?;
     tx.commit().await?;
-    load_pos(pool, fallback).await
+    Ok(pos)
 }
 
 fn check_rule(rule: &BarcodeRule) -> Result<(), AppError> {
@@ -673,7 +700,7 @@ fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 async fn keeps_a_manager(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     changing_id: Option<i32>,
     next_is_manager: bool,
 ) -> Result<bool, AppError> {
@@ -685,7 +712,7 @@ async fn keeps_a_manager(
         "#,
     )
     .bind(changing_id)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(others > 0 || next_is_manager)
 }
@@ -705,22 +732,22 @@ async fn apply_order(
     if ids.iter().any(|id| !seen.insert(*id)) {
         return Err(AppError::BadRequest("Each record can only appear once.".into()));
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     let total = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if total != ids.len() as i64 {
         return Err(AppError::BadRequest(incomplete.into()));
     }
     let known = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table} WHERE id = ANY($1)"))
         .bind(ids)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if known != ids.len() as i64 {
         return Err(AppError::NotFound(
             "One of those records is no longer saved.".into(),
         ));
     }
-    let mut tx = pool.begin().await?;
     for (index, id) in ids.iter().enumerate() {
         sqlx::query(&format!("UPDATE {table} SET {column} = $1 WHERE id = $2"))
             .bind(index as i32)
@@ -728,6 +755,7 @@ async fn apply_order(
             .execute(&mut *tx)
             .await?;
     }
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
-    load_pos(pool, shop).await
+    Ok(pos)
 }

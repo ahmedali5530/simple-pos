@@ -1,0 +1,17 @@
+[package]
+name = "platform-identity"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+bcrypt = "0.16"
+getrandom = "0.2"
+platform-kernel = { path = "../platform-kernel" }
+platform-runtime = { path = "../platform-runtime" }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v4"] }

@@ -7,6 +7,7 @@ mod ledger;
 mod models;
 mod print;
 mod sheets;
+pub mod tenant;
 
 pub use billing::{
     clear_item_image, connect, current_shop, item_image_ext, load_pos, post_bill, save_item, set_item_image,

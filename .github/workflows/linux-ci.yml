@@ -1,0 +1,65 @@
+name: Linux CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: chaska
+          POSTGRES_PASSWORD: chaska
+          POSTGRES_DB: chaska_pos
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U chaska -d chaska_pos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://chaska:chaska@127.0.0.1:5433/chaska_pos
+      DATABASE_ADMIN_URL: postgres://chaska:chaska@127.0.0.1:5433/chaska_pos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+
+      - name: Install native build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libudev-dev
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo test
+        run: cargo test --workspace --all-features
+
+      - name: Ban PgPool in plugins
+        run: |
+          if rg -n 'sqlx::PgPool|use sqlx::PgPool' crates/plugins crates/contracts 2>/dev/null; then
+            echo "Plugins and contracts must not use PgPool directly"
+            exit 1
+          fi
+          echo "PgPool ban check passed"

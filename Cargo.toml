@@ -1,3 +1,20 @@
 [workspace]
 resolver = "2"
-members = ["crates/shop-core", "crates/shop-api"]
+members = [
+    "crates/shop-core",
+    "crates/shop-api",
+    "crates/platform-kernel",
+    "crates/platform-runtime",
+    "crates/platform-identity",
+    "crates/platform-sheets",
+    "crates/contracts/catalog-contract",
+    "crates/contracts/inventory-contract",
+    "crates/contracts/sales-contract",
+    "crates/contracts/printing-contract",
+    "crates/plugins/catalog",
+    "crates/plugins/inventory",
+    "crates/plugins/pos",
+    "crates/plugins/cash",
+    "crates/plugins/printing",
+    "crates/plugins/reports",
+]

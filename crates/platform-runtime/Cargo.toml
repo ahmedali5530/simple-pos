@@ -1,0 +1,31 @@
+[package]
+name = "platform-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json", "macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+platform-kernel = { path = "../platform-kernel" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tower = "0.5"
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+plugin-catalog = { path = "../plugins/catalog" }
+plugin-inventory = { path = "../plugins/inventory" }
+plugin-pos = { path = "../plugins/pos" }
+plugin-cash = { path = "../plugins/cash" }
+plugin-printing = { path = "../plugins/printing" }
+plugin-reports = { path = "../plugins/reports" }
+uuid = { version = "1", features = ["v4"] }

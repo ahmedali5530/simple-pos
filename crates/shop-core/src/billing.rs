@@ -75,18 +75,28 @@ struct RuleRow {
 }
 
 pub async fn current_shop(pool: &PgPool, fallback: &ShopConfig) -> Result<ShopConfig, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let result = current_shop_tx(&mut tx, fallback).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn current_shop_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    fallback: &ShopConfig,
+) -> Result<ShopConfig, AppError> {
     let row = sqlx::query_as::<_, ShopRow>(
         "SELECT name, currency, locale, bill_prefix FROM shop_settings WHERE id = 1",
     )
-        .fetch_optional(pool)
-        .await?;
+    .fetch_optional(&mut **tx)
+    .await?;
     let Some(row) = row else {
         return Ok(fallback.clone());
     };
     let rules = sqlx::query_as::<_, RuleRow>(
         "SELECT prefix, mode, scale FROM barcode_rules ORDER BY sort_order, id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
     Ok(ShopConfig {
         name: row.name,
@@ -105,7 +115,17 @@ pub async fn current_shop(pool: &PgPool, fallback: &ShopConfig) -> Result<ShopCo
 }
 
 pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, AppError> {
-    let shop = current_shop(pool, shop).await?;
+    let mut tx = crate::tenant::begin(pool).await?;
+    let result = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn load_pos_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    shop: &ShopConfig,
+) -> Result<PosSnapshot, AppError> {
+    let shop = current_shop_tx(tx, shop).await?;
     let shop = &shop;
     let all_sections = sqlx::query_as::<_, SectionChoice>(
         r#"
@@ -114,7 +134,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         ORDER BY pos_order, id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let categories = sqlx::query_as::<_, Category>(
@@ -124,7 +144,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         ORDER BY sort_order, id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let rows = sqlx::query_as::<_, ItemRow>(
@@ -154,7 +174,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         ORDER BY i.sort_order, i.id
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let item_ids: Vec<i32> = rows.iter().map(|item| item.id).collect();
@@ -170,7 +190,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
             "#,
         )
         .bind(&item_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await?
     };
 
@@ -204,13 +224,13 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
     let users = sqlx::query_as::<_, PosUser>(
         "SELECT id, name, role, active FROM users ORDER BY lower(name), id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let last_section_id = sqlx::query_scalar::<_, Option<i32>>(
         "SELECT last_section_id FROM pos_state WHERE id = 1",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?
     .flatten();
 
@@ -221,7 +241,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         WHERE id = 1
         "#,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?
     .map(|row| PrinterSettings {
         enabled: row.print_enabled,
@@ -268,6 +288,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
 }
 
 pub async fn set_pos_focus(pool: &PgPool, section_id: i32) -> Result<i32, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE pos_state
@@ -277,13 +298,14 @@ pub async fn set_pos_focus(pool: &PgPool, section_id: i32) -> Result<i32, AppErr
         "#,
     )
     .bind(section_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound(
             "That section is no longer in the catalog.".into(),
         ));
     }
+    tx.commit().await?;
     Ok(section_id)
 }
 
@@ -311,6 +333,7 @@ pub async fn set_pos_sections(
         }
     }
 
+    let mut tx = crate::tenant::begin(pool).await?;
     let known = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sections WHERE id = ANY($1)")
         .bind(
             layout
@@ -318,7 +341,7 @@ pub async fn set_pos_sections(
                 .map(|section| section.id)
                 .collect::<Vec<_>>(),
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if known != layout.len() as i64 {
         return Err(AppError::NotFound(
@@ -326,7 +349,6 @@ pub async fn set_pos_sections(
         ));
     }
 
-    let mut tx = pool.begin().await?;
     for (index, section) in layout.iter().enumerate() {
         sqlx::query(
             "UPDATE sections SET show_on_pos = $1, pos_order = $2 WHERE id = $3",
@@ -337,8 +359,9 @@ pub async fn set_pos_sections(
         .execute(&mut *tx)
         .await?;
     }
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
-    load_pos(pool, shop).await
+    Ok(pos)
 }
 
 pub async fn set_item_prompt(
@@ -365,9 +388,10 @@ pub async fn set_item_prompt(
         }
         (Some(base_rate), request.scale)
     };
+    let mut tx = crate::tenant::begin(pool).await?;
     let variants = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM item_variants WHERE item_id = $1")
         .bind(item_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if variants > 0 && prompt != "none" {
         return Err(AppError::BadRequest(
@@ -385,12 +409,14 @@ pub async fn set_item_prompt(
     .bind(base_rate)
     .bind(scale)
     .bind(item_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound("That item is not in the catalog.".into()));
     }
-    load_pos(pool, shop).await
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
+    Ok(pos)
 }
 
 fn clean_code(value: &Option<String>) -> Option<String> {
@@ -493,22 +519,21 @@ pub async fn save_item(
         options.push((index as i32, variant.id, variant_name.to_string(), variant.rate, variant.units, variant_barcode));
     }
 
+    let mut tx = crate::tenant::begin(pool).await?;
     let section_ok = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM sections WHERE id = $1)")
         .bind(request.section_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if !section_ok {
         return Err(AppError::NotFound("That section is no longer in the catalog.".into()));
     }
     let category_ok = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1)")
         .bind(request.category_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     if !category_ok {
         return Err(AppError::NotFound("That category is no longer in the catalog.".into()));
     }
-
-    let mut tx = pool.begin().await?;
     let saved_id = if let Some(id) = item_id {
         let updated = sqlx::query(
             r#"
@@ -642,8 +667,8 @@ pub async fn save_item(
         }
         id
     };
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
-    let pos = load_pos(pool, shop).await?;
     Ok(SavedItem {
         item_id: saved_id,
         pos,
@@ -659,12 +684,14 @@ fn item_image_url(id: i32, ext: Option<&str>, rev: i32) -> Option<String> {
 }
 
 pub async fn item_image_ext(pool: &PgPool, item_id: i32) -> Result<Option<String>, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let row = sqlx::query_scalar::<_, Option<String>>(
         "SELECT image_ext FROM items WHERE id = $1 AND active",
     )
     .bind(item_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     match row {
         None => Err(AppError::NotFound(
             "That item is no longer in the catalog.".into(),
@@ -684,6 +711,7 @@ pub async fn set_item_image(
             "Use a JPEG, PNG, WebP, or GIF.".into(),
         ));
     }
+    let mut tx = crate::tenant::begin(pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE items
@@ -693,16 +721,18 @@ pub async fn set_item_image(
     )
     .bind(ext)
     .bind(item_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound(
             "That item is no longer in the catalog.".into(),
         ));
     }
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     Ok(SavedItem {
         item_id,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -711,9 +741,10 @@ pub async fn clear_item_image(
     shop: &ShopConfig,
     item_id: i32,
 ) -> Result<SavedItem, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
     let exists = sqlx::query_scalar::<_, i32>("SELECT id FROM items WHERE id = $1 AND active")
         .bind(item_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
     if exists.is_none() {
         return Err(AppError::NotFound(
@@ -722,11 +753,13 @@ pub async fn clear_item_image(
     }
     sqlx::query("UPDATE items SET image_ext = NULL WHERE id = $1")
         .bind(item_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    let pos = load_pos_tx(&mut tx, shop).await?;
+    tx.commit().await?;
     Ok(SavedItem {
         item_id,
-        pos: load_pos(pool, shop).await?,
+        pos,
     })
 }
 
@@ -749,10 +782,9 @@ pub async fn post_bill(
             "Keep the customer name to 80 characters.".into(),
         ));
     }
-    let shop = current_shop(pool, shop).await?;
+    let mut tx = crate::tenant::begin(pool).await?;
+    let shop = current_shop_tx(&mut tx, shop).await?;
     let shop = &shop;
-
-    let mut tx = pool.begin().await?;
     let section_name = sqlx::query_scalar::<_, String>(
         "SELECT name FROM sections WHERE id = $1",
     )
@@ -980,8 +1012,8 @@ pub async fn post_bill(
         .await?;
     }
 
+    let pos = load_pos_tx(&mut tx, shop).await?;
     tx.commit().await?;
-    let pos = load_pos(pool, shop).await?;
     Ok(PostedBill {
         bill_no,
         total,
