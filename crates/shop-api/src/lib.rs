@@ -43,8 +43,12 @@ struct AppState {
 
 #[derive(Clone)]
 struct PlatformState {
-    manifests: Vec<platform_kernel::manifest::PluginManifest>,
     gateway: std::sync::Arc<tokio::sync::Mutex<platform_runtime::CapabilityGateway>>,
+    catalog: std::sync::Arc<platform_kernel::registry::PluginCatalog>,
+    lifecycle: platform_runtime::PluginLifecycle,
+    enabled: std::sync::Arc<platform_runtime::EnabledPlugins>,
+    plugin_router: axum::Router,
+    _stop: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -246,22 +250,27 @@ async fn boot_platform(database_url: &str) -> Option<std::sync::Arc<PlatformStat
             app_password: std::env::var("PLATFORM_APP_PASSWORD").ok(),
         },
         plugins,
-        true,
     )
     .await
     {
-        Ok(mut platform) => {
-            let manifests = platform.registry.manifests();
-            let gateway = Arc::new(tokio::sync::Mutex::new(std::mem::replace(
-                &mut platform.gateway,
-                platform_runtime::CapabilityGateway::new(
-                    platform.pools.runtime.clone(),
-                    platform_kernel::capability::CapabilityRegistry::new(),
-                ),
-            )));
-            // Keep dispatcher alive.
-            std::mem::forget(platform);
-            Some(Arc::new(PlatformState { manifests, gateway }))
+        Ok(platform) => {
+            let platform_runtime::Platform {
+                gateway,
+                catalog,
+                lifecycle,
+                enabled,
+                plugin_router,
+                stop_dispatcher,
+                ..
+            } = platform;
+            Some(Arc::new(PlatformState {
+                gateway: Arc::new(tokio::sync::Mutex::new(gateway)),
+                catalog,
+                lifecycle,
+                enabled,
+                plugin_router,
+                _stop: stop_dispatcher,
+            }))
         }
         Err(err) => {
             tracing::warn!(error = %err, "platform boot skipped; legacy API only");
@@ -288,6 +297,10 @@ fn build_router_inner(
     shop: ShopConfig,
     platform: Option<std::sync::Arc<PlatformState>>,
 ) -> Router {
+    let plugin_router = platform
+        .as_ref()
+        .map(|platform| platform.plugin_router.clone())
+        .unwrap_or_default();
     let state = AppState {
         pool: pool.clone(),
         shop: shop.clone(),
@@ -366,6 +379,7 @@ fn build_router_inner(
         .route("/api/v1/inventory/summary", get(get_stock_summary))
         .route("/api/v1/cash", get(get_cash))
         .route("/api/v1/reports", get(get_reports))
+        .merge(plugin_router.with_state(()))
         .layer(from_fn_with_state(state.clone(), require_user))
         .layer(
             CorsLayer::new()
@@ -508,7 +522,7 @@ fn session_cookie(token: &str, clear: bool) -> HeaderValue {
     HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
-async fn require_user(State(state): State<AppState>, request: Request, next: Next) -> Response {
+async fn require_user(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     let open = (method == Method::POST && (path == "/api/login" || path == "/api/logout"))
@@ -524,7 +538,16 @@ async fn require_user(State(state): State<AppState>, request: Request, next: Nex
         }
     }
     match open_session(&state.pool, &session_token(request.headers())).await {
-        Ok(_) => next.run(request).await,
+        Ok(cashier) => {
+            request.extensions_mut().insert(platform_runtime::http::AuthUser {
+                tenant_id: platform_kernel::context::TenantId::DEFAULT,
+                user_id: cashier.id,
+                name: cashier.name,
+                role: cashier.role,
+                permissions: vec!["*".into()],
+            });
+            next.run(request).await
+        }
         Err(error) => ApiError(error).into_response(),
     }
 }
@@ -1090,8 +1113,17 @@ async fn put_platform_plugin(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<PluginToggle>,
-) -> Result<StatusCode, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+) -> Result<StatusCode, Response> {
+    let Some(platform) = &state.platform else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Platform is not available."})),
+        )
+            .into_response());
+    };
+    let cashier = open_session(&state.pool, &session_token(&headers))
+        .await
+        .map_err(|err| ApiError(err).into_response())?;
     let actor = platform_kernel::context::Actor {
         user_id: Some(cashier.id),
         name: cashier.name,
@@ -1099,22 +1131,16 @@ async fn put_platform_plugin(
         permissions: vec!["*".into()],
     };
     platform_runtime::admin::set_plugin_enabled(
-        &state.pool,
+        &platform.lifecycle,
         platform_kernel::context::TenantId::DEFAULT,
         actor,
         &id,
         body.enabled,
     )
     .await
-    .map_err(|e| {
-        ApiError(match e {
-            platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
-            platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
-            platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
-            platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
-            platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
-            platform_kernel::error::AppError::Db(err) => AppError::Db(err),
-        })
+    .map_err(|err| {
+        let status = StatusCode::from_u16(err.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(serde_json::json!({"error": err.to_string()}))).into_response()
     })?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1163,29 +1189,55 @@ async fn get_platform_manifest(
         })));
     };
     let _ = open_session(&state.pool, &session_token(&headers)).await?;
-    let nav: Vec<_> = platform
-        .manifests
+    let tenant_id = platform_kernel::context::TenantId::DEFAULT;
+    let enabled = platform.enabled.ids(tenant_id).await.map_err(platform_to_api)?;
+    let manifests = platform.catalog.manifests();
+    let active: Vec<_> = manifests
         .iter()
-        .flat_map(|m| m.nav.clone())
+        .filter(|manifest| enabled.contains(&manifest.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let nav: Vec<_> = active.iter().flat_map(|manifest| manifest.nav.clone()).collect();
+    let settings_pages: Vec<_> = active
+        .iter()
+        .flat_map(|manifest| manifest.settings_pages.clone())
         .collect();
-    let settings_pages: Vec<_> = platform
-        .manifests
+    let report_pages: Vec<_> = active
         .iter()
-        .flat_map(|m| m.settings_pages.clone())
+        .flat_map(|manifest| manifest.report_pages.clone())
         .collect();
-    let report_pages: Vec<_> = platform
-        .manifests
+    let available: Vec<_> = manifests
         .iter()
-        .flat_map(|m| m.report_pages.clone())
+        .map(|manifest| {
+            serde_json::json!({
+                "id": manifest.id,
+                "name": manifest.name,
+                "version": manifest.version.to_string(),
+                "enabled": enabled.contains(&manifest.id),
+            })
+        })
         .collect();
     Ok(Json(serde_json::json!({
-        "tenant_id": "00000000-0000-4000-8000-000000000001",
-        "plugins": platform.manifests,
+        "tenant_id": tenant_id.to_string(),
+        "plugins": active,
+        "available": available,
         "permissions": ["*"],
         "nav": nav,
         "settings_pages": settings_pages,
         "report_pages": report_pages,
     })))
+}
+
+fn platform_to_api(err: platform_kernel::error::AppError) -> ApiError {
+    let message = err.to_string();
+    ApiError(match err {
+        platform_kernel::error::AppError::BadRequest(_) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::NotFound(_) => AppError::NotFound(message),
+        platform_kernel::error::AppError::Unauthorized(_) => AppError::Unauthorized(message),
+        platform_kernel::error::AppError::Forbidden(_) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::Conflict(_) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::Db(error) => AppError::Db(error),
+    })
 }
 
 async fn get_capabilities(

@@ -26,7 +26,6 @@ async fn boot() -> Platform {
             app_password: Some("platform-app-local".into()),
         },
         plugins,
-        true,
     )
     .await
     .expect("platform boot")

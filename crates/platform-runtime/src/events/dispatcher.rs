@@ -1,22 +1,43 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::collections::HashSet;
+
 use platform_kernel::context::{Actor, TenantId, TenantTx};
 use platform_kernel::error::AppError;
 use platform_kernel::event::{chrono_lite, EventEnvelope, EventHandler};
+use platform_kernel::manifest::PluginId;
 use sqlx::PgPool;
 use tokio::sync::watch;
 use uuid::Uuid;
+
+use crate::plugins::EnabledPlugins;
 
 /// In-process outbox dispatcher. Peeks events as worker, handles inside TenantTx.
 pub struct EventDispatcher {
     pool: PgPool,
     handlers: Vec<Arc<dyn EventHandler>>,
+    enabled: Arc<EnabledPlugins>,
+}
+
+/// A handler with no owning plugin always runs. A handler whose plugin is disabled is skipped
+/// and its delivery cursor is left where it is.
+pub fn plugin_allows(owner: Option<&str>, enabled: &HashSet<PluginId>) -> bool {
+    match owner {
+        Some(owner) => PluginId::parse(owner)
+            .map(|id| enabled.contains(&id))
+            .unwrap_or(false),
+        None => true,
+    }
 }
 
 impl EventDispatcher {
-    pub fn new(pool: PgPool, handlers: Vec<Arc<dyn EventHandler>>) -> Self {
-        Self { pool, handlers }
+    pub fn new(pool: PgPool, handlers: Vec<Arc<dyn EventHandler>>, enabled: Arc<EnabledPlugins>) -> Self {
+        Self {
+            pool,
+            handlers,
+            enabled,
+        }
     }
 
     pub fn spawn(self) -> watch::Sender<bool> {
@@ -69,6 +90,17 @@ impl EventDispatcher {
                 if handler.event_type() != event_type {
                     continue;
                 }
+                if let Some(owner) = handler.owner_plugin() {
+                    let id = match PluginId::parse(owner) {
+                        Ok(id) => id,
+                        Err(_) => continue,
+                    };
+                    match self.enabled.is_enabled(tenant_id, &id).await {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(err) => return Err(err),
+                    }
+                }
                 let mut tx =
                     TenantTx::begin_with(&self.pool, tenant_id, Actor::system(), false).await?;
                 let delivered: Option<(Uuid,)> = sqlx::query_as(
@@ -113,5 +145,19 @@ impl EventDispatcher {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_plugin_is_not_delivered_and_unowned_handlers_are() {
+        let mut enabled = HashSet::new();
+        enabled.insert(PluginId::must("inventory"));
+        assert!(plugin_allows(None, &enabled));
+        assert!(plugin_allows(Some("inventory"), &enabled));
+        assert!(!plugin_allows(Some("catalog"), &enabled));
     }
 }

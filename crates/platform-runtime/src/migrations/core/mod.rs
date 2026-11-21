@@ -9,6 +9,7 @@ pub fn migrations() -> &'static [Migration] {
         Migration::new(5, "session_hardening", include_str!("005_sessions.sql")),
         Migration::new(6, "events_and_audit", include_str!("006_events.sql")),
         Migration::new(7, "plugin_data_decoupling", include_str!("007_decouple.sql")),
+        Migration::new(8, "plugin_lifecycle", include_str!("008_plugin_lifecycle.sql")),
     ];
     MIGRATIONS
 }

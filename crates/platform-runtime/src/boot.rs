@@ -1,14 +1,22 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use axum::Router;
+use platform_kernel::context::TenantId;
 use platform_kernel::error::AppError;
+use platform_kernel::events::PluginEvents;
 use platform_kernel::plugin::Plugin;
-use platform_kernel::registry::PluginRegistry;
+use platform_kernel::registry::PluginCatalog;
+use platform_kernel::routes::PluginRoutes;
+use platform_kernel::Registrar;
 use sqlx::PgPool;
 
 use crate::db::{rls_validator, roles, Pools};
 use crate::events::EventDispatcher;
 use crate::gateway::CapabilityGateway;
+use crate::http::plugin_gate;
 use crate::migrations;
+use crate::plugins::{sync_permissions, EnabledPlugins, PluginLifecycle, PluginStateStore};
 
 pub struct BootConfig {
     pub database_url: String,
@@ -17,7 +25,6 @@ pub struct BootConfig {
 }
 
 fn rewrite_user(url: &str, user: &str, password: &str) -> Option<String> {
-    // postgres://user:pass@host/db → postgres://platform_app:pass@host/db
     let rest = url.split("://").nth(1)?;
     let hostpart = rest.split('@').nth(1)?;
     Some(format!("postgres://{user}:{password}@{hostpart}"))
@@ -25,24 +32,23 @@ fn rewrite_user(url: &str, user: &str, password: &str) -> Option<String> {
 
 pub struct Platform {
     pub pools: Pools,
-    pub registry: PluginRegistry,
+    pub catalog: Arc<PluginCatalog>,
     pub gateway: CapabilityGateway,
+    pub lifecycle: PluginLifecycle,
+    pub enabled: Arc<EnabledPlugins>,
+    pub plugin_router: Router,
     pub stop_dispatcher: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl Platform {
-    pub async fn boot(
-        config: BootConfig,
-        plugins: Vec<Arc<dyn Plugin>>,
-        enable_all: bool,
-    ) -> Result<Self, AppError> {
-        // 1. Legacy sqlx migrations are run by the caller (shop-core::connect) first.
+    pub async fn boot(config: BootConfig, plugins: Vec<Arc<dyn Plugin>>) -> Result<Self, AppError> {
+        let catalog = Arc::new(PluginCatalog::build(plugins)?);
+
         let admin_url = config
             .database_admin_url
             .clone()
             .unwrap_or_else(|| config.database_url.clone());
 
-        // Always open an admin pool first so we can provision platform_app.
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect(&admin_url)
@@ -59,7 +65,6 @@ impl Platform {
         {
             config.database_url.clone()
         } else {
-            // Rewrite admin URL to log in as platform_app for the runtime pool.
             rewrite_user(&config.database_url, "platform_app", &app_password)
                 .unwrap_or_else(|| config.database_url.clone())
         };
@@ -78,66 +83,70 @@ impl Platform {
             }
         };
 
-        // 2. Platform migrations (as admin), then refresh grants for platform_app.
         migrations::run_owner(&pools.migration, "core", migrations::core::migrations()).await?;
         let _ = roles::provision(&pools.migration, &app_password).await;
 
-        // 3. Plugin registry
-        let mut registry = PluginRegistry::new();
-        for plugin in &plugins {
-            registry.add(plugin.clone());
+        for plugin in catalog.plugins_in_order() {
+            let manifest = plugin.manifest();
+            migrations::run_owner(&pools.migration, manifest.id.as_str(), plugin.migrations()).await?;
         }
-        if enable_all {
-            // Enable in dependency order.
-            for id in ["catalog", "inventory", "pos", "cash", "printing", "reports"] {
-                let _ = registry.enable(id);
-            }
-            for plugin in &plugins {
-                let id = plugin.manifest().id;
-                if !registry.is_enabled(&id) {
-                    let _ = registry.enable(&id);
-                }
-            }
-        } else {
-            // Load enabled set from default tenant
-            let enabled: Vec<(String,)> = sqlx::query_as(
-                r#"
-                SELECT plugin_id FROM tenant_plugins
-                WHERE tenant_id = '00000000-0000-4000-8000-000000000001' AND enabled
-                "#,
-            )
-            .fetch_all(&pools.migration)
-            .await
-            .unwrap_or_default();
-            for (id,) in enabled {
-                let _ = registry.enable(&id);
-            }
+        sync_permissions(&pools.migration, &catalog).await?;
+        PluginStateStore::install_missing(&pools.runtime, TenantId::DEFAULT, &catalog).await?;
+
+        let enabled = Arc::new(EnabledPlugins::new(pools.runtime.clone(), catalog.clone()));
+        let lifecycle = PluginLifecycle::new(pools.runtime.clone(), catalog.clone(), enabled.clone());
+
+        let mut registrar = Registrar::new();
+        let mut plugin_router = Router::new();
+        let mut handlers = Vec::new();
+        for plugin in catalog.plugins_in_order() {
+            plugin.register(&mut registrar);
+            let manifest = plugin.manifest();
+            let declared: HashSet<String> = manifest
+                .permissions
+                .iter()
+                .map(|permission| permission.as_str().to_string())
+                .collect();
+            let mut routes = PluginRoutes::new(manifest.id.clone(), declared);
+            plugin.routes(&mut routes)?;
+            let (router, specs) = routes.finish();
+            plugin_router = plugin_router.merge(plugin_gate::wrap(
+                manifest.id.clone(),
+                specs,
+                enabled.clone(),
+                router,
+            ));
+
+            let consumed: HashSet<String> = manifest.events_consumed.iter().cloned().collect();
+            let mut events = PluginEvents::new(manifest.id.clone(), consumed);
+            plugin.event_handlers(&mut events)?;
+            handlers.extend(events.into_handlers());
         }
+        handlers.extend(registrar.event_handlers.drain(..));
 
-        let enabled_plugins: Vec<_> = registry
-            .enabled_ids()
-            .into_iter()
-            .filter_map(|id| registry.plugin(&id))
-            .collect();
-        migrations::run_plugins(&pools.migration, &enabled_plugins).await?;
+        let mut capabilities = std::mem::take(&mut registrar.capabilities);
+        let capability_registry = {
+            let mut registry = platform_kernel::CapabilityRegistry::new();
+            for (spec, handler) in capabilities.drain(..) {
+                registry.register(spec, handler);
+            }
+            registry
+        };
 
-        registry.register_all();
         rls_validator::validate(&pools.migration).await?;
         pools.guard_runtime().await.ok();
 
-        let gateway = CapabilityGateway::new(
-            pools.runtime.clone(),
-            std::mem::take(&mut registry.capabilities),
-        );
-
-        let handlers = registry.registrar.event_handlers.clone();
-        let dispatcher = EventDispatcher::new(pools.runtime.clone(), handlers);
+        let gateway = CapabilityGateway::new(pools.runtime.clone(), capability_registry);
+        let dispatcher = EventDispatcher::new(pools.runtime.clone(), handlers, enabled.clone());
         let stop_dispatcher = Some(dispatcher.spawn());
 
         Ok(Self {
             pools,
-            registry,
+            catalog,
             gateway,
+            lifecycle,
+            enabled,
+            plugin_router,
             stop_dispatcher,
         })
     }
@@ -148,6 +157,10 @@ impl Platform {
 
     pub fn migration_pool(&self) -> &PgPool {
         &self.pools.migration
+    }
+
+    pub fn plugin_router(&self) -> Router {
+        self.plugin_router.clone()
     }
 
     pub fn stop(&self) {

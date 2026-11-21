@@ -2,8 +2,6 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::Router;
-
 use crate::capability::{Capability, CapabilityHandler};
 use crate::event::EventHandler;
 use crate::plugin::Plugin;
@@ -11,7 +9,6 @@ use crate::plugin::Plugin;
 /// Collects routes, contract providers, event handlers and capabilities
 /// while plugins register themselves.
 pub struct Registrar {
-    pub routes: Router,
     providers: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
     pub event_handlers: Vec<Arc<dyn EventHandler>>,
     pub capabilities: Vec<(Capability, Arc<dyn CapabilityHandler>)>,
@@ -22,17 +19,12 @@ pub struct Registrar {
 impl Registrar {
     pub fn new() -> Self {
         Self {
-            routes: Router::new(),
             providers: HashMap::new(),
             event_handlers: Vec::new(),
             capabilities: Vec::new(),
             deletion_vetoes: Vec::new(),
             printables: Vec::new(),
         }
-    }
-
-    pub fn merge_routes(&mut self, router: Router) {
-        self.routes = std::mem::take(&mut self.routes).merge(router);
     }
 
     pub fn provide<T: Any + Send + Sync>(&mut self, value: Arc<T>) {

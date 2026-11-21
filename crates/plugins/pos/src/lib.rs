@@ -5,7 +5,7 @@ use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityKind};
 use platform_kernel::context::TenantTx;
 use platform_kernel::contract::{DeletionVeto, Registrar};
 use platform_kernel::error::AppError;
-use platform_kernel::manifest::{NavItem, PluginManifest};
+use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::{builtins, Permission};
 use platform_kernel::plugin::Plugin;
@@ -16,40 +16,36 @@ pub struct PosPlugin;
 
 impl Plugin for PosPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest {
-            id: "pos".into(),
-            name: "Point of Sale".into(),
-            version: "0.1.0".into(),
-            description: "Billing, bills, till focus and barcode rules.".into(),
-            requires: vec!["catalog".into()],
-            optional: vec!["inventory".into(), "printing".into()],
-            permissions: vec![
-                Permission::new(builtins::POS_READ),
-                Permission::new(builtins::POS_BILL),
-            ],
-            capabilities: vec![Capability {
-                id: "pos.snapshot".into(),
-                kind: CapabilityKind::Query,
-                permission: builtins::POS_READ.into(),
-                effect: CapabilityEffect::Read,
-                requires_confirmation: false,
-                input_schema: json!({"type":"object"}),
-                output_schema: json!({"type":"object"}),
-                description: "Load the till snapshot.".into(),
-            }],
-            events_emitted: vec!["sales.bill_posted".into()],
-            events_consumed: vec![],
-            settings_schema: None,
-            nav: vec![NavItem {
-                id: "billing".into(),
-                label: "POS Billing".into(),
-                href: "/billing".into(),
-                permission: Some(builtins::POS_BILL.into()),
-                order: 10,
-            }],
-            settings_pages: vec![],
-            report_pages: vec![],
-        }
+        let mut manifest = PluginManifest::v1("pos", "Point of Sale", "0.1.0");
+        manifest.description = "Billing, bills, till focus and barcode rules.".into();
+        manifest.requires = vec![Dependency::new("catalog", "^0.1")];
+        manifest.optional = vec![
+            Dependency::new("inventory", "^0.1"),
+            Dependency::new("printing", "^0.1"),
+        ];
+        manifest.permissions = vec![
+            Permission::new(builtins::POS_READ),
+            Permission::new(builtins::POS_BILL),
+        ];
+        manifest.capabilities = vec![Capability {
+            id: "pos.snapshot".into(),
+            kind: CapabilityKind::Query,
+            permission: builtins::POS_READ.into(),
+            effect: CapabilityEffect::Read,
+            requires_confirmation: false,
+            input_schema: json!({"type":"object"}),
+            output_schema: json!({"type":"object"}),
+            description: "Load the till snapshot.".into(),
+        }];
+        manifest.events_emitted = vec!["sales.bill_posted".into()];
+        manifest.nav = vec![NavItem {
+            id: "billing".into(),
+            label: "POS Billing".into(),
+            href: "/billing".into(),
+            permission: Some(builtins::POS_BILL.into()),
+            order: 10,
+        }];
+        manifest
     }
 
     fn migrations(&self) -> &'static [Migration] {

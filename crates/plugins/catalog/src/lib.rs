@@ -16,18 +16,14 @@ pub struct CatalogPlugin;
 
 impl Plugin for CatalogPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest {
-            id: "catalog".into(),
-            name: "Catalog".into(),
-            version: "0.1.0".into(),
-            description: "Sections, categories, items, variants and pictures.".into(),
-            requires: vec![],
-            optional: vec![],
-            permissions: vec![
+        {
+            let mut manifest = PluginManifest::v1("catalog", "Catalog", "0.1.0");
+            manifest.description = "Sections, categories, items, variants and pictures.".into();
+            manifest.permissions = vec![
                 Permission::new(builtins::CATALOG_READ),
                 Permission::new(builtins::CATALOG_WRITE),
-            ],
-            capabilities: vec![Capability {
+            ];
+            manifest.capabilities = vec![Capability {
                 id: "catalog.items.list".into(),
                 kind: CapabilityKind::Query,
                 permission: builtins::CATALOG_READ.into(),
@@ -36,18 +32,15 @@ impl Plugin for CatalogPlugin {
                 input_schema: json!({"type":"object","properties":{}}),
                 output_schema: json!({"type":"object"}),
                 description: "List active catalog items via POS snapshot sections.".into(),
-            }],
-            events_emitted: vec![],
-            events_consumed: vec![],
-            settings_schema: None,
-            nav: vec![NavItem {
+            }];
+            manifest.nav = vec![NavItem {
                 id: "settings".into(),
                 label: "Settings".into(),
                 href: "/settings/items".into(),
                 permission: Some(builtins::CATALOG_WRITE.into()),
                 order: 50,
-            }],
-            settings_pages: vec![
+            }];
+            manifest.settings_pages = vec![
                 SettingsPage {
                     id: "items".into(),
                     label: "Items".into(),
@@ -76,8 +69,8 @@ impl Plugin for CatalogPlugin {
                     permission: Some(builtins::USERS_WRITE.into()),
                     order: 40,
                 },
-            ],
-            report_pages: vec![],
+            ];
+            manifest
         }
     }
 

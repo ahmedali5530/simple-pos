@@ -33,13 +33,15 @@ pub async fn applied(pool: &PgPool, owner: &str) -> Result<Vec<i64>, AppError> {
 }
 
 pub async fn run_owner(pool: &PgPool, owner: &str, migrations: &[Migration]) -> Result<(), AppError> {
-    // Serialize concurrent boots (tests) so CREATE TABLE IF NOT EXISTS cannot race.
+    // Session locks are tied to one connection. Hold that connection until unlock
+    // so a pooled checkout cannot leave the lock behind.
+    let mut conn = pool.acquire().await?;
     sqlx::query("SELECT pg_advisory_lock(87201401)")
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     let result = run_owner_inner(pool, owner, migrations).await;
     sqlx::query("SELECT pg_advisory_unlock(87201401)")
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .ok();
     result
@@ -88,7 +90,7 @@ async fn run_owner_inner(pool: &PgPool, owner: &str, migrations: &[Migration]) -
 pub async fn run_plugins(pool: &PgPool, plugins: &[Arc<dyn Plugin>]) -> Result<(), AppError> {
     for plugin in plugins {
         let manifest = plugin.manifest();
-        run_owner(pool, &manifest.id, plugin.migrations()).await?;
+        run_owner(pool, manifest.id.as_str(), plugin.migrations()).await?;
     }
     Ok(())
 }

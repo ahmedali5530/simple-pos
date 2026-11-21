@@ -5,23 +5,41 @@
     id: string
     name: string
     version: string
-    enabled?: boolean
+    enabled: boolean
   }
 
   let plugins = $state<PluginRow[]>([])
   let message = $state('')
   let tokenName = $state('')
   let tokenResult = $state('')
+  let pending = $state('')
 
   $effect(() => {
-    request<{ plugins: PluginRow[] }>('/api/v1/platform/manifest')
+    request<{ available?: PluginRow[] }>('/api/v1/platform/manifest')
       .then((body) => {
-        plugins = (body.plugins ?? []).map((p) => ({ ...p, enabled: true }))
+        plugins = body.available ?? []
       })
       .catch((error: unknown) => {
         message = error instanceof Error ? error.message : 'Could not load plugins.'
       })
   })
+
+  async function toggle(plugin: PluginRow) {
+    const enabled = !plugin.enabled
+    pending = plugin.id
+    message = ''
+    try {
+      await request(`/api/v1/platform/plugins/${plugin.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      })
+      plugin.enabled = enabled
+    } catch (error) {
+      message = error instanceof Error ? error.message : 'Could not update the plugin.'
+    } finally {
+      pending = ''
+    }
+  }
 
   async function createToken() {
     if (!tokenName.trim()) {
@@ -47,13 +65,15 @@
 
 <section class="place">
   <h2>Plugins</h2>
-  <p class="hint">Enabled plugins for this shop. Core keeps security, tenancy and lifecycle.</p>
+  <p class="hint">Turn a plugin off without deleting its data. A plugin stays off while something else still needs it.</p>
   <ul class="plugin-list">
     {#each plugins as plugin (plugin.id)}
       <li>
         <strong>{plugin.name}</strong>
         <span class="hint">{plugin.id} · v{plugin.version}</span>
-        <span class="badge">{plugin.enabled === false ? 'Off' : 'On'}</span>
+        <button type="button" class="sections-button" disabled={pending === plugin.id} onclick={() => toggle(plugin)}>
+          {plugin.enabled ? 'On' : 'Off'}
+        </button>
       </li>
     {/each}
   </ul>

@@ -6,7 +6,7 @@ use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityHandle
 use platform_kernel::context::TenantTx;
 use platform_kernel::contract::Registrar;
 use platform_kernel::error::AppError;
-use platform_kernel::manifest::{NavItem, PluginManifest};
+use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::{builtins, Permission};
 use platform_kernel::plugin::Plugin;
@@ -16,61 +16,53 @@ pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest {
-            id: "inventory".into(),
-            name: "Inventory".into(),
-            version: "0.1.0".into(),
-            description: "Stock balances, average cost and movements.".into(),
-            requires: vec!["catalog".into()],
-            optional: vec![],
-            permissions: vec![
-                Permission::new(builtins::INVENTORY_READ),
-                Permission::new(builtins::INVENTORY_WRITE),
-            ],
-            capabilities: vec![
-                Capability {
-                    id: "inventory.summary".into(),
-                    kind: CapabilityKind::Query,
-                    permission: builtins::INVENTORY_READ.into(),
-                    effect: CapabilityEffect::Read,
-                    requires_confirmation: false,
-                    input_schema: json!({"type":"object","properties":{}}),
-                    output_schema: json!({"type":"array"}),
-                    description: "Stock summary for all items.".into(),
-                },
-                Capability {
-                    id: "inventory.adjust".into(),
-                    kind: CapabilityKind::Command,
-                    permission: builtins::INVENTORY_WRITE.into(),
-                    effect: CapabilityEffect::Write,
-                    requires_confirmation: true,
-                    input_schema: json!({
-                        "type":"object",
-                        "required":["item_id","qty","direction"],
-                        "properties":{
-                            "item_id":{"type":"integer"},
-                            "qty":{"type":"integer","minimum":1},
-                            "direction":{"type":"string","enum":["in","out"]},
-                            "confirm":{"type":"boolean"}
-                        }
-                    }),
-                    output_schema: json!({"type":"object"}),
-                    description: "Adjust stock (requires confirm: true).".into(),
-                },
-            ],
-            events_emitted: vec![],
-            events_consumed: vec!["sales.bill_posted".into()],
-            settings_schema: None,
-            nav: vec![NavItem {
-                id: "stock".into(),
-                label: "Stock In / Out".into(),
-                href: "/stock".into(),
-                permission: Some(builtins::INVENTORY_WRITE.into()),
-                order: 20,
-            }],
-            settings_pages: vec![],
-            report_pages: vec![],
-        }
+        let mut manifest = PluginManifest::v1("inventory", "Inventory", "0.1.0");
+        manifest.description = "Stock balances, average cost and movements.".into();
+        manifest.requires = vec![Dependency::new("catalog", "^0.1")];
+        manifest.permissions = vec![
+            Permission::new(builtins::INVENTORY_READ),
+            Permission::new(builtins::INVENTORY_WRITE),
+        ];
+        manifest.capabilities = vec![
+            Capability {
+                id: "inventory.summary".into(),
+                kind: CapabilityKind::Query,
+                permission: builtins::INVENTORY_READ.into(),
+                effect: CapabilityEffect::Read,
+                requires_confirmation: false,
+                input_schema: json!({"type":"object","properties":{}}),
+                output_schema: json!({"type":"array"}),
+                description: "Stock summary for all items.".into(),
+            },
+            Capability {
+                id: "inventory.adjust".into(),
+                kind: CapabilityKind::Command,
+                permission: builtins::INVENTORY_WRITE.into(),
+                effect: CapabilityEffect::Write,
+                requires_confirmation: true,
+                input_schema: json!({
+                    "type":"object",
+                    "required":["item_id","qty","direction"],
+                    "properties":{
+                        "item_id":{"type":"integer"},
+                        "qty":{"type":"integer","minimum":1},
+                        "direction":{"type":"string","enum":["in","out"]},
+                        "confirm":{"type":"boolean"}
+                    }
+                }),
+                output_schema: json!({"type":"object"}),
+                description: "Adjust stock (requires confirm: true).".into(),
+            },
+        ];
+        manifest.events_consumed = vec!["sales.bill_posted".into()];
+        manifest.nav = vec![NavItem {
+            id: "stock".into(),
+            label: "Stock In / Out".into(),
+            href: "/stock".into(),
+            permission: Some(builtins::INVENTORY_WRITE.into()),
+            order: 20,
+        }];
+        manifest
     }
 
     fn migrations(&self) -> &'static [Migration] {

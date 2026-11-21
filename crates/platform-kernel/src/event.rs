@@ -45,5 +45,9 @@ pub mod chrono_lite {
 pub trait EventHandler: Send + Sync {
     fn event_type(&self) -> &str;
     fn subscriber_id(&self) -> &str;
+    /// Plugin that owns this subscription. `None` means the handler is not gated.
+    fn owner_plugin(&self) -> Option<&str> {
+        None
+    }
     async fn handle(&self, tx: &mut TenantTx<'_>, envelope: &EventEnvelope) -> Result<(), AppError>;
 }
