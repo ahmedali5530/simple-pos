@@ -21,4 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-bundle = ["dep:axum-frontend", "dep:postgresql_embedded", "dep:rust-embed"]
+# Pages and API in one process, using DATABASE_URL. The web image uses this.
+web = ["dep:axum-frontend", "dep:rust-embed"]
+# Desktop till: the web files plus a private Postgres. Do not use this on a VPS.
+bundle = ["web", "dep:postgresql_embedded"]

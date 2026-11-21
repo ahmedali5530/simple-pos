@@ -1,0 +1,41 @@
+# The shop till. Caddy or Nginx on this machine proxies the domain to 127.0.0.1:8787.
+# The till shares the host network and reaches Postgres through 127.0.0.1:5433.
+# POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB must match DATABASE_URL in .env.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chaska
+      POSTGRES_PASSWORD: chaska
+      POSTGRES_DB: chaska_pos
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - shop-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chaska -d chaska_pos"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  shop:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      API_ADDR: 127.0.0.1:8787
+      IMAGE_DIR: /data/item-images
+    volumes:
+      - shop-images:/data/item-images
+      - ./config.toml:/app/config.toml:ro
+      # Receipts use the host CUPS queue. Uncomment when that queue is on this VPS.
+      # - /var/run/cups/cups.sock:/var/run/cups/cups.sock
+
+volumes:
+  shop-images:
+  shop-db:

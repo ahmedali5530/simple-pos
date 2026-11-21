@@ -28,7 +28,7 @@ use tower_http::cors::{Any, CorsLayer};
 #[cfg(feature = "bundle")]
 mod embedded;
 
-#[cfg(feature = "bundle")]
+#[cfg(feature = "web")]
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../dist/"]
 struct TillAssets;
@@ -110,6 +110,13 @@ pub async fn open() -> Result<Till, String> {
     open_with(true).await
 }
 
+/// Host and port from a database URL, without the user or password.
+fn database_target(url: &str) -> String {
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    let host = after_scheme.split('@').nth(1).unwrap_or(after_scheme);
+    host.split(['/', '?']).next().unwrap_or(host).to_string()
+}
+
 /// Windows builds pass the small program that starts Postgres with no terminal.
 pub fn set_pg_launcher(bytes: &'static [u8]) {
     #[cfg(feature = "bundle")]
@@ -149,9 +156,12 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
         }
         std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?
     };
-    let pool = shop_core::connect(&database_url)
-        .await
-        .map_err(|err| err.to_string())?;
+    let pool = shop_core::connect(&database_url).await.map_err(|err| {
+        format!(
+            "Could not open the shop database at {}: {err}",
+            database_target(&database_url)
+        )
+    })?;
     let shop = load_shop_config();
 
     let app = serve_till(
@@ -285,7 +295,7 @@ async fn wait_for_stop() {
     }
 }
 
-#[cfg(feature = "bundle")]
+#[cfg(feature = "web")]
 fn serve_till(api: Router) -> Router {
     use axum_frontend::{embed_router_with, SpaOptions};
     api.merge(embed_router_with::<TillAssets>(
@@ -293,7 +303,7 @@ fn serve_till(api: Router) -> Router {
     ))
 }
 
-#[cfg(not(feature = "bundle"))]
+#[cfg(not(feature = "web"))]
 fn serve_till(api: Router) -> Router {
     api
 }
