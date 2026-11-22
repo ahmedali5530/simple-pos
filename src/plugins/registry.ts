@@ -10,6 +10,7 @@ import { adminPlugin } from './admin'
 import { customersPlugin } from './customers'
 import { tailorPlugin } from './tailor'
 import { installmentsPlugin } from './installments'
+import { mobilePlugin } from './mobile'
 
 /** Static UI plugin registry — mirrors Rust static linking. */
 export const uiPlugins: UiPlugin[] = [
@@ -23,6 +24,7 @@ export const uiPlugins: UiPlugin[] = [
   customersPlugin,
   tailorPlugin,
   installmentsPlugin,
+  mobilePlugin,
 ].map(defineUiPlugin)
 
 function pluginIsOn(id: string, enabled: Set<string>, compiled: Set<string>) {
