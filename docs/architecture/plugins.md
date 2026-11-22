@@ -28,12 +28,26 @@ Permissions use the plugin id as a prefix (`catalog.read`). `users.write` and `s
 
 ## Frontend
 
-A UI plugin in `src/plugins/{id}` exports pages and slots:
+A UI plugin in `src/plugins/{id}` exports pages, the outlets it provides, and the components it contributes to other plugins' outlets:
 
 - A page is a path, a lazy component, a permission, and an optional density (`compact` or `touch`).
-- A slot is a name, a component, and an order. The shell renders every enabled contribution for that name.
+- `slotsProvided` names the outlets on this plugin's screens, e.g. `catalog.item-form`.
+- `contributions` lists components this plugin renders inside another plugin's outlet. Each entry has a stable `id`, the `slot` name, an `order`, and a lazy `component`. A contribution without a component is metadata only and does not render.
+
+Contribution components are lazy and only mount when their owning plugin is both compiled into the backend and enabled for the shop. The host passes a typed context; extra props are ignored. Current outlets:
+
+- `catalog.item-form` — `{ item, itemId, editing, registerExtraSave }`.
+  `registerExtraSave(id, save)` registers plugin-owned item data. The callback receives the saved item id, runs after the catalog save (including for a new item), and may throw an `Error` with a user-facing message. Keep details JSON-serializable.
+- `pos.line-source` — `{ section, addLine, currency, locale }`.
+  `addLine({ item_id, source, reference?, details?, … })` adds a line tied to a catalog item. A non-empty `reference` makes the line key unique, so serialized items do not merge into one quantity.
+- `pos.line-detail` — `{ line, patch, currency, locale }`.
+  `patch({ source?, reference?, details? })` updates one cart line's plugin metadata.
 
 The shell draws the top bar, the page outlet, and the settings list. It does not switch on business paths.
+
+## Sale line metadata
+
+`bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. The `sales.bill_posted` event is version 2 and includes `SaleLine` entries (`source`, `reference`, `label`, `quantity`, `unit_amount`, `amount`, `details`), so a plugin can react to its own lines. Consumers that only need the bill can keep reading `bill_no` from the payload or query the tables.
 
 ## Settings
 
