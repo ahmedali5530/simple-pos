@@ -299,6 +299,9 @@ export function postBill(
     qty: number
     code: string | null
     entry: string | null
+    source?: string | null
+    reference?: string | null
+    details?: Record<string, unknown> | null
   }[],
   customer: string | null,
 ): Promise<PostedBill> {

@@ -13,6 +13,7 @@
   import { location, screenOf } from '../../../lib/route.svelte'
   import { session } from '../../../lib/session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../../../lib/types'
+  import type { LineMetadataPatch, PosLineDraft } from '../../../platform/slots'
   import AttentionDialog from './AttentionDialog.svelte'
   import MeasureDialog from './MeasureDialog.svelte'
   import SectionPanel from './SectionPanel.svelte'
@@ -104,6 +105,18 @@
     document.querySelector<HTMLInputElement>(`[data-scan="${id}"]`)?.focus()
   }
 
+  function lineKey(
+    itemId: number,
+    variantId: number | null,
+    rate: number,
+    units: number,
+    source = '',
+    reference = '',
+  ) {
+    const base = `${itemId}:${variantId ?? 0}:${rate}:${units}`
+    return source || reference ? `${base}|${source}|${reference}` : base
+  }
+
   function addLine(
     sectionId: number,
     item: PosItem,
@@ -119,7 +132,7 @@
       attention = { tone: 'warning', message: `Only ${item.stock} left for ${item.name}.` }
       return false
     }
-    const key = `${item.id}:${variant?.id ?? 0}:${rate}:${units}`
+    const key = lineKey(item.id, variant?.id ?? null, rate, units)
     let name = variant ? `${item.name} · ${variant.name}` : item.name
     if (priced?.label) name = `${name} · ${priced.label}`
     const code = priced?.code ?? null
@@ -131,6 +144,73 @@
       [sectionId]: existing
         ? lines.map((line) => (line.key === key ? { ...line, qty: line.qty + qty } : line))
         : [...lines, { key, item_id: item.id, variant_id: variant?.id ?? null, name, rate, units, qty, code, entry }],
+    }
+    lastKey = { ...lastKey, [sectionId]: key }
+    posted = { ...posted, [sectionId]: '' }
+    attention = null
+    return true
+  }
+
+  /** Add a line contributed by a plugin (device, job, etc.). The metadata is kept on the line. */
+  function addExternalLine(sectionId: number, draft: PosLineDraft) {
+    focusId = sectionId
+    const section = sections.find((entry) => entry.id === sectionId)
+    const item = section?.items.find((entry) => entry.id === draft.item_id)
+    if (!item) {
+      attention = { tone: 'warning', message: 'That item is not in this section.' }
+      return false
+    }
+    const variant =
+      draft.variant_id != null
+        ? (item.variants.find((entry) => entry.id === draft.variant_id) ?? null)
+        : null
+    if (draft.variant_id != null && !variant) {
+      attention = { tone: 'warning', message: 'That option is not in the catalog.' }
+      return false
+    }
+    const rate = draft.rate ?? variant?.rate ?? item.rate
+    const qty = draft.qty ?? 1
+    const units = variant?.units ?? 1
+    if (!Number.isInteger(rate) || rate < 1 || !Number.isInteger(qty) || qty < 1) {
+      attention = { tone: 'error', message: 'That line has an invalid price or quantity.' }
+      return false
+    }
+    const source = draft.source.trim()
+    if (!source) {
+      attention = { tone: 'error', message: 'That line is missing its source.' }
+      return false
+    }
+    if (item.stock - reserved(sectionId, item.id) < units * qty) {
+      attention = { tone: 'warning', message: `Only ${item.stock} left for ${item.name}.` }
+      return false
+    }
+    const reference = draft.reference?.trim() ?? ''
+    const key = lineKey(item.id, variant?.id ?? null, rate, units, source, reference)
+    let name = variant ? `${item.name} · ${variant.name}` : item.name
+    if (draft.label) name = `${name} · ${draft.label}`
+    const lines = linesFor(sectionId)
+    const existing = lines.find((line) => line.key === key)
+    carts = {
+      ...carts,
+      [sectionId]: existing
+        ? lines.map((line) => (line.key === key ? { ...line, qty: line.qty + qty } : line))
+        : [
+            ...lines,
+            {
+              key,
+              item_id: item.id,
+              variant_id: variant?.id ?? null,
+              name,
+              rate,
+              units,
+              qty,
+              code: null,
+              entry: null,
+              source,
+              reference,
+              details: draft.details ?? {},
+            },
+          ],
     }
     lastKey = { ...lastKey, [sectionId]: key }
     posted = { ...posted, [sectionId]: '' }
@@ -288,6 +368,15 @@
     return true
   }
 
+  function patchLine(sectionId: number, key: string, patch: LineMetadataPatch) {
+    carts = {
+      ...carts,
+      [sectionId]: linesFor(sectionId).map((line) =>
+        line.key === key ? { ...line, ...patch } : line,
+      ),
+    }
+  }
+
   async function post(sectionId: number) {
     const lines = linesFor(sectionId)
     if (lines.length === 0) return
@@ -310,6 +399,9 @@
           qty: line.qty,
           code: line.code,
           entry: line.entry,
+          source: line.source ?? null,
+          reference: line.reference ?? null,
+          details: line.details ?? null,
         })),
         customer || null,
       )
@@ -504,6 +596,8 @@
           onAlert={(message, tone) => (attention = { message, tone })}
           onAdd={(item) => requestAdd(active.id, item)}
           onQty={(key, qty) => setQty(active.id, key, qty)}
+          onExternalLine={(draft) => addExternalLine(active.id, draft)}
+          onLinePatch={(key, patch) => patchLine(active.id, key, patch)}
           onClear={() => {
             carts = { ...carts, [active.id]: [] }
             customers = { ...customers, [active.id]: '' }

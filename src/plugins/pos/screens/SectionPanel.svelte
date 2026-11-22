@@ -5,6 +5,8 @@
   import { formatMoney } from '../../../lib/money'
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../../../lib/types'
   import { Button, Switch } from '../../../lib/ui'
+  import Slot from '../../../platform/Slot.svelte'
+  import type { AddPosLine, LineMetadataPatch } from '../../../platform/slots'
 
   interface Props {
     section: PosSection
@@ -21,6 +23,8 @@
     onAlert: (message: string, tone: 'error' | 'warning') => void
     onAdd: (item: PosItem) => void
     onQty: (key: string, qty: number) => boolean
+    onExternalLine: AddPosLine
+    onLinePatch: (key: string, patch: LineMetadataPatch) => void
     onClear: () => void
     onPost: () => void
     posting: boolean
@@ -46,6 +50,8 @@
     onAlert,
     onAdd,
     onQty,
+    onExternalLine,
+    onLinePatch,
     onClear,
     onPost,
     posting,
@@ -317,6 +323,10 @@
       <h3>Current {section.short_name} bill</h3>
       <Button variant="link" class="text-danger" onclick={onClear} disabled={lines.length === 0}>Clear Items</Button>
     </div>
+    <Slot
+      name="pos.line-source"
+      context={{ section, addLine: onExternalLine, currency, locale }}
+    />
     <div class="bill-lines">
       {#if lines.length === 0}
         <p class="empty">No items in this bill yet. Scan a barcode or tap an item.</p>
@@ -346,6 +356,15 @@
                 <button type="button" class="remove" aria-label="Remove {line.name}" onclick={() => onQty(line.key, 0)}>×</button>
               </span>
             </div>
+            <Slot
+              name="pos.line-detail"
+              context={{
+                line,
+                patch: (patch: LineMetadataPatch) => onLinePatch(line.key, patch),
+                currency,
+                locale,
+              }}
+            />
           </div>
         {/each}
       {/if}
