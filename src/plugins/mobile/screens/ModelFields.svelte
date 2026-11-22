@@ -8,7 +8,8 @@
   let brand = $state('')
   let model = $state('')
   let warrantyMonths = $state('12')
-  let loadedFor = $state<number | null>(null)
+  // Plain variable: the load effect must not re-run when it records the item it loaded.
+  let loadedFor: number | null = null
   let loading = $state(false)
   let loadFailed = $state(false)
 
@@ -17,6 +18,8 @@
     model = ''
     warrantyMonths = '12'
     loadedFor = null
+    loading = false
+    loadFailed = false
   }
 
   $effect(() => {
