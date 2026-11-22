@@ -14,5 +14,6 @@ pub fn plugins() -> Vec<Arc<dyn Plugin>> {
         Arc::new(plugin_customers::CustomersPlugin),
         Arc::new(plugin_tailor::TailorPlugin),
         Arc::new(plugin_installments::InstallmentsPlugin),
+        Arc::new(plugin_mobile::MobilePlugin),
     ]
 }

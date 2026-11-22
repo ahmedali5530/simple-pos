@@ -19,6 +19,7 @@ plugin-reports = { path = "../plugins/reports" }
 plugin-customers = { path = "../plugins/customers" }
 plugin-tailor = { path = "../plugins/tailor" }
 plugin-installments = { path = "../plugins/installments" }
+plugin-mobile = { path = "../plugins/mobile" }
 dotenvy = "0.15"
 getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
