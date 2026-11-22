@@ -1,6 +1,7 @@
 <script lang="ts">
   import { request } from '../../../lib/api'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
+  import { Button, Field, Input } from '../../../lib/ui'
 
   interface Unit {
     id: number
@@ -52,8 +53,10 @@
     {/each}
   </ul>
   <form class="sheet" onsubmit={save}>
-    <label>Code <input bind:value={code} /></label>
-    <label>Name <input bind:value={name} /></label>
-    <button type="submit" class="save">Add unit</button>
+    <Field label="Code"><Input bind:value={code} /></Field>
+    <Field label="Name"><Input bind:value={name} /></Field>
+    <div class="sheet-actions">
+      <Button type="submit">Add unit</Button>
+    </div>
   </form>
 </section>

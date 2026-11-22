@@ -1,6 +1,7 @@
 <script lang="ts">
   import { formatMoney } from '../money'
   import type { ItemVariant, PosItem } from '../types'
+  import { Button } from '../ui'
 
   interface Props {
     item: PosItem
@@ -66,6 +67,7 @@
 
 <div
   class="sheet-backdrop"
+  data-density="touch"
   role="presentation"
   onclick={onClose}
   onkeydown={(event) => {
@@ -104,6 +106,7 @@
             onclick={() => setCount(variant, (counts[variant.id] ?? 0) - 1)}
           >-</button>
           <input
+            class="input"
             inputmode="numeric"
             aria-label="Quantity for {variant.name}"
             value={counts[variant.id] ?? 0}
@@ -126,8 +129,8 @@
       </div>
     {/each}
     <div class="sheet-actions">
-      <button type="button" class="ghost" onclick={onClose}>Cancel</button>
-      <button type="button" class="save" disabled={planned === 0} onclick={confirm}>Add to bill</button>
+      <Button variant="secondary" onclick={onClose}>Cancel</Button>
+      <Button disabled={planned === 0} onclick={confirm}>Add to bill</Button>
     </div>
   </div>
 </div>

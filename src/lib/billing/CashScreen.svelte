@@ -5,6 +5,7 @@
   import { printCashShift } from '../print'
   import type { CashDesk, CashShift } from '../types'
   import { toast, toastError } from '../toast'
+  import { Button, Input, Select } from '../ui'
 
   interface ExpenseLine {
     description: string
@@ -195,13 +196,13 @@
       <p class="hint">Start the day with the cash already in the drawer and the petty cash.</p>
       <label>
         Previous till's cash
-        <input inputmode="numeric" bind:value={opening} />
+        <Input inputmode="numeric" bind:value={opening} />
       </label>
       <label>
         Petty cash
-        <input inputmode="numeric" bind:value={petty} />
+        <Input inputmode="numeric" bind:value={petty} />
       </label>
-      <button type="button" class="stock-update" disabled={saving} onclick={startShift}>{saving ? 'Saving…' : 'Start the day'}</button>
+      <Button class="mt-4 w-full" disabled={saving} onclick={startShift}>{saving ? 'Saving…' : 'Start the day'}</Button>
     {:else}
       <p class="hint">Opened {desk.open.opened_at} by {desk.open.opened_by}.</p>
       <div class="mt-3 grid grid-cols-2 gap-2">
@@ -217,41 +218,41 @@
         <div class="mt-2 rounded-xl border border-slate-200 p-3">
           <label class="mt-0">
             Description
-            <input bind:value={line.description} placeholder="Tea for staff" />
+            <Input bind:value={line.description} placeholder="Tea for staff" />
           </label>
           <div class="stock-pair">
             <label>
               Category
-              <select bind:value={line.category}>
+              <Select bind:value={line.category}>
                 {#each expenseCategories as category (category)}
                   <option value={category}>{category}</option>
                 {/each}
-              </select>
+              </Select>
             </label>
             <label>
               Amount
-              <input inputmode="numeric" bind:value={line.amount} />
+              <Input inputmode="numeric" bind:value={line.amount} />
             </label>
           </div>
-          <button type="button" class="link" onclick={() => (lines = lines.filter((_, item) => item !== index).concat(lines.length === 1 ? [blankExpense()] : []))}>Remove</button>
+          <Button variant="link" class="text-danger" onclick={() => (lines = lines.filter((_, item) => item !== index).concat(lines.length === 1 ? [blankExpense()] : []))}>Remove</Button>
         </div>
       {/each}
-      <button type="button" class="mt-3 inline-flex h-11 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900" onclick={() => (lines = [...lines, blankExpense()])}>Add expense</button>
+      <Button variant="secondary" class="mt-3" onclick={() => (lines = [...lines, blankExpense()])}>Add expense</Button>
       <p class="mt-3 flex items-center justify-between text-sm font-extrabold text-slate-900">
         <span>Expense total</span>
         <span>{money(expenseTotal)}</span>
       </p>
       <label>
         Cash taken out
-        <input inputmode="numeric" bind:value={taken} />
+        <Input inputmode="numeric" bind:value={taken} />
       </label>
       <label>
         Manual count
-        <input inputmode="numeric" bind:value={manual} />
+        <Input inputmode="numeric" bind:value={manual} />
       </label>
-      <button type="button" class="mt-3 inline-flex h-11 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900" onclick={() => (showSystem = !showSystem)}>
+      <Button variant="secondary" class="mt-3" onclick={() => (showSystem = !showSystem)}>
         {showSystem ? 'Hide system count' : 'Show system count'}
-      </button>
+      </Button>
       {#if showSystem}
         <div class="mt-3 rounded-xl bg-slate-50 px-3 py-3">
           <p class="hint mt-0">Opening + petty + sales − expenses − cash taken out.</p>
@@ -265,8 +266,8 @@
         <p class="hint mt-0">Previous till + petty + sales − expenses − cash taken out.</p>
         <p class="mt-2 flex items-center justify-between text-sm font-extrabold {system < 0 ? 'text-rose-700' : 'text-slate-900'}"><span>Cash left for the next shift</span><span>{money(system)}</span></p>
       </div>
-      <button type="button" class="mt-3 inline-flex h-12 w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900" disabled={saving} onclick={saveDraft}>Save draft</button>
-      <button type="button" class="stock-update" disabled={saving} onclick={finishShift}>{saving ? 'Saving…' : 'Close the day'}</button>
+      <Button variant="secondary" class="mt-3 w-full" disabled={saving} onclick={saveDraft}>Save draft</Button>
+      <Button class="mt-3 w-full" disabled={saving} onclick={finishShift}>{saving ? 'Saving…' : 'Close the day'}</Button>
     {/if}
   </aside>
 
@@ -294,9 +295,9 @@
                 <span class={shift.difference === 0 ? 'text-emerald-700' : 'text-rose-700'}>Difference {money(shift.difference ?? 0)}</span>
               </div>
             </div>
-            <button type="button" class="inline-flex h-9 shrink-0 items-center rounded-lg border border-slate-300 bg-white px-2 text-xs font-extrabold text-slate-900" disabled={printingId === shift.id} onclick={() => printShift(shift.id)}>
+            <Button variant="secondary" size="sm" disabled={printingId === shift.id} onclick={() => printShift(shift.id)}>
               {printingId === shift.id ? 'Printing…' : 'Print'}
-            </button>
+            </Button>
           </article>
         {/each}
       {/if}

@@ -5,6 +5,7 @@
   import { centsToInput, formatCost, formatMoney, moneyToCents } from '../money'
   import type { Category, PosItem, PosSection, PosSnapshot } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input, Segmented, Select } from '../ui'
 
   interface Props {
     sections: PosSection[]
@@ -285,17 +286,17 @@
   <div class="setup-list-pane">
     <div class="catalog-head">
       <h2>Items</h2>
-      <button type="button" class="save" onclick={() => (editing = 'new')}>New item</button>
+      <Button onclick={() => (editing = 'new')}>New item</Button>
     </div>
     <div class="mt-2.5 grid grid-cols-2 gap-2">
-      <button type="button" class="inline-flex h-[46px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900" disabled={sheetBusy} onclick={exportWorkbook}>Export Excel</button>
-      <label class="mt-0 inline-flex h-[46px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900">
+      <Button variant="secondary" class="w-full" disabled={sheetBusy} onclick={exportWorkbook}>Export Excel</Button>
+      <label class="btn btn-secondary w-full">
         Import Excel
         <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange={importWorkbook} />
       </label>
     </div>
     <p class="hint">Leave counted blank unless you recounted that item. Options are the second sheet.</p>
-    <input class="setup-search" placeholder="Find an item" bind:value={query} />
+    <Input placeholder="Find an item" bind:value={query} />
     <VirtualList class="setup-list" items={visible} estimate={64} reset={query} key={(row) => row.item.id}>
       {#snippet children(row)}
         <button type="button" class:selected={row.item.id === editing} onclick={() => (editing = row.item.id)}>
@@ -327,12 +328,12 @@
         {/if}
         <div class="picture-actions">
           <div class="picture-buttons">
-            <label class="picture-pick">
+            <label class="btn btn-secondary">
               {picturePreview ? 'Change picture' : 'Add picture'}
-              <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onchange={choosePicture} />
+              <input class="hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onchange={choosePicture} />
             </label>
             {#if picturePreview}
-              <button type="button" class="picture-remove" onclick={clearPicture}>Remove picture</button>
+              <Button variant="link" class="text-danger" onclick={clearPicture}>Remove picture</Button>
             {/if}
           </div>
           <p class="hint">Shown on the item card when a picture is attached. JPEG, PNG, WebP, or GIF, under 2 MB.</p>
@@ -340,19 +341,19 @@
       </div>
       <label>
         Name
-        <input bind:value={name} />
+        <Input bind:value={name} />
       </label>
       <label>
         Barcode
-        <input bind:value={barcode} />
+        <Input bind:value={barcode} />
       </label>
       <label>
         Shelf rate
-        <input inputmode="numeric" bind:value={rate} />
+        <Input inputmode="numeric" bind:value={rate} />
       </label>
       <label>
         Cost
-        <input inputmode="decimal" bind:value={cost} placeholder="0" />
+        <Input inputmode="decimal" bind:value={cost} placeholder="0" />
       </label>
       <p class="hint">
         {#if shelfProfit == null}
@@ -365,35 +366,35 @@
       </p>
       <label>
         Section
-        <select bind:value={sectionId}>
+        <Select bind:value={sectionId}>
           {#each sections as section (section.id)}
             <option value={String(section.id)}>{section.short_name}</option>
           {/each}
-        </select>
+        </Select>
       </label>
       <label>
         Category
-        <select bind:value={categoryId}>
+        <Select bind:value={categoryId}>
           {#each categories as category (category.id)}
             <option value={String(category.id)}>{category.name}</option>
           {/each}
-        </select>
+        </Select>
       </label>
       <label>
         Type
-        <select bind:value={itemType}>
+        <Select bind:value={itemType}>
           <option value="product">Product</option>
           <option value="service">Service</option>
-        </select>
+        </Select>
       </label>
       <label>
         Unit
-        <select bind:value={unitId}>
+        <Select bind:value={unitId}>
           <option value="">Piece</option>
           {#each units as unit (unit.id)}
             <option value={String(unit.id)}>{unit.name}</option>
           {/each}
-        </select>
+        </Select>
       </label>
 
       <div class="option-block">
@@ -403,42 +404,47 @@
           <div class="variant-edit">
             <label>
               Name
-              <input bind:value={variant.name} />
+              <Input bind:value={variant.name} />
             </label>
             <label>
               Rate
-              <input inputmode="numeric" bind:value={variant.rate} />
+              <Input inputmode="numeric" bind:value={variant.rate} />
             </label>
             <label>
               Stock units
-              <input inputmode="numeric" bind:value={variant.units} />
+              <Input inputmode="numeric" bind:value={variant.units} />
             </label>
             <label>
               Barcode
-              <input bind:value={variant.barcode} />
+              <Input bind:value={variant.barcode} />
             </label>
-            <button type="button" class="link" onclick={() => removeOption(index)}>Remove</button>
+            <Button variant="link" class="text-danger" onclick={() => removeOption(index)}>Remove</Button>
           </div>
         {/each}
-        <button type="button" class="ghost my-3" onclick={addOption}>Add option</button>
+        <Button variant="secondary" class="my-3" onclick={addOption}>Add option</Button>
       </div>
 
       {#if variants.length}
         <p class="field-error">This item sells by its options, so the cashier is not asked for a quantity or a price.</p>
       {:else}
-        <div class="prompt-choices" role="radiogroup" aria-label="What the cashier enters">
-          <button type="button" class:active={prompt === 'none'} aria-checked={prompt === 'none'} role="radio" onclick={() => (prompt = 'none')}>Off</button>
-          <button type="button" class:active={prompt === 'quantity'} aria-checked={prompt === 'quantity'} role="radio" onclick={() => (prompt = 'quantity')}>Quantity / weight</button>
-          <button type="button" class:active={prompt === 'price'} aria-checked={prompt === 'price'} role="radio" onclick={() => (prompt = 'price')}>Price</button>
-        </div>
+        <Segmented
+          label="What the cashier enters"
+          value={prompt}
+          onchange={(next) => (prompt = next as typeof prompt)}
+          options={[
+            { value: 'none', label: 'Off' },
+            { value: 'quantity', label: 'Quantity / weight' },
+            { value: 'price', label: 'Price' },
+          ]}
+        />
         {#if prompt !== 'none'}
           <label>
             Base rate
-            <input inputmode="numeric" bind:value={baseRate} />
+            <Input inputmode="numeric" bind:value={baseRate} />
           </label>
           <label>
             Stock per 1
-            <input inputmode="numeric" bind:value={scale} />
+            <Input inputmode="numeric" bind:value={scale} />
           </label>
           <p class="hint">
             {#if prompt === 'quantity'}
@@ -450,9 +456,9 @@
         {/if}
       {/if}
       <div class="sheet-actions">
-        <button type="button" class="save" disabled={saving} onclick={save}>
+        <Button disabled={saving} onclick={save}>
           {saving ? 'Saving…' : 'Save'}
-        </button>
+        </Button>
       </div>
     {/if}
   </div>

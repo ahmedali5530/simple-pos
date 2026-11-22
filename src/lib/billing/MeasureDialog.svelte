@@ -3,6 +3,7 @@
   import { formatMoney } from '../money'
   import type { PosItem } from '../types'
   import { toast } from '../toast'
+  import { Button, Input } from '../ui'
 
   interface Props {
     item: PosItem
@@ -38,7 +39,7 @@
   }
 </script>
 
-<div class="sheet-backdrop" role="presentation" onclick={onClose}>
+<div class="sheet-backdrop" data-density="touch" role="presentation" onclick={onClose}>
   <div
     class="sheet measure-sheet"
     role="dialog"
@@ -62,9 +63,8 @@
         and 1 removes {item.scale} from stock.
       </p>
     {/if}
-    <input
-      bind:this={field}
-      class="measure-input"
+    <Input
+      bind:element={field}
       inputmode={askingPrice ? 'numeric' : 'decimal'}
       autocomplete="off"
       aria-label={askingPrice ? `Price for ${item.name}` : `Quantity or weight for ${item.name}`}
@@ -85,8 +85,8 @@
       </p>
     {/if}
     <div class="sheet-actions">
-      <button type="button" class="ghost" onclick={onClose}>Cancel</button>
-      <button type="button" class="save" onclick={confirm}>Add to bill</button>
+      <Button variant="secondary" onclick={onClose}>Cancel</Button>
+      <Button onclick={confirm}>Add to bill</Button>
     </div>
   </div>
 </div>

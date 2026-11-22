@@ -2,6 +2,7 @@
   import { removeUser, saveUser } from '../api'
   import type { PosSnapshot, PosUser } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input, Segmented, Switch } from '../ui'
 
   interface Props {
     users: PosUser[]
@@ -90,7 +91,7 @@
   <div class="setup-list-pane">
     <div class="catalog-head">
       <h2>Users</h2>
-      <button type="button" class="save" onclick={() => (editing = 'new')}>New user</button>
+      <Button onclick={() => (editing = 'new')}>New user</Button>
     </div>
     <p class="hint">Cashiers and managers sign in with the name and password saved here. The till stays open without a sign-in.</p>
     <div class="setup-list">
@@ -112,39 +113,33 @@
       <h2>{editing === 'new' ? 'New user' : name || 'User'}</h2>
       <label>
         Name
-        <input autocomplete="off" bind:value={name} />
+        <Input autocomplete="off" bind:value={name} />
       </label>
       <label>
         Password
-        <input type="password" autocomplete="new-password" bind:value={password} />
+        <Input type="password" autocomplete="new-password" bind:value={password} />
       </label>
       {#if selected}<p class="hint">Leave the password blank to keep the current one.</p>{/if}
-      <div class="prompt-choices" role="radiogroup" aria-label="Role">
-        <button type="button" role="radio" class:active={role === 'cashier'} aria-checked={role === 'cashier'} onclick={() => (role = 'cashier')}>Cashier</button>
-        <button type="button" role="radio" class:active={role === 'manager'} aria-checked={role === 'manager'} onclick={() => (role = 'manager')}>Manager</button>
-      </div>
-      <label class="switch-row">
-        <button
-          type="button"
-          class="switch"
-          class:on={active}
-          role="switch"
-          aria-checked={active}
-          aria-label="Account is on"
-          onclick={() => (active = !active)}
-        ><i></i></button>
-        {active ? 'Account is on' : 'Account is off'}
-      </label>
+      <Segmented
+        label="Role"
+        value={role}
+        onchange={(next) => (role = next as typeof role)}
+        options={[
+          { value: 'cashier', label: 'Cashier' },
+          { value: 'manager', label: 'Manager' },
+        ]}
+      />
+      <Switch bind:checked={active} label={active ? 'Account is on' : 'Account is off'} />
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}
-            <button type="button" class="link" disabled={saving} onclick={remove}>Remove user</button>
-            <button type="button" class="ghost light" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={remove}>Remove user</Button>
+            <Button variant="secondary" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</Button>
           {:else}
-            <button type="button" class="link" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</Button>
           {/if}
         {/if}
-        <button type="button" class="save" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+        <Button disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</Button>
       </div>
     {/if}
   </div>

@@ -1,0 +1,35 @@
+/* Semantic tokens. `@theme` also exposes them as utilities (`bg-primary`, `text-danger`, `rounded-control`). */
+@theme {
+  --color-surface: oklch(1 0 0);
+  --color-surface-muted: oklch(0.984 0.003 247.858);
+  --color-ink: oklch(0.208 0.042 265.755);
+  --color-ink-muted: oklch(0.554 0.046 257.417);
+  --color-border: oklch(0.869 0.022 252.894);
+  --color-border-strong: oklch(0.372 0.044 257.287);
+  --color-primary: oklch(0.208 0.042 265.755);
+  --color-primary-fg: oklch(1 0 0);
+  --color-primary-hover: oklch(0.279 0.037 260.031);
+  --color-danger: oklch(0.577 0.245 27.325);
+  --color-danger-fg: oklch(1 0 0);
+  --color-success: oklch(0.627 0.194 149.214);
+  --color-success-fg: oklch(1 0 0);
+  --color-warning: oklch(0.666 0.157 58.318);
+  --color-focus: oklch(0.511 0.096 186.391);
+  --radius-control: 0.75rem;
+  --radius-card: 1.125rem;
+  --font-sans: "Segoe UI", "Avenir Next", "Trebuchet MS", sans-serif;
+}
+
+:root {
+  --shadow-focus: 0 0 0 3px color-mix(in oklch, var(--color-focus) 35%, transparent);
+}
+
+/* Dark surfaces remap the same tokens, so `.btn-secondary` and `.input` restyle without a second component. */
+.on-dark {
+  --color-surface: oklch(0.21 0.034 264.665);
+  --color-surface-muted: oklch(0.278 0.033 256.848);
+  --color-ink: oklch(0.984 0.003 247.858);
+  --color-ink-muted: oklch(0.869 0.022 252.894);
+  --color-border: oklch(0.372 0.044 257.287);
+  --color-border-strong: oklch(0.446 0.037 257.281);
+}

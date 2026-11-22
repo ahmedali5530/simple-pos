@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SectionChoice } from '../types'
+  import { Button, Switch } from '../ui'
 
   interface Props {
     sections: SectionChoice[]
@@ -51,24 +52,20 @@
     </p>
     {#each rows as section, index (section.id)}
       <div class="layout-row">
-        <button
-          type="button"
-          class="switch"
-          class:on={section.show_on_pos}
-          role="switch"
-          aria-checked={section.show_on_pos}
-          aria-label="Show {section.short_name} on the till"
-          onclick={() => {
+        <Switch
+          checked={section.show_on_pos}
+          ariaLabel="Show {section.short_name} on the till"
+          onchange={() => {
             rows[index].show_on_pos = !rows[index].show_on_pos
           }}
-        ><i></i></button>
+        />
         <div>
           <strong>{section.name}</strong>
           <div class="hint">{section.short_name}</div>
         </div>
         <div class="order">
-          <button type="button" class="icon-btn" aria-label="Move {section.short_name} up" onclick={() => move(index, -1)}>↑</button>
-          <button type="button" class="icon-btn" aria-label="Move {section.short_name} down" onclick={() => move(index, 1)}>↓</button>
+          <Button variant="secondary" size="icon" aria-label="Move {section.short_name} up" onclick={() => move(index, -1)}>↑</Button>
+          <Button variant="secondary" size="icon" aria-label="Move {section.short_name} down" onclick={() => move(index, 1)}>↓</Button>
         </div>
       </div>
     {/each}
@@ -76,17 +73,10 @@
       <p class="field-error">Keep at least one section on the till.</p>
     {/if}
     <div class="sheet-actions">
-      <button type="button" class="ghost" onclick={onClose}>Cancel</button>
-      <button type="button" class="save" disabled={shown === 0 || saving} onclick={() => onSave(rows)}>
+      <Button variant="secondary" onclick={onClose}>Cancel</Button>
+      <Button disabled={shown === 0 || saving} onclick={() => onSave(rows)}>
         {saving ? 'Saving…' : `Show ${shown} on the till`}
-      </button>
+      </Button>
     </div>
   </div>
 </div>
-
-<style>
-  .ghost {
-    background: white;
-    color: #0f172a;
-  }
-</style>

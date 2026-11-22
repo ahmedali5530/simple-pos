@@ -2,6 +2,7 @@
   import { downloadWorkbook, importCategoriesWorkbook, orderCategories, removeCategory, saveCategory } from '../api'
   import type { Category, PosSnapshot } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input } from '../ui'
 
   interface Props {
     categories: Category[]
@@ -122,11 +123,11 @@
   <div class="setup-list-pane">
     <div class="catalog-head">
       <h2>Categories</h2>
-      <button type="button" class="save" onclick={() => (editing = 'new')}>New category</button>
+      <Button onclick={() => (editing = 'new')}>New category</Button>
     </div>
     <div class="mt-2.5 grid grid-cols-2 gap-2">
-      <button type="button" class="inline-flex h-[46px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900" disabled={sheetBusy || saving} onclick={exportWorkbook}>Export Excel</button>
-      <label class="mt-0 inline-flex h-[46px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900">
+      <Button variant="secondary" class="w-full" disabled={sheetBusy || saving} onclick={exportWorkbook}>Export Excel</Button>
+      <label class="btn btn-secondary w-full">
         Import Excel
         <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={sheetBusy || saving} onchange={importWorkbook} />
       </label>
@@ -139,8 +140,8 @@
             <strong>{category.name}</strong>
             <span>{counts[category.id] === 1 ? '1 item' : `${counts[category.id] ?? 0} items`}</span>
           </button>
-          <button type="button" class="icon-btn" aria-label="Move {category.name} up" disabled={index === 0 || saving} onclick={() => move(index, -1)}>↑</button>
-          <button type="button" class="icon-btn" aria-label="Move {category.name} down" disabled={index === categories.length - 1 || saving} onclick={() => move(index, 1)}>↓</button>
+          <Button variant="secondary" size="icon" aria-label="Move {category.name} up" disabled={index === 0 || saving} onclick={() => move(index, -1)}>↑</Button>
+          <Button variant="secondary" size="icon" aria-label="Move {category.name} down" disabled={index === categories.length - 1 || saving} onclick={() => move(index, 1)}>↓</Button>
         </div>
       {/each}
     </div>
@@ -153,18 +154,18 @@
       <h2>{editing === 'new' ? 'New category' : name || 'Category'}</h2>
       <label>
         Name
-        <input bind:value={name} />
+        <Input bind:value={name} />
       </label>
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}
-            <button type="button" class="link" disabled={saving} onclick={remove}>Remove category</button>
-            <button type="button" class="ghost light" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={remove}>Remove category</Button>
+            <Button variant="secondary" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</Button>
           {:else}
-            <button type="button" class="link" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</Button>
           {/if}
         {/if}
-        <button type="button" class="save" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+        <Button disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</Button>
       </div>
     {/if}
   </div>

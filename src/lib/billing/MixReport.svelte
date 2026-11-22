@@ -5,6 +5,7 @@
   import type { Reports } from '../types'
   import ReportRange from './ReportRange.svelte'
   import { toast, toastError } from '../toast'
+  import { Button } from '../ui'
   import VirtualTable from './VirtualTable.svelte'
 
   interface Props {
@@ -65,9 +66,9 @@
           <h2>Product Mix</h2>
           <p class="hint">Opening is the stock before {report.range_label}. Net is what is left after the movement in that range.</p>
         </div>
-        <button type="button" class="save" disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
+        <Button disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</Button>
       </div>
-      <input class="mb-2 mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search items" bind:value={query} />
+      <input class="input mb-2 mt-2" placeholder="Search items" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={mix} estimate={49} columns={6} reset={query} key={(line) => line.id}>
         {#snippet header()}
           <tr>

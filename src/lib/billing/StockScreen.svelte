@@ -5,6 +5,7 @@
   import { formatCost, formatMoney, nextAverageCost } from '../money'
   import type { Category, PosSection, PosSnapshot, StockBalance } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input, Segmented, Select } from '../ui'
 
   interface Props {
     sections: PosSection[]
@@ -315,13 +316,19 @@
     <h2>Record Stock In / Out</h2>
     <p class="hint">Update physical stock or record wastage</p>
     <p class="stock-label">Movement Type</p>
-    <div class="move-type" role="radiogroup" aria-label="Movement type">
-      <button type="button" role="radio" class:on={direction === 'in'} aria-checked={direction === 'in'} onclick={() => chooseDirection('in')}>Stock IN (Add)</button>
-      <button type="button" role="radio" class="out" class:on={direction === 'out'} aria-checked={direction === 'out'} onclick={() => chooseDirection('out')}>Stock OUT (Deduct)</button>
-    </div>
+    <Segmented
+      class="split"
+      label="Movement type"
+      value={direction}
+      onchange={(next) => chooseDirection(next as 'in' | 'out')}
+      options={[
+        { value: 'in', label: 'Stock IN (Add)' },
+        { value: 'out', label: 'Stock OUT (Deduct)', tone: 'danger' },
+      ]}
+    />
     <label>
       Type
-      <select value={kind} onchange={(event) => chooseKind(event.currentTarget.value)}>
+      <select class="select" value={kind} onchange={(event) => chooseKind(event.currentTarget.value)}>
         {#each kinds as entry (entry.id)}
           <option value={entry.id}>{entry.label}</option>
         {/each}
@@ -330,7 +337,7 @@
     <div class="stock-item">
       <label>
         Select item
-        <input
+        <Input
           role="combobox"
           aria-expanded={itemOpen}
           aria-autocomplete="list"
@@ -376,21 +383,21 @@
     <div class="stock-pair">
       <label>
         Quantity
-        <input inputmode="numeric" bind:value={qty} />
+        <Input inputmode="numeric" bind:value={qty} />
       </label>
       <label>
         Total amount ({currency})
-        <input inputmode="numeric" bind:value={amount} placeholder="Optional" />
+        <Input inputmode="numeric" bind:value={amount} placeholder="Optional" />
       </label>
     </div>
     <div class="stock-pair">
       <label>
         Unit price
-        <input readonly tabindex="-1" value={unitPrice == null ? '' : money(unitPrice)} />
+        <Input readonly tabindex="-1" value={unitPrice == null ? '' : money(unitPrice)} />
       </label>
       <label>
         Reason / Note
-        <input bind:value={note} placeholder="e.g. Supplier / Damage" />
+        <Input bind:value={note} placeholder="e.g. Supplier / Damage" />
       </label>
     </div>
     {#if selected}
@@ -404,11 +411,11 @@
     {:else if kind === 'purchase' && selected}
       <p class="hint">Enter the total you paid and this purchase will update the average cost.</p>
     {/if}
-    <button type="button" class="stock-update" disabled={saving} onclick={updateBalance}>{saving ? 'Saving…' : 'Update Stock Balance'}</button>
+    <Button class="mt-4 w-full" disabled={saving} onclick={updateBalance}>{saving ? 'Saving…' : 'Update Stock Balance'}</Button>
     <p class="stock-label">Excel</p>
     <div class="mt-2.5 grid grid-cols-2 gap-2">
-      <button type="button" class="inline-flex h-[46px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900" disabled={sheetBusy} onclick={exportWorkbook}>Export movements</button>
-      <label class="mt-0 inline-flex h-[46px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900">
+      <Button variant="secondary" class="w-full" disabled={sheetBusy} onclick={exportWorkbook}>Export movements</Button>
+      <label class="btn btn-secondary w-full">
         Import movements
         <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange={importWorkbook} />
       </label>
@@ -420,32 +427,32 @@
       <div class="stock-pair">
         <label>
           Business Head
-          <select bind:value={newSection}>
+          <Select bind:value={newSection}>
             {#each sections as section (section.id)}
               <option value={String(section.id)}>{section.short_name}</option>
             {/each}
-          </select>
+          </Select>
         </label>
         <label>
           Barcode (Optional)
-          <input bind:value={newBarcode} placeholder="e.g. 1005" />
+          <Input bind:value={newBarcode} placeholder="e.g. 1005" />
         </label>
       </div>
       <label>
         Item Name
-        <input bind:value={newName} placeholder="e.g. Cold Drink 500ml / Chicken Roll" />
+        <Input bind:value={newName} placeholder="e.g. Cold Drink 500ml / Chicken Roll" />
       </label>
       <div class="stock-pair">
         <label>
           Sale Rate ({currency})
-          <input inputmode="numeric" bind:value={newRate} placeholder="100" />
+          <Input inputmode="numeric" bind:value={newRate} placeholder="100" />
         </label>
         <label>
           Opening Stock
-          <input inputmode="numeric" bind:value={newOpening} />
+          <Input inputmode="numeric" bind:value={newOpening} />
         </label>
       </div>
-      <button type="button" class="stock-create" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</button>
+      <Button variant="success" class="mt-4 w-full" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</Button>
     </div>
   </aside>
 
@@ -456,15 +463,15 @@
         <p class="hint">{onHand} on hand · {formatCost(stockWorth, currency, locale)} at average cost</p>
       </div>
       <label class="head-filter">
-        <select bind:value={headId}>
+        <Select bind:value={headId}>
           <option value="all">All Heads</option>
           {#each sections as section (section.id)}
             <option value={String(section.id)}>{section.short_name}</option>
           {/each}
-        </select>
+        </Select>
       </label>
     </div>
-    <input class="mt-3 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search items, barcodes, or heads" bind:value={query} />
+    <Input class="mt-3" placeholder="Search items, barcodes, or heads" bind:value={query} />
     <VirtualTable
       class="stock-table-wrap"
       tableClass="stock-table"

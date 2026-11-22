@@ -1,6 +1,7 @@
 <script lang="ts">
   import { request } from '../../../lib/api'
   import { toast, toastError } from '../../../lib/toast'
+  import { Button, Field, Input } from '../../../lib/ui'
 
   interface PluginRow {
     id: string
@@ -72,21 +73,18 @@
       <li>
         <strong>{plugin.name}</strong>
         <span class="hint">{plugin.id} · v{plugin.version}</span>
-        <button type="button" class="sections-button" disabled={pending === plugin.id} onclick={() => toggle(plugin)}>
+        <Button variant={plugin.enabled ? 'primary' : 'secondary'} size="sm" disabled={pending === plugin.id} onclick={() => toggle(plugin)}>
           {plugin.enabled ? 'On' : 'Off'}
-        </button>
+        </Button>
       </li>
     {/each}
   </ul>
 
   <h2>API tokens</h2>
   <p class="hint">Tokens for AI agents and integrations. Destructive capabilities stay off by default.</p>
-  <label>
-    Name
-    <input bind:value={tokenName} />
-  </label>
+  <Field label="Name"><Input bind:value={tokenName} /></Field>
   <div class="sheet-actions">
-    <button type="button" class="save" onclick={createToken}>Create token</button>
+    <Button onclick={createToken}>Create token</Button>
   </div>
   {#if tokenResult}
     <p class="hint"><code>{tokenResult}</code></p>

@@ -2,6 +2,7 @@
   import { orderSections, removeSection, saveSection } from '../api'
   import type { PosSnapshot, SectionChoice, SectionKind } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input, Segmented } from '../ui'
 
   interface Props {
     sections: SectionChoice[]
@@ -99,7 +100,7 @@
   <div class="setup-list-pane">
     <div class="catalog-head">
       <h2>Sections</h2>
-      <button type="button" class="save" onclick={() => (editing = 'new')}>New section</button>
+      <Button onclick={() => (editing = 'new')}>New section</Button>
     </div>
     <p class="hint">Each section is its own bill. Tabs follow this order, and F1–F8 follow the first eight.</p>
     <div class="setup-list">
@@ -110,8 +111,8 @@
             <strong>{section.short_name}</strong>
             <span>{counts[section.id] === 1 ? '1 item' : `${counts[section.id] ?? 0} items`}</span>
           </button>
-          <button type="button" class="icon-btn" aria-label="Move {section.short_name} up" disabled={index === 0 || saving} onclick={() => move(index, -1)}>↑</button>
-          <button type="button" class="icon-btn" aria-label="Move {section.short_name} down" disabled={index === sections.length - 1 || saving} onclick={() => move(index, 1)}>↓</button>
+          <Button variant="secondary" size="icon" aria-label="Move {section.short_name} up" disabled={index === 0 || saving} onclick={() => move(index, -1)}>↑</Button>
+          <Button variant="secondary" size="icon" aria-label="Move {section.short_name} down" disabled={index === sections.length - 1 || saving} onclick={() => move(index, 1)}>↓</Button>
         </div>
       {/each}
     </div>
@@ -127,30 +128,35 @@
       {/if}
       <label>
         Name
-        <input bind:value={name} />
+        <Input bind:value={name} />
       </label>
       <label>
         Short name
-        <input bind:value={shortName} />
+        <Input bind:value={shortName} />
       </label>
-      <div class="prompt-choices" role="radiogroup" aria-label="Section kind">
-        <button type="button" role="radio" class:active={kind === 'retail'} aria-checked={kind === 'retail'} onclick={() => (kind = 'retail')}>Retail</button>
-        <button type="button" role="radio" class:active={kind === 'food'} aria-checked={kind === 'food'} onclick={() => (kind = 'food')}>Food</button>
-      </div>
+      <Segmented
+        label="Section kind"
+        value={kind}
+        onchange={(next) => (kind = next as SectionKind)}
+        options={[
+          { value: 'retail', label: 'Retail' },
+          { value: 'food', label: 'Food' },
+        ]}
+      />
       <label class="color-field">
         Color
-        <input type="color" bind:value={accent} />
+        <Input type="color" bind:value={accent} />
       </label>
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}
-            <button type="button" class="link" disabled={saving} onclick={remove}>Remove section</button>
-            <button type="button" class="ghost light" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={remove}>Remove section</Button>
+            <Button variant="secondary" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</Button>
           {:else}
-            <button type="button" class="link" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</button>
+            <Button variant="link" class="text-danger" disabled={saving} onclick={() => (confirmRemove = true)}>Remove</Button>
           {/if}
         {/if}
-        <button type="button" class="save" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+        <Button disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</Button>
       </div>
     {/if}
   </div>

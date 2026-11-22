@@ -2,6 +2,7 @@
   import { saveSettings } from '../api'
   import type { BarcodeRule, PosSnapshot } from '../types'
   import { toast, toastError, toastSaved } from '../toast'
+  import { Button, Input, Select, Switch } from '../ui'
 
   interface Props {
     snapshot: PosSnapshot
@@ -132,57 +133,46 @@
   <div class="system-form">
     <label>
       Shop name
-      <input bind:value={name} />
+      <Input bind:value={name} />
     </label>
     <label>
       Bill prefix
-      <input bind:value={billPrefix} maxlength="8" />
+      <Input bind:value={billPrefix} maxlength="8" />
     </label>
     <label>
       Currency
-      <input bind:value={currency} maxlength="3" />
+      <Input bind:value={currency} maxlength="3" />
     </label>
     <label>
       Locale
-      <input bind:value={locale} />
+      <Input bind:value={locale} />
     </label>
     <div class="option-block">
       <h3>Receipt printer</h3>
       <p class="hint">A posted sale prints a cash receipt on this computer. The sale is kept if the printer does not answer.</p>
-      <div class="switch-row">
-        <button
-          type="button"
-          class="switch"
-          class:on={printEnabled}
-          role="switch"
-          aria-checked={printEnabled}
-          aria-label="Print a receipt after each sale"
-          onclick={() => (printEnabled = !printEnabled)}
-        ><i></i></button>
-        Print a receipt after each sale
-      </div>
+      <Switch bind:checked={printEnabled} label="Print a receipt after each sale" />
       <label>
         Connection
-        <select bind:value={printerKind}>
+        <Select bind:value={printerKind}>
           <option value="network">Network</option>
           <option value="usb">USB</option>
           <option value="serial">Serial</option>
-        </select>
+        </Select>
       </label>
       {#if printerKind !== 'usb'}
         <label>
           {printerKind === 'serial' ? 'Serial port' : 'Address'}
-          <input bind:value={printerTarget} placeholder={printerKind === 'serial' ? '/dev/ttyUSB0' : '192.168.1.100'} />
+          <Input bind:value={printerTarget} placeholder={printerKind === 'serial' ? '/dev/ttyUSB0' : '192.168.1.100'} />
         </label>
       {:else}
         <label>
           USB id
-          <input bind:value={printerTarget} placeholder="0x04b8:0x0e28" />
+          <Input bind:value={printerTarget} placeholder="0x04b8:0x0e28" />
         </label>
       {/if}
       <label>
         {printerKind === 'serial' ? 'Baud' : 'Port'}
-        <input inputmode="numeric" bind:value={printerPort} />
+        <Input inputmode="numeric" bind:value={printerPort} />
       </label>
     </div>
     <div class="option-block">
@@ -192,26 +182,26 @@
         <div class="rule-edit">
           <label>
             Prefix
-            <input inputmode="numeric" bind:value={rule.prefix} />
+            <Input inputmode="numeric" bind:value={rule.prefix} />
           </label>
           <label>
             Mode
-            <select bind:value={rule.mode}>
+            <Select bind:value={rule.mode}>
               <option value="weight">Weight</option>
               <option value="price">Price</option>
-            </select>
+            </Select>
           </label>
           <label>
             Scale
-            <input inputmode="numeric" bind:value={rule.scale} />
+            <Input inputmode="numeric" bind:value={rule.scale} />
           </label>
-          <button type="button" class="link" onclick={() => removeRule(index)}>Remove</button>
+          <Button variant="link" class="text-danger" onclick={() => removeRule(index)}>Remove</Button>
         </div>
       {/each}
-      <button type="button" class="ghost light" onclick={addRule}>Add barcode rule</button>
+      <Button variant="secondary" onclick={addRule}>Add barcode rule</Button>
     </div>
     <div class="sheet-actions">
-      <button type="button" class="save" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+      <Button disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</Button>
     </div>
   </div>
 </div>

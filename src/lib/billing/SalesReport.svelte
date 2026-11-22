@@ -5,6 +5,7 @@
   import type { Reports } from '../types'
   import ReportRange from './ReportRange.svelte'
   import { toast, toastError } from '../toast'
+  import { Select } from '../ui'
   import VirtualTable from './VirtualTable.svelte'
 
   interface Props {
@@ -126,15 +127,15 @@
         </div>
         <label class="head-filter">
           <span class="sr-only">Business head</span>
-          <select bind:value={headId}>
+          <Select bind:value={headId}>
             <option value="all">All Business Heads</option>
             {#each report.sections as section (section.id)}
               <option value={section.short_name}>{section.short_name}</option>
             {/each}
-          </select>
+          </Select>
         </label>
       </div>
-      <input class="mb-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search bills" bind:value={query} />
+      <input class="input mb-2" placeholder="Search bills" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={bills} estimate={58} columns={7} reset="{headId}:{query}" key={(bill) => bill.id}>
         {#snippet header()}
           <tr>

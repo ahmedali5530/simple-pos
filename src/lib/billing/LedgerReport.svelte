@@ -81,7 +81,7 @@
           <p class="hint">Restocks, manual adjustments, and POS deductions</p>
         </div>
       </div>
-      <input class="mb-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search the ledger" bind:value={query} />
+      <input class="input mb-2" placeholder="Search the ledger" bind:value={query} />
       <VirtualList class="report-scroll" items={movements} estimate={76} reset={query} key={(move) => move.id}>
         {#snippet children(move)}
           <article class="ledger-row">

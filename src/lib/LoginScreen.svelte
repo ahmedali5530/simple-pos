@@ -3,6 +3,7 @@
   import { navigate } from './route.svelte'
   import { signIn } from './session.svelte'
   import { toast, toastError } from './toast'
+  import { Button, Field, Input } from './ui'
 
   let name = $state('')
   let password = $state('')
@@ -61,16 +62,14 @@
     <div class="mark">{initials(shopName)}</div>
     <h1>{shopName}</h1>
     <p class="hint">{needsUser ? 'Create the first manager. This account opens the shop.' : 'Sign in to open the shop.'}</p>
-    <label>
-      Name
-      <input autocomplete="username" bind:value={name} />
-    </label>
-    <label>
-      Password
-      <input type="password" autocomplete="current-password" bind:value={password} />
-    </label>
+    <Field label="Name">
+      <Input autocomplete="username" bind:value={name} />
+    </Field>
+    <Field label="Password">
+      <Input type="password" autocomplete="current-password" bind:value={password} />
+    </Field>
     <div class="sheet-actions">
-      <button type="submit" class="save" disabled={sending}>{sending ? 'Signing in…' : needsUser ? 'Create and sign in' : 'Sign in'}</button>
+      <Button type="submit" disabled={sending}>{sending ? 'Signing in…' : needsUser ? 'Create and sign in' : 'Sign in'}</Button>
     </div>
   </form>
 </div>

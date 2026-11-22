@@ -4,6 +4,7 @@
   import VirtualGrid from './VirtualGrid.svelte'
   import { formatMoney } from '../money'
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../types'
+  import { Button, Switch } from '../ui'
 
   interface Props {
     section: PosSection
@@ -209,6 +210,7 @@
     <div class="scan-row">
       <input
         id="scan-{section.id}"
+        class="input"
         data-scan={section.id}
         role="combobox"
         aria-expanded={hits.length > 0}
@@ -220,7 +222,7 @@
         type="search"
       />
       <input
-        class="scan-qty"
+        class="input scan-qty"
         inputmode="numeric"
         aria-label="Quantity to add"
         bind:value={scanQty}
@@ -311,7 +313,7 @@
   <footer class="bill">
     <div class="bill-head">
       <h3>Current {section.short_name} bill</h3>
-      <button type="button" class="link" onclick={onClear} disabled={lines.length === 0}>Clear Items</button>
+      <Button variant="link" class="text-danger" onclick={onClear} disabled={lines.length === 0}>Clear Items</Button>
     </div>
     <div class="bill-lines">
       {#if lines.length === 0}
@@ -328,6 +330,7 @@
               <span class="qty">
                 <button type="button" aria-label="Decrease {line.name}" onclick={() => onQty(line.key, line.qty - 1)}>-</button>
                 <input
+                  class="input"
                   inputmode="numeric"
                   aria-label="Quantity for {line.name}"
                   value={line.qty}
@@ -348,24 +351,14 @@
     <label class="bill-customer">
       Customer
       <input
+        class="input"
         maxlength="80"
         placeholder="Optional"
         value={customer}
         oninput={(event) => onCustomer(event.currentTarget.value)}
       />
     </label>
-    <div class="skip-print">
-      <button
-        type="button"
-        class="switch"
-        class:on={skipPrint}
-        role="switch"
-        aria-checked={skipPrint}
-        aria-label="Skip receipt"
-        onclick={() => onSkipPrint(!skipPrint)}
-      ><i></i></button>
-      Skip receipt
-    </div>
+    <Switch class="skip-print" checked={skipPrint} label="Skip receipt" onchange={onSkipPrint} />
     <div class="total-row">
       <div>
         <span>Total ({section.short_name})</span>

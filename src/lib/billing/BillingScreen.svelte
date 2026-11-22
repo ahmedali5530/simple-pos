@@ -17,6 +17,7 @@
   import { followLink, location, reportsPage, screenOf, settingsPage } from '../route.svelte'
   import { session, signOut } from '../session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../types'
+  import { Button } from '../ui'
   import AttentionDialog from './AttentionDialog.svelte'
   import MeasureDialog from './MeasureDialog.svelte'
   import CashScreen from './CashScreen.svelte'
@@ -568,7 +569,7 @@
 />
 
 <div class="app">
-  <header class="topbar">
+  <header class="topbar on-dark">
     <div class="brand">
       <div class="mark">{initials(snapshot?.shop_name ?? 'Shop')}</div>
       <div>
@@ -589,9 +590,9 @@
     <div class="top-actions">
       {#if session.user}
         <span class="who">{session.user.name}</span>
-        <button type="button" class="sections-button" onclick={leave}>Sign out</button>
+        <Button variant="secondary" onclick={leave}>Sign out</Button>
       {:else}
-        <a class="sections-button" href="/login" onclick={(event) => followLink(event, '/login')}>Sign in</a>
+        <Button variant="secondary" href="/login" onclick={(event) => followLink(event, '/login')}>Sign in</Button>
       {/if}
     </div>
   </header>
@@ -621,7 +622,7 @@
       <CashScreen currency={snapshot.currency} locale={snapshot.locale} />
     </main>
   {:else}
-    <div class="section-tabs" role="tablist" aria-label="Sections">
+    <div class="section-tabs" data-density="touch" role="tablist" aria-label="Sections">
       {#each sections as section, index (section.id)}
         <button
           type="button"
@@ -639,7 +640,7 @@
         </button>
       {/each}
     </div>
-    <main class="stage">
+    <main class="stage" data-density="touch">
       {#if active}
         <SectionPanel
           section={active}
@@ -672,7 +673,7 @@
   {/if}
 
   {#if screen === 'billing'}
-  <footer class="keys">
+  <footer class="keys" data-density="touch">
     <span>F1–F8 switch section</span>
     <span>Enter adds, selects, or applies +qty</span>
     <span>F12 posts the focused bill</span>
