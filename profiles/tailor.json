@@ -1,0 +1,4 @@
+{
+  "id": "tailor",
+  "plugins": ["catalog", "customers", "tailor", "pos", "cash", "printing"]
+}

@@ -1,0 +1,4 @@
+{
+  "id": "restaurant",
+  "plugins": ["catalog", "pos", "inventory", "cash", "printing", "reports"]
+}

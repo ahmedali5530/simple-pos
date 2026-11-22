@@ -1,0 +1,4 @@
+{
+  "id": "installment_shop",
+  "plugins": ["catalog", "customers", "installments", "pos", "cash", "printing", "reports"]
+}
