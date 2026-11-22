@@ -27,9 +27,10 @@ export const uiPlugins: UiPlugin[] = [
   mobilePlugin,
 ].map(defineUiPlugin)
 
-function pluginIsOn(id: string, enabled: Set<string>, compiled: Set<string>) {
-  if (!compiled.has(id)) return true
-  return enabled.has(id)
+function pluginIsOn(plugin: UiPlugin, enabled: Set<string>, compiled: Set<string>) {
+  if (!plugin.requiresBackend) return true
+  if (!compiled.has(plugin.id)) return false
+  return enabled.has(plugin.id)
 }
 
 export interface ResolvedSlotContribution extends UiSlotContribution {
@@ -60,14 +61,14 @@ export function slotsFor(slot: string): ResolvedSlotContribution[] {
 
 export function navForEnabled(enabled: Set<string>, compiled: Set<string>) {
   return uiPlugins
-    .filter((plugin) => pluginIsOn(plugin.id, enabled, compiled))
+    .filter((plugin) => pluginIsOn(plugin, enabled, compiled))
     .flatMap((plugin) => plugin.nav)
     .sort((a, b) => a.order - b.order)
 }
 
 export function settingsForEnabled(enabled: Set<string>, compiled: Set<string>) {
   return uiPlugins
-    .filter((plugin) => pluginIsOn(plugin.id, enabled, compiled))
+    .filter((plugin) => pluginIsOn(plugin, enabled, compiled))
     .flatMap((plugin) => plugin.settingsPages)
     .sort((a, b) => a.order - b.order)
 }
@@ -82,7 +83,7 @@ export function staticSettingsPages() {
 
 export function pageForPath(path: string, enabled: Set<string>, compiled: Set<string>) {
   const pages = uiPlugins
-    .filter((plugin) => pluginIsOn(plugin.id, enabled, compiled))
+    .filter((plugin) => pluginIsOn(plugin, enabled, compiled))
     .flatMap((plugin) => plugin.pages)
   return (
     pages.find((page) => page.path === path) ??
@@ -95,7 +96,7 @@ export function pageForPath(path: string, enabled: Set<string>, compiled: Set<st
 
 export function reportPagesForEnabled(enabled: Set<string>, compiled: Set<string>) {
   return uiPlugins
-    .filter((plugin) => pluginIsOn(plugin.id, enabled, compiled))
+    .filter((plugin) => pluginIsOn(plugin, enabled, compiled))
     .flatMap((plugin) => plugin.reportPages)
     .sort((a, b) => a.order - b.order)
 }

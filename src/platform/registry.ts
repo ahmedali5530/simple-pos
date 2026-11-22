@@ -54,6 +54,11 @@ export interface UiPlugin {
   settingsPages: UiSettingsPage[]
   reportPages: UiReportPage[]
   pages: UiPage[]
+  /**
+   * True when the backend compiles this plugin and reports it in the manifest.
+   * A frontend-only plugin (the admin screens) sets this to false.
+   */
+  requiresBackend: boolean
   /** Outlets this plugin's screens host, e.g. `catalog.item-form`. */
   slotsProvided: string[]
   /** Outlets this plugin fills, e.g. `pos.line-source`. */
@@ -62,13 +67,14 @@ export interface UiPlugin {
 }
 
 export function defineUiPlugin(
-  plugin: Omit<UiPlugin, 'pages' | 'slotsProvided' | 'contributions'> &
-    Partial<Pick<UiPlugin, 'pages' | 'slotsProvided' | 'contributions'>>,
+  plugin: Omit<UiPlugin, 'pages' | 'slotsProvided' | 'contributions' | 'requiresBackend'> &
+    Partial<Pick<UiPlugin, 'pages' | 'slotsProvided' | 'contributions' | 'requiresBackend'>>,
 ): UiPlugin {
   return {
     pages: [],
     slotsProvided: [],
     contributions: [],
+    requiresBackend: true,
     ...plugin,
   }
 }

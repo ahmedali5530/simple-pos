@@ -2,6 +2,7 @@ import { defineUiPlugin } from '../../platform/registry'
 
 export const adminPlugin = defineUiPlugin({
   id: 'admin',
+  requiresBackend: false,
   permissions: ['platform.admin', 'platform.plugins.manage', 'platform.tokens.manage'],
   nav: [],
   settingsPages: [
