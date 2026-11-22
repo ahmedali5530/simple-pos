@@ -313,6 +313,15 @@ pub struct BillLineInput {
     pub code: Option<String>,
     #[serde(default)]
     pub entry: Option<String>,
+    /// Plugin-owned line source. Defaults to `catalog.product`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Plugin-owned reference, e.g. a device id or job number.
+    #[serde(default)]
+    pub reference: Option<String>,
+    /// Plugin-owned JSON detail. POS stores it and never interprets it.
+    #[serde(default)]
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

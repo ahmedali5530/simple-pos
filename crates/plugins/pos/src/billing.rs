@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::barcode::{codes_match, embedded_sale, parse_embedded, prompt_sale};
 use platform_kernel::error::AppError;
+use sales_contract::{BillPostedV2, SaleLine};
 use crate::models::{
     BarcodeRule, BillLineInput, Category, ItemForm, ItemPromptRequest, ItemVariant, LockedItem,
     LockedVariant, PosItem, PosSection, PosSnapshot, PosUser, PostedBill, PrinterSettings, SavedItem,
@@ -16,9 +17,68 @@ struct Sale {
     rate: i32,
     qty: i32,
     units: i32,
-    stock_units: i32,
     amount: i32,
     cost_total: i64,
+    source: String,
+    reference: String,
+    details: serde_json::Value,
+}
+
+const DEFAULT_LINE_SOURCE: &str = "catalog.product";
+const MAX_SOURCE_LEN: usize = 128;
+const MAX_REFERENCE_LEN: usize = 512;
+const MAX_DETAILS_BYTES: usize = 16 * 1024;
+
+/// A posted bill plus the event body, so the route can publish v2 after the sale commits.
+pub struct PostBillOutcome {
+    pub posted: PostedBill,
+    pub event: BillPostedV2,
+}
+
+fn normalize_line_metadata(
+    line: &BillLineInput,
+) -> Result<(String, String, serde_json::Value), AppError> {
+    let source = line
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_LINE_SOURCE);
+    if source.chars().count() > MAX_SOURCE_LEN {
+        return Err(AppError::BadRequest("That line source is too long.".into()));
+    }
+    let reference = line.reference.as_deref().map(str::trim).unwrap_or("");
+    if reference.chars().count() > MAX_REFERENCE_LEN {
+        return Err(AppError::BadRequest("That line reference is too long.".into()));
+    }
+    let details = match line.details.as_ref() {
+        None | Some(serde_json::Value::Null) => serde_json::json!({}),
+        Some(value) => {
+            let size = serde_json::to_vec(value)
+                .map_err(|err| AppError::BadRequest(format!("That line detail is not valid JSON: {err}")))?
+                .len();
+            if size > MAX_DETAILS_BYTES {
+                return Err(AppError::BadRequest("That line detail is too large.".into()));
+            }
+            value.clone()
+        }
+    };
+    Ok((source.to_string(), reference.to_string(), details))
+}
+
+fn event_lines(prepared: &[Sale]) -> Vec<SaleLine> {
+    prepared
+        .iter()
+        .map(|sale| SaleLine {
+            source: sale.source.clone(),
+            reference: sale.reference.clone(),
+            label: sale.line_name.clone(),
+            quantity: sale.qty.to_string(),
+            unit_amount: i64::from(sale.rate),
+            amount: i64::from(sale.amount),
+            details: sale.details.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -778,9 +838,9 @@ pub async fn post_bill(
     customer: Option<&str>,
 ) -> Result<PostedBill, AppError> {
     let mut tx = crate::tenant::begin(pool).await?;
-    let posted = post_bill_tx(&mut tx, shop, user_id, section_id, lines, customer).await?;
+    let outcome = post_bill_tx(&mut tx, shop, user_id, section_id, lines, customer).await?;
     tx.commit().await?;
-    Ok(posted)
+    Ok(outcome.posted)
 }
 
 pub async fn post_bill_tx(
@@ -790,7 +850,7 @@ pub async fn post_bill_tx(
     section_id: i32,
     lines: &[BillLineInput],
     customer: Option<&str>,
-) -> Result<PostedBill, AppError> {
+) -> Result<PostBillOutcome, AppError> {
     if lines.is_empty() {
         return Err(AppError::BadRequest(
             "Add at least one item before posting the bill.".into(),
@@ -826,6 +886,7 @@ pub async fn post_bill_tx(
         if line.rate < 1 {
             return Err(AppError::BadRequest("Rate has to be at least 1.".into()));
         }
+        let (source, reference, details) = normalize_line_metadata(line)?;
         let item = if let Some(item) = locked.get(&line.item_id) {
             item.clone()
         } else {
@@ -967,9 +1028,11 @@ pub async fn post_bill_tx(
             rate: line.rate,
             qty: line.qty,
             units,
-            stock_units,
             amount,
             cost_total,
+            source,
+            reference,
+            details,
         });
     }
 
@@ -995,8 +1058,9 @@ pub async fn post_bill_tx(
     for sale in &prepared {
         sqlx::query(
             r#"
-            INSERT INTO bill_lines (bill_id, item_id, variant_id, name, rate, qty, units, amount, cost_total)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO bill_lines
+                (bill_id, item_id, variant_id, name, rate, qty, units, amount, cost_total, source, reference, details)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             "#,
         )
         .bind(bill_id)
@@ -1008,14 +1072,109 @@ pub async fn post_bill_tx(
         .bind(sale.units)
         .bind(sale.amount)
         .bind(sale.cost_total)
+        .bind(&sale.source)
+        .bind(&sale.reference)
+        .bind(&sale.details)
         .execute(&mut **tx)
         .await?;
     }
 
-    let pos = load_pos_tx(tx, shop).await?;
-    Ok(PostedBill {
-        bill_no,
+    let event = BillPostedV2 {
+        bill_id,
+        bill_no: bill_no.clone(),
+        section_id,
+        user_id,
         total,
-        pos,
+        lines: event_lines(&prepared),
+    };
+    let pos = load_pos_tx(tx, shop).await?;
+    Ok(PostBillOutcome {
+        posted: PostedBill {
+            bill_no,
+            total,
+            pos,
+        },
+        event,
     })
+}
+
+#[cfg(test)]
+mod line_metadata_tests {
+    use super::*;
+
+    fn input(
+        source: Option<&str>,
+        reference: Option<&str>,
+        details: Option<serde_json::Value>,
+    ) -> BillLineInput {
+        BillLineInput {
+            item_id: 1,
+            variant_id: None,
+            rate: 100,
+            qty: 1,
+            code: None,
+            entry: None,
+            source: source.map(str::to_string),
+            reference: reference.map(str::to_string),
+            details,
+        }
+    }
+
+    #[test]
+    fn defaults_to_catalog_product() {
+        let (source, reference, details) =
+            normalize_line_metadata(&input(None, None, None)).unwrap();
+        assert_eq!(source, DEFAULT_LINE_SOURCE);
+        assert_eq!(reference, "");
+        assert!(details.as_object().is_some_and(|object| object.is_empty()));
+    }
+
+    #[test]
+    fn trims_plugin_metadata() {
+        let (source, reference, details) = normalize_line_metadata(&input(
+            Some("  mobile.device  "),
+            Some("  device:7  "),
+            Some(serde_json::json!({"imei": "123"})),
+        ))
+        .unwrap();
+        assert_eq!(source, "mobile.device");
+        assert_eq!(reference, "device:7");
+        assert_eq!(details["imei"], "123");
+    }
+
+    #[test]
+    fn rejects_oversized_source() {
+        let long = "x".repeat(MAX_SOURCE_LEN + 1);
+        assert!(normalize_line_metadata(&input(Some(&long), None, None)).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_details() {
+        let big = serde_json::json!({ "note": "x".repeat(MAX_DETAILS_BYTES) });
+        assert!(normalize_line_metadata(&input(None, None, Some(big))).is_err());
+    }
+
+    #[test]
+    fn maps_prepared_lines_to_the_event() {
+        let sale = Sale {
+            item_id: 1,
+            variant_id: None,
+            line_name: "Phone".into(),
+            rate: 500,
+            qty: 2,
+            units: 1,
+            amount: 1000,
+            cost_total: 0,
+            source: "mobile.device".into(),
+            reference: "device:7".into(),
+            details: serde_json::json!({"imei": "123"}),
+        };
+        let lines = event_lines(&[sale]);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].quantity, "2");
+        assert_eq!(lines[0].unit_amount, 500);
+        assert_eq!(lines[0].amount, 1000);
+        assert_eq!(lines[0].source, "mobile.device");
+        assert_eq!(lines[0].details["imei"], "123");
+    }
 }

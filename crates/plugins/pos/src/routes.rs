@@ -3,8 +3,11 @@ use axum::response::IntoResponse;
 use axum::Json;
 use platform_kernel::error::AppError;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
+use platform_runtime::events::Outbox;
 use serde_json::json;
-use crate::billing::{load_pos_tx, post_bill_tx, set_pos_focus_tx, set_pos_sections_tx};
+use crate::billing::{
+    load_pos_tx, post_bill_tx, set_pos_focus_tx, set_pos_sections_tx, PostBillOutcome,
+};
 use crate::models::{BarcodeRule, PostBillRequest, SetFocusRequest, SetSectionsRequest, ShopConfig};
 
 struct Fail(AppError);
@@ -62,7 +65,7 @@ async fn post_bill(db: TenantDb, Json(body): Json<PostBillRequest>) -> Result<Js
         .user_id
         .ok_or_else(|| AppError::Unauthorized("Sign in before posting a bill.".into()))?;
     let mut tx = db.begin(false).await?;
-    let mut posted = post_bill_tx(
+    let PostBillOutcome { mut posted, event } = post_bill_tx(
         tx.transaction(),
         &till_fallback(),
         user_id,
@@ -73,16 +76,7 @@ async fn post_bill(db: TenantDb, Json(body): Json<PostBillRequest>) -> Result<Js
     .await?;
     plugin_inventory::sale::apply_bill(tx.transaction(), &posted.bill_no).await?;
     posted.pos = load_pos_tx(tx.transaction(), &till_fallback()).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO platform_events (tenant_id, event_type, version, payload)
-        VALUES (current_setting('app.tenant_id')::uuid, 'sales.bill_posted', 1, $1)
-        "#,
-    )
-    .bind(json!({ "bill_no": posted.bill_no, "total": posted.total }))
-    .execute(tx.conn())
-    .await
-    .map_err(AppError::from)?;
+    Outbox::publish(&mut tx, &event).await?;
     tx.commit().await?;
     Ok(Json(posted))
 }
