@@ -6,6 +6,8 @@
   import type { Category, PosItem, PosSection, PosSnapshot } from '../../../lib/types'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Segmented, Select } from '../../../lib/ui'
+  import Slot from '../../../platform/Slot.svelte'
+  import type { ExtraSave } from '../../../platform/slots'
 
   interface Props {
     sections: PosSection[]
@@ -61,6 +63,17 @@
   let pictureRemoved = $state(false)
   let picturePreview = $state<string | null>(null)
   let sheetBusy = $state(false)
+  let extraSaving = $state(false)
+
+  // Plugin-owned item data (e.g. mobile model details) saves after the catalog item has an id.
+  const extraSaves = new Map<string, ExtraSave>()
+
+  function registerExtraSave(id: string, save: ExtraSave) {
+    extraSaves.set(id, save)
+    return () => {
+      if (extraSaves.get(id) === save) extraSaves.delete(id)
+    }
+  }
 
   const shelfProfit = $derived.by(() => {
     const cents = cost.trim() === '' ? 0 : moneyToCents(cost)
@@ -271,10 +284,28 @@
         },
         { file: pictureFile, remove: pictureRemoved },
       )
+      const problems: string[] = []
+      if (result.pictureError) problems.push(result.pictureError)
+      extraSaving = true
+      try {
+        for (const [id, save] of [...extraSaves]) {
+          try {
+            await save(result.item.id)
+          } catch (error) {
+            problems.push(
+              error instanceof Error && error.message
+                ? error.message
+                : `The ${id} details were not saved.`,
+            )
+          }
+        }
+      } finally {
+        extraSaving = false
+      }
       loaded = result.item.id
       editing = result.item.id
       fill(result.item)
-      if (result.pictureError) toast.error(result.pictureError)
+      if (problems.length) toast.error(problems.join(' '))
       else toastSaved('Item saved.')
     } catch (error) {
       toastError(error, 'Could not save the item.')
@@ -455,9 +486,18 @@
           </p>
         {/if}
       {/if}
+      <Slot
+        name="catalog.item-form"
+        context={{
+          item: selected?.item ?? null,
+          itemId: typeof editing === 'number' ? editing : null,
+          editing,
+          registerExtraSave,
+        }}
+      />
       <div class="sheet-actions">
-        <Button disabled={saving} onclick={save}>
-          {saving ? 'Saving…' : 'Save'}
+        <Button disabled={saving || extraSaving} onclick={save}>
+          {saving || extraSaving ? 'Saving…' : 'Save'}
         </Button>
       </div>
     {/if}
