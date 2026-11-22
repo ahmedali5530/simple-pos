@@ -55,6 +55,7 @@ impl Plugin for PosPlugin {
             permission: Some("pos.bills.post".into()),
             order: 10,
         }];
+        manifest.slots_provided = vec!["pos.line-source".into(), "pos.line-detail".into()];
         manifest
     }
 

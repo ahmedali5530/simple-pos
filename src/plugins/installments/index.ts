@@ -22,5 +22,5 @@ export const installmentsPlugin = defineUiPlugin({
       load: () => import('../../platform/PluginPage.svelte'),
     },
   ],
-  slots: [{ name: 'pos.tender', order: 30 }],
+  contributions: [{ id: 'installments.schedule', slot: 'pos.tender', order: 30 }],
 })

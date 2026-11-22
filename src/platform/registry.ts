@@ -35,9 +35,17 @@ export interface UiPage {
   load: () => Promise<UiPageModule>
 }
 
-export interface UiSlot {
-  name: string
+export interface UiSlotModule {
+  default: import('svelte').Component
+}
+
+/** A component another plugin renders inside a named outlet. */
+export interface UiSlotContribution {
+  id: string
+  slot: string
   order: number
+  /** Omitted for metadata-only declarations that mirror the Rust manifest. */
+  component?: () => Promise<UiSlotModule>
 }
 
 export interface UiPlugin {
@@ -46,16 +54,21 @@ export interface UiPlugin {
   settingsPages: UiSettingsPage[]
   reportPages: UiReportPage[]
   pages: UiPage[]
-  slots: UiSlot[]
+  /** Outlets this plugin's screens host, e.g. `catalog.item-form`. */
+  slotsProvided: string[]
+  /** Outlets this plugin fills, e.g. `pos.line-source`. */
+  contributions: UiSlotContribution[]
   permissions: string[]
 }
 
 export function defineUiPlugin(
-  plugin: Omit<UiPlugin, 'pages' | 'slots'> & Partial<Pick<UiPlugin, 'pages' | 'slots'>>,
+  plugin: Omit<UiPlugin, 'pages' | 'slotsProvided' | 'contributions'> &
+    Partial<Pick<UiPlugin, 'pages' | 'slotsProvided' | 'contributions'>>,
 ): UiPlugin {
   return {
     pages: [],
-    slots: [],
+    slotsProvided: [],
+    contributions: [],
     ...plugin,
   }
 }

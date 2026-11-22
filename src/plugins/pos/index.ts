@@ -14,6 +14,7 @@ export const posPlugin = defineUiPlugin({
   ],
   settingsPages: [],
   reportPages: [],
+  slotsProvided: ['pos.line-source', 'pos.line-detail'],
   pages: [
     {
       path: '/billing',

@@ -1,4 +1,5 @@
-import { defineUiPlugin, type UiPlugin } from '../platform/registry'
+import { defineUiPlugin, type UiPlugin, type UiSlotContribution } from '../platform/registry'
+import { enabledPlugins } from '../platform/enabled.svelte'
 import { posPlugin } from './pos'
 import { catalogPlugin } from './catalog'
 import { inventoryPlugin } from './inventory'
@@ -27,6 +28,32 @@ export const uiPlugins: UiPlugin[] = [
 function pluginIsOn(id: string, enabled: Set<string>, compiled: Set<string>) {
   if (!compiled.has(id)) return true
   return enabled.has(id)
+}
+
+export interface ResolvedSlotContribution extends UiSlotContribution {
+  owner: string
+}
+
+/**
+ * Contributions for a named outlet. A slot only renders when its owning plugin is both compiled
+ * into the backend and enabled for this shop; before the manifest loads, nothing renders.
+ */
+export function slotsFor(slot: string): ResolvedSlotContribution[] {
+  if (!enabledPlugins.ready) return []
+  return uiPlugins
+    .filter(
+      (plugin) =>
+        enabledPlugins.compiled.includes(plugin.id) && enabledPlugins.ids.includes(plugin.id),
+    )
+    .flatMap((plugin) =>
+      plugin.contributions
+        .filter((contribution) => contribution.slot === slot && contribution.component != null)
+        .map((contribution) => ({ ...contribution, owner: plugin.id })),
+    )
+    .sort(
+      (a, b) =>
+        a.order - b.order || a.owner.localeCompare(b.owner) || a.id.localeCompare(b.id),
+    )
 }
 
 export function navForEnabled(enabled: Set<string>, compiled: Set<string>) {

@@ -5,7 +5,12 @@
   import { request } from './http'
   import { filterNav, type PlatformManifest, type UiNavItem, type UiSettingsPage } from './registry'
   import { navForEnabled, settingsForEnabled } from '../plugins/registry'
-  import { setEnabledPlugins } from './enabled.svelte'
+  import {
+    markPluginsReady,
+    setCompiledPlugins,
+    setEnabledPlugins,
+    resetPluginState,
+  } from './enabled.svelte'
   import Shell from './Shell.svelte'
 
   let manifest = $state<PlatformManifest | null>(null)
@@ -24,6 +29,8 @@
     enabledIds = available.filter((plugin) => plugin.enabled).map((plugin) => plugin.id)
     compiledIds = available.map((plugin) => plugin.id)
     setEnabledPlugins(enabledIds)
+    setCompiledPlugins(compiledIds)
+    markPluginsReady()
     settingsPages = settingsForEnabled(enabled, compiled)
     const items = navForEnabled(enabled, compiled).filter((item) => {
       if (item.id === 'settings') return settingsPages.length > 0
@@ -52,7 +59,7 @@
 
   $effect(() => {
     if (!session.user) {
-      setEnabledPlugins([])
+      resetPluginState()
       return
     }
     const load = () => {
@@ -60,6 +67,7 @@
         .then(applyManifest)
         .catch((error: unknown) => {
           nav = []
+          resetPluginState()
           console.error(error)
         })
     }

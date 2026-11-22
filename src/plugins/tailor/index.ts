@@ -7,5 +7,5 @@ export const tailorPlugin = defineUiPlugin({
   settingsPages: [],
   reportPages: [],
   pages: [{ path: '/tailor', title: 'Jobs', permission: 'tailor.read', load: () => import('./screens/JobsPage.svelte') }],
-  slots: [{ name: 'pos.line-source', order: 20 }],
+  contributions: [{ id: 'tailor.job', slot: 'pos.line-source', order: 20 }],
 })

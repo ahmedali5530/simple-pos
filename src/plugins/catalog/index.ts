@@ -19,6 +19,7 @@ export const catalogPlugin = defineUiPlugin({
     { id: 'units', label: 'Units', href: '/settings/units', permission: 'catalog.write', order: 35 },
   ],
   reportPages: [],
+  slotsProvided: ['catalog.item-form'],
   pages: [
     { path: '/settings/items', title: 'Items', permission: 'catalog.write', load: () => import('./screens/ItemsPage.svelte') },
     { path: '/settings/sections', title: 'Sections', permission: 'catalog.write', load: () => import('./screens/SectionsPage.svelte') },

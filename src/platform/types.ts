@@ -99,6 +99,10 @@ export interface CartLine {
   qty: number
   code: string | null
   entry: string | null
+  /** Plugin-owned line metadata, passed through to billing and sales.bill_posted. */
+  source?: string | null
+  reference?: string | null
+  details?: Record<string, unknown> | null
 }
 
 export interface PostedBill {

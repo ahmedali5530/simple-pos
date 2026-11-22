@@ -11,5 +11,4 @@ export const customersPlugin = defineUiPlugin({
   pages: [
     { path: '/customers', title: 'Customers', permission: 'customers.read', load: () => import('../../platform/PluginPage.svelte') },
   ],
-  slots: [],
 })

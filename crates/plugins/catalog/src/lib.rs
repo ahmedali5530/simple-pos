@@ -102,6 +102,7 @@ impl Plugin for CatalogPlugin {
                 order: 35,
             },
         ];
+        manifest.slots_provided = vec!["catalog.item-form".into()];
         manifest
     }
 
