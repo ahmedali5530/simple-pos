@@ -22,16 +22,42 @@ export interface UiReportPage {
   order: number
 }
 
+export interface UiPageModule {
+  default: import('svelte').Component
+}
+
+export interface UiPage {
+  path: string
+  title: string
+  permission?: string
+  density?: 'compact' | 'comfortable' | 'touch'
+  /** Load the page component. The shell does not import plugin screens itself. */
+  load: () => Promise<UiPageModule>
+}
+
+export interface UiSlot {
+  name: string
+  order: number
+}
+
 export interface UiPlugin {
   id: string
   nav: UiNavItem[]
   settingsPages: UiSettingsPage[]
   reportPages: UiReportPage[]
+  pages: UiPage[]
+  slots: UiSlot[]
   permissions: string[]
 }
 
-export function defineUiPlugin(plugin: UiPlugin): UiPlugin {
-  return plugin
+export function defineUiPlugin(
+  plugin: Omit<UiPlugin, 'pages' | 'slots'> & Partial<Pick<UiPlugin, 'pages' | 'slots'>>,
+): UiPlugin {
+  return {
+    pages: [],
+    slots: [],
+    ...plugin,
+  }
 }
 
 export interface PlatformManifest {

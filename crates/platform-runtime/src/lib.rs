@@ -8,6 +8,9 @@ pub mod gateway;
 pub mod http;
 pub mod migrations;
 pub mod plugins;
+pub mod print_transport;
+pub mod profiles;
+pub mod settings;
 
 pub use boot::{BootConfig, Platform};
 pub use db::{Pools, TenantTxExt};

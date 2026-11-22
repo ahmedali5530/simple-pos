@@ -6,6 +6,7 @@ export const adminPlugin = defineUiPlugin({
   nav: [],
   settingsPages: [
     { id: 'users', label: 'Users', href: '/settings/users', permission: 'users.write', order: 40 },
+    { id: 'system', label: 'System', href: '/settings/system', permission: 'settings.write', order: 50 },
     {
       id: 'plugins',
       label: 'Plugins',
@@ -15,4 +16,14 @@ export const adminPlugin = defineUiPlugin({
     },
   ],
   reportPages: [],
+  pages: [
+    { path: '/settings/users', title: 'Users', permission: 'users.write', load: () => import('./screens/UsersPage.svelte') },
+    { path: '/settings/system', title: 'System', permission: 'settings.write', load: () => import('./screens/SystemPage.svelte') },
+    {
+      path: '/settings/plugins',
+      title: 'Plugins',
+      permission: 'platform.plugins.manage',
+      load: () => import('./screens/PluginsPage.svelte'),
+    },
+  ],
 })

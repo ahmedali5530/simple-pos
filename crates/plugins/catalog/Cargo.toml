@@ -6,13 +6,15 @@ license = "MIT"
 
 [dependencies]
 async-trait = "0.1"
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "multipart"] }
 platform-kernel = { path = "../../platform-kernel" }
 platform-runtime = { path = "../../platform-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "macros"] }
 catalog-contract = { path = "../../contracts/catalog-contract" }
+calamine = "0.38.0"
+rust_xlsxwriter = "0.102.0"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

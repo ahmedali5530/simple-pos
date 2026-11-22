@@ -46,10 +46,18 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  align-items: baseline;
+  align-items: center;
   padding: 0.75rem 1rem;
   border: 1px solid color-mix(in oklab, canvasText 12%, transparent);
   border-radius: 0.75rem;
+  justify-content: space-between;
+}
+.plugin-list .plugin-copy {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.plugin-list .plugin-copy p {
+  margin: 0.25rem 0 0;
 }
 .plugin-list .badge {
   margin-left: auto;
@@ -71,9 +79,27 @@ button:disabled {
 
 .app {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
+}
+
+.outlet[data-density="touch"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.outlet {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
 }
 
 .topbar {
@@ -228,9 +254,9 @@ button:disabled {
 
 .section-tabs {
   display: flex;
+  flex-shrink: 0;
   gap: 8px;
   padding: 0 18px;
-  /* background: #0b1220; */
   overflow-x: auto;
 }
 
@@ -1225,6 +1251,7 @@ label.head-filter { width: 180px; flex: 0 0 auto; margin-top: 0; }
 
 .keys {
   display: flex;
+  flex-shrink: 0;
   gap: 14px;
   padding: 8px 18px 12px;
   color: #64748b;

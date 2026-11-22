@@ -14,4 +14,13 @@ export const posPlugin = defineUiPlugin({
   ],
   settingsPages: [],
   reportPages: [],
+  pages: [
+    {
+      path: '/billing',
+      title: 'POS Billing',
+      permission: 'pos.bills.post',
+      density: 'touch',
+      load: () => import('./screens/BillingScreen.svelte'),
+    },
+  ],
 })

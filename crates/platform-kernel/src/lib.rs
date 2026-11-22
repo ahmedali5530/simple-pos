@@ -20,7 +20,10 @@ pub use contract::Registrar;
 pub use error::{AppError, ErrorBody};
 pub use event::{DomainEvent, EventEnvelope, EventHandler};
 pub use events::PluginEvents;
-pub use manifest::{Dependency, ManifestError, NavItem, PluginId, PluginManifest, ReportPage, SettingsPage};
+pub use manifest::{
+    Dependency, ManifestError, NavItem, PageDecl, PluginConsents, PluginId, PluginManifest, ReportPage,
+    SettingsPage, SlotDecl, SwitchConsent,
+};
 pub use migrate::Migration;
 pub use permission::Permission;
 pub use plugin::Plugin;

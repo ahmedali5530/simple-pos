@@ -1,3 +1,9 @@
+pub mod admin;
+pub mod barcode;
+pub mod billing;
+pub mod models;
+pub mod tenant;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,7 +13,7 @@ use platform_kernel::contract::{DeletionVeto, Registrar};
 use platform_kernel::error::AppError;
 use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
 use platform_kernel::migrate::Migration;
-use platform_kernel::permission::{builtins, Permission};
+use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
 use catalog_contract::CatalogApi;
@@ -28,13 +34,13 @@ impl Plugin for PosPlugin {
             Dependency::new("printing", "^0.1"),
         ];
         manifest.permissions = vec![
-            Permission::new(builtins::POS_READ),
-            Permission::new(builtins::POS_BILL),
+            Permission::new("pos.read"),
+            Permission::new("pos.bills.post"),
         ];
         manifest.capabilities = vec![Capability {
             id: "pos.snapshot".into(),
             kind: CapabilityKind::Query,
-            permission: builtins::POS_READ.into(),
+            permission: "pos.read".into(),
             effect: CapabilityEffect::Read,
             requires_confirmation: false,
             input_schema: json!({"type":"object"}),
@@ -46,14 +52,19 @@ impl Plugin for PosPlugin {
             id: "billing".into(),
             label: "POS Billing".into(),
             href: "/billing".into(),
-            permission: Some(builtins::POS_BILL.into()),
+            permission: Some("pos.bills.post".into()),
             order: 10,
         }];
         manifest
     }
 
     fn migrations(&self) -> &'static [Migration] {
-        &[]
+        static MIGRATIONS: &[Migration] = &[Migration::new(
+            1,
+            "line_source",
+            include_str!("../migrations/001_line_source.sql"),
+        )];
+        MIGRATIONS
     }
 
     fn routes(&self, routes: &mut PluginRoutes) -> Result<(), RegistrationError> {

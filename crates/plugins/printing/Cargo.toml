@@ -12,7 +12,9 @@ platform-runtime = { path = "../../platform-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
-shop-core = { path = "../../shop-core" }
+plugin-pos = { path = "../pos" }
+plugin-inventory = { path = "../inventory" }
+plugin-cash = { path = "../cash" }
 printing-contract = { path = "../../contracts/printing-contract" }
 serialport = "4.10"
 chrono = "0.4"

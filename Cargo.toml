@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/shop-core",
     "crates/shop-api",
     "crates/platform-kernel",
     "crates/platform-runtime",
@@ -17,4 +16,7 @@ members = [
     "crates/plugins/cash",
     "crates/plugins/printing",
     "crates/plugins/reports",
+    "crates/plugins/customers",
+    "crates/plugins/tailor",
+    "crates/plugins/installments",
 ]

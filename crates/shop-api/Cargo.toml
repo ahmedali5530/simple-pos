@@ -7,7 +7,6 @@ license = "MIT"
 [dependencies]
 axum = { version = "0.8", features = ["multipart"] }
 axum-frontend = { version = "0.2", optional = true }
-shop-core = { path = "../shop-core" }
 platform-kernel = { path = "../platform-kernel" }
 platform-runtime = { path = "../platform-runtime" }
 platform-identity = { path = "../platform-identity" }
@@ -17,10 +16,14 @@ plugin-pos = { path = "../plugins/pos" }
 plugin-cash = { path = "../plugins/cash" }
 plugin-printing = { path = "../plugins/printing" }
 plugin-reports = { path = "../plugins/reports" }
+plugin-customers = { path = "../plugins/customers" }
+plugin-tailor = { path = "../plugins/tailor" }
+plugin-installments = { path = "../plugins/installments" }
 dotenvy = "0.15"
 getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
 rust-embed = { version = "8", optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -37,6 +40,7 @@ web = ["dep:axum-frontend", "dep:rust-embed"]
 bundle = ["web", "dep:postgresql_embedded"]
 
 [dev-dependencies]
+plugin-pos = { path = "../plugins/pos" }
 bcrypt = "0.16"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

@@ -1,29 +1,11 @@
-import { session, signOut } from './session.svelte'
 import type { CashDesk, PosSnapshot, PosUser, PostedBill, Reports, StockBalance, StockMovement } from './types'
+import { request } from '../platform/http'
+import { session, signOut } from './session.svelte'
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  if (!(init?.body instanceof FormData) && !headers.has('content-type') && init?.body) {
-    headers.set('content-type', 'application/json')
-  }
-  if (session.user?.token && !headers.has('authorization')) {
-    headers.set('authorization', `Bearer ${session.user.token}`)
-  }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-  })
-  if (response.status === 204) return undefined as T
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string }
-  if (response.status === 401) signOut()
-  if (!response.ok) {
-    throw new Error(body.error || `Request failed (${response.status})`)
-  }
-  return body
-}
+export { request }
 
 export function loadPos(): Promise<PosSnapshot> {
-  return request('/api/pos')
+  return request('/api/v1/pos/snapshot')
 }
 
 export function rememberSection(sectionId: number): Promise<{ last_section_id: number }> {
@@ -65,38 +47,42 @@ export interface CatalogItem {
   unit_id?: number | null
 }
 
-export function saveCatalogItem(
+export async function saveCatalogItem(
   itemId: number | null,
   body: CatalogItem,
 ): Promise<{ item_id: number; pos: PosSnapshot }> {
-  const path = itemId == null ? '/api/items' : `/api/items/${itemId}`
-  return request(path, {
+  const path = itemId == null ? '/api/v1/catalog/items' : `/api/v1/catalog/items/${itemId}`
+  const saved = await request<{ item_id: number }>(path, {
     method: itemId == null ? 'POST' : 'PUT',
     body: JSON.stringify(body),
   })
+  return { item_id: saved.item_id, pos: await loadPos() }
 }
 
-export function saveItemPicture(
+export async function saveItemPicture(
   itemId: number,
   file: File,
 ): Promise<{ item_id: number; pos: PosSnapshot }> {
   const body = new FormData()
   body.append('picture', file)
-  return request(`/api/items/${itemId}/image`, { method: 'POST', body })
+  const saved = await request<{ item_id: number }>(`/api/v1/catalog/items/${itemId}/image`, { method: 'POST', body })
+  return { item_id: saved.item_id, pos: await loadPos() }
 }
 
-export function removeItemPicture(itemId: number): Promise<{ item_id: number; pos: PosSnapshot }> {
-  return request(`/api/items/${itemId}/image`, { method: 'DELETE' })
+export async function removeItemPicture(itemId: number): Promise<{ item_id: number; pos: PosSnapshot }> {
+  const saved = await request<{ item_id: number }>(`/api/v1/catalog/items/${itemId}/image`, { method: 'DELETE' })
+  return { item_id: saved.item_id, pos: await loadPos() }
 }
 
-export function saveItemPrompt(
+export async function saveItemPrompt(
   itemId: number,
   body: { prompt: 'none' | 'quantity' | 'price'; base_rate: number | null; scale: number },
 ): Promise<PosSnapshot> {
-  return request(`/api/items/${itemId}/prompt`, {
+  await request(`/api/v1/catalog/items/${itemId}/prompt`, {
     method: 'PUT',
     body: JSON.stringify(body),
   })
+  return loadPos()
 }
 
 export interface SavedRecord {
@@ -104,36 +90,42 @@ export interface SavedRecord {
   pos: PosSnapshot
 }
 
-export function saveSection(
+export async function saveSection(
   id: number | null,
   body: { name: string; short_name: string; kind: 'retail' | 'food'; accent: string },
 ): Promise<SavedRecord> {
-  const path = id == null ? '/api/sections' : `/api/sections/${id}`
-  return request(path, { method: id == null ? 'POST' : 'PUT', body: JSON.stringify(body) })
+  const path = id == null ? '/api/v1/catalog/sections' : `/api/v1/catalog/sections/${id}`
+  const saved = await request<{ id: number }>(path, { method: id == null ? 'POST' : 'PUT', body: JSON.stringify(body) })
+  return { id: saved.id, pos: await loadPos() }
 }
 
-export function removeSection(id: number): Promise<PosSnapshot> {
-  return request(`/api/sections/${id}`, { method: 'DELETE' })
+export async function removeSection(id: number): Promise<PosSnapshot> {
+  await request(`/api/v1/catalog/sections/${id}`, { method: 'DELETE' })
+  return loadPos()
 }
 
-export function orderSections(ids: number[]): Promise<PosSnapshot> {
-  return request('/api/sections/order', { method: 'PUT', body: JSON.stringify({ ids }) })
+export async function orderSections(ids: number[]): Promise<PosSnapshot> {
+  await request('/api/v1/catalog/sections/order', { method: 'PUT', body: JSON.stringify({ ids }) })
+  return loadPos()
 }
 
-export function saveCategory(id: number | null, name: string): Promise<SavedRecord> {
-  const path = id == null ? '/api/categories' : `/api/categories/${id}`
-  return request(path, {
+export async function saveCategory(id: number | null, name: string): Promise<SavedRecord> {
+  const path = id == null ? '/api/v1/catalog/categories' : `/api/v1/catalog/categories/${id}`
+  const saved = await request<{ id: number }>(path, {
     method: id == null ? 'POST' : 'PUT',
     body: JSON.stringify({ name }),
   })
+  return { id: saved.id, pos: await loadPos() }
 }
 
-export function removeCategory(id: number): Promise<PosSnapshot> {
-  return request(`/api/categories/${id}`, { method: 'DELETE' })
+export async function removeCategory(id: number): Promise<PosSnapshot> {
+  await request(`/api/v1/catalog/categories/${id}`, { method: 'DELETE' })
+  return loadPos()
 }
 
-export function orderCategories(ids: number[]): Promise<PosSnapshot> {
-  return request('/api/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) })
+export async function orderCategories(ids: number[]): Promise<PosSnapshot> {
+  await request('/api/v1/catalog/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) })
+  return loadPos()
 }
 
 export function saveUser(
@@ -148,21 +140,26 @@ export function removeUser(id: number): Promise<PosSnapshot> {
   return request(`/api/users/${id}`, { method: 'DELETE' })
 }
 
-export function saveSettings(body: {
+export function saveShopProfile(body: {
   name: string
   currency: string
   locale: string
   bill_prefix: string
   barcode_rules: { prefix: string; mode: 'weight' | 'price'; scale: number }[]
+}): Promise<PosSnapshot> {
+  return request('/api/v1/platform/shop', { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export function savePrinter(body: {
   print_enabled: boolean
   printer_kind: string
   printer_target: string
   printer_port: number
 }): Promise<PosSnapshot> {
-  return request('/api/settings', { method: 'PUT', body: JSON.stringify(body) })
+  return request('/api/v1/printing/settings', { method: 'PUT', body: JSON.stringify(body) })
 }
 
-export function adjustStock(body: {
+export async function adjustStock(body: {
   item_id: number
   qty: number
   direction: 'in' | 'out'
@@ -170,7 +167,11 @@ export function adjustStock(body: {
   update_cost?: boolean
   total?: number | null
 }): Promise<{ pos: PosSnapshot; movements: StockMovement[] }> {
-  return request('/api/stock', { method: 'POST', body: JSON.stringify(body) })
+  const adjusted = await request<{ movements: StockMovement[] }>('/api/v1/inventory/adjust', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return { movements: adjusted.movements, pos: await loadPos() }
 }
 
 export interface ItemImportResult {
@@ -178,7 +179,6 @@ export interface ItemImportResult {
   updated: number
   options: number
   counted: number
-  pos: PosSnapshot
 }
 
 export interface MovementImportResult {
@@ -209,34 +209,34 @@ export interface CategoryImportResult {
   updated: number
   removed: number
   reordered: boolean
-  pos: PosSnapshot
 }
 
 export function importCategoriesWorkbook(file: File): Promise<CategoryImportResult> {
   const body = new FormData()
   body.append('file', file)
-  return request('/api/categories/import', { method: 'POST', body })
+  return request('/api/v1/catalog/categories/import', { method: 'POST', body })
 }
 
 export function importItemsWorkbook(file: File): Promise<ItemImportResult> {
   const body = new FormData()
   body.append('file', file)
-  return request('/api/items/import', { method: 'POST', body })
+  return request('/api/v1/catalog/items/import', { method: 'POST', body })
 }
 
-export function importMovementsWorkbook(file: File): Promise<MovementImportResult> {
+export async function importMovementsWorkbook(file: File): Promise<MovementImportResult> {
   const body = new FormData()
   body.append('file', file)
-  return request('/api/stock/import', { method: 'POST', body })
+  const imported = await request<{ applied: number }>('/api/v1/catalog/movements/import', { method: 'POST', body })
+  return { applied: imported.applied, pos: await loadPos() }
 }
 
 export function loadStockSummary(): Promise<StockBalance[]> {
-  return request('/api/stock/summary')
+  return request('/api/v1/inventory/summary')
 }
 
 export function loadMovements(itemId?: number): Promise<StockMovement[]> {
   const query = itemId == null ? '' : `?item_id=${itemId}`
-  return request(`/api/stock/movements${query}`)
+  return request(`/api/v1/inventory/movements${query}`)
 }
 
 export function loadReports(from?: string, to?: string): Promise<Reports> {
@@ -246,15 +246,15 @@ export function loadReports(from?: string, to?: string): Promise<Reports> {
     params.set('to', to)
   }
   const query = params.size ? `?${params}` : ''
-  return request(`/api/reports${query}`)
+  return request(`/api/v1/reports/summary${query}`)
 }
 
 export function loadCashDesk(): Promise<CashDesk> {
-  return request('/api/cash')
+  return request('/api/v1/cash/desk')
 }
 
 export function openCashShift(openingCash: number, pettyCash: number): Promise<CashDesk> {
-  return request('/api/cash/open', {
+  return request('/api/v1/cash/open', {
     method: 'POST',
     body: JSON.stringify({ opening_cash: openingCash, petty_cash: pettyCash }),
   })
@@ -267,11 +267,11 @@ export interface CashShiftBody {
 }
 
 export function saveCashDraft(body: CashShiftBody): Promise<CashDesk> {
-  return request('/api/cash/draft', { method: 'POST', body: JSON.stringify(body) })
+  return request('/api/v1/cash/draft', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function closeCashShift(body: CashShiftBody): Promise<CashDesk> {
-  return request('/api/cash/close', { method: 'POST', body: JSON.stringify(body) })
+  return request('/api/v1/cash/close', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function login(name: string, password: string): Promise<PosUser & { token: string }> {

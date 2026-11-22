@@ -55,6 +55,21 @@ pub async fn provision(admin: &PgPool, app_password: &str) -> Result<(), AppErro
     Ok(())
 }
 
+/// Grant the app role access to tables created after the first provision.
+pub async fn grant_existing(admin: &PgPool) -> Result<(), AppError> {
+    sqlx::query(&format!(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}"
+    ))
+    .execute(admin)
+    .await?;
+    sqlx::query(&format!(
+        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}"
+    ))
+    .execute(admin)
+    .await?;
+    Ok(())
+}
+
 /// Refuse to start if the runtime role can bypass RLS.
 pub async fn startup_guard(runtime: &PgPool) -> Result<(), AppError> {
     let row: Option<(bool, bool, String)> = sqlx::query_as(

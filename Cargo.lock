@@ -1831,7 +1831,6 @@ dependencies = [
  "sales-contract",
  "serde",
  "serde_json",
- "shop-core",
  "sqlx 0.8.6",
 ]
 
@@ -1841,6 +1840,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "calamine",
  "catalog-contract",
  "platform-kernel",
  "platform-runtime",
@@ -1849,12 +1849,37 @@ dependencies = [
  "plugin-pos",
  "plugin-printing",
  "plugin-reports",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sqlx 0.8.6",
  "tokio",
  "tower",
  "uuid",
+]
+
+[[package]]
+name = "plugin-customers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "serde",
+ "serde_json",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-installments"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "serde",
+ "serde_json",
+ "sqlx 0.8.6",
 ]
 
 [[package]]
@@ -1870,7 +1895,6 @@ dependencies = [
  "platform-sheets",
  "serde",
  "serde_json",
- "shop-core",
  "sqlx 0.8.6",
 ]
 
@@ -1880,7 +1904,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "bcrypt",
  "catalog-contract",
+ "getrandom 0.2.17",
  "inventory-contract",
  "platform-kernel",
  "platform-runtime",
@@ -1893,7 +1919,6 @@ dependencies = [
  "sales-contract",
  "serde",
  "serde_json",
- "shop-core",
  "sqlx 0.8.6",
  "tokio",
  "tower",
@@ -1909,11 +1934,13 @@ dependencies = [
  "chrono",
  "platform-kernel",
  "platform-runtime",
+ "plugin-cash",
+ "plugin-inventory",
+ "plugin-pos",
  "printing-contract",
  "serde",
  "serde_json",
  "serialport",
- "shop-core",
  "sqlx 0.8.6",
 ]
 
@@ -1926,11 +1953,23 @@ dependencies = [
  "inventory-contract",
  "platform-kernel",
  "platform-runtime",
+ "plugin-inventory",
  "printing-contract",
  "sales-contract",
  "serde",
  "serde_json",
- "shop-core",
+ "sqlx 0.8.6",
+]
+
+[[package]]
+name = "plugin-tailor"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "serde",
+ "serde_json",
  "sqlx 0.8.6",
 ]
 
@@ -2387,6 +2426,7 @@ dependencies = [
  "platform-kernel",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2638,15 +2678,17 @@ dependencies = [
  "platform-runtime",
  "plugin-cash",
  "plugin-catalog",
+ "plugin-customers",
+ "plugin-installments",
  "plugin-inventory",
  "plugin-pos",
  "plugin-printing",
  "plugin-reports",
+ "plugin-tailor",
  "postgresql_embedded",
  "rust-embed",
  "serde",
  "serde_json",
- "shop-core",
  "sqlx 0.8.6",
  "tokio",
  "toml",
@@ -2655,22 +2697,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "shop-core"
-version = "0.1.0"
-dependencies = [
- "bcrypt",
- "calamine",
- "chrono",
- "getrandom 0.2.17",
- "rust_xlsxwriter",
- "serde",
- "serde_json",
- "serialport",
- "sqlx 0.8.6",
- "tokio",
 ]
 
 [[package]]

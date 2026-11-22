@@ -86,10 +86,10 @@ mod tests {
     #[async_trait]
     impl EventHandler for Probe {
         fn event_type(&self) -> &str {
-            "sales.bill_posted"
+            "sales.posted"
         }
         fn subscriber_id(&self) -> &str {
-            "stock"
+            "probe"
         }
         async fn handle(&self, _: &mut TenantTx<'_>, _: &EventEnvelope) -> Result<(), AppError> {
             Ok(())
@@ -106,11 +106,11 @@ mod tests {
     #[test]
     fn forces_subscriber_id_under_the_plugin() {
         let mut consumed = HashSet::new();
-        consumed.insert("sales.bill_posted".into());
+        consumed.insert("sales.posted".into());
         let mut events = PluginEvents::new(PluginId::must("inventory"), consumed);
         events.on(Arc::new(Probe)).unwrap();
         let handlers = events.into_handlers();
-        assert_eq!(handlers[0].subscriber_id(), "inventory:stock");
+        assert_eq!(handlers[0].subscriber_id(), "inventory:probe");
         assert_eq!(handlers[0].owner_plugin(), Some("inventory"));
     }
 }

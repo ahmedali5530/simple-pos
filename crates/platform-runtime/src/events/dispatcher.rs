@@ -125,7 +125,50 @@ impl EventDispatcher {
                     payload: payload.clone(),
                     created_at: chrono_lite::DateTime(created_at.to_rfc3339()),
                 };
-                handler.handle(&mut tx, &envelope).await?;
+                if let Err(err) = handler.handle(&mut tx, &envelope).await {
+                    let message = err.to_string();
+                    tx.rollback().await.ok();
+                    let mut fail_tx =
+                        TenantTx::begin_with(&self.pool, tenant_id, Actor::system(), false).await?;
+                    let attempts: i32 = sqlx::query_scalar(
+                        r#"
+                        INSERT INTO platform_event_failures (tenant_id, subscriber_id, event_id, error, attempts)
+                        VALUES ($1, $2, $3, $4, 1)
+                        ON CONFLICT (tenant_id, subscriber_id, event_id) DO UPDATE
+                        SET error = EXCLUDED.error, attempts = platform_event_failures.attempts + 1, updated_at = now()
+                        RETURNING attempts
+                        "#,
+                    )
+                    .bind(tenant_uuid)
+                    .bind(handler.subscriber_id())
+                    .bind(id)
+                    .bind(&message)
+                    .fetch_one(fail_tx.conn())
+                    .await?;
+                    if attempts < 3 {
+                        fail_tx.commit().await?;
+                        tracing::warn!(error = %message, subscriber = handler.subscriber_id(), "event handler will retry");
+                        continue;
+                    }
+                    sqlx::query(
+                        r#"
+                        INSERT INTO platform_event_deliveries (tenant_id, subscriber_id, last_event_id, last_created_at)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (tenant_id, subscriber_id) DO UPDATE
+                        SET last_event_id = EXCLUDED.last_event_id,
+                            last_created_at = EXCLUDED.last_created_at
+                        "#,
+                    )
+                    .bind(tenant_uuid)
+                    .bind(handler.subscriber_id())
+                    .bind(id)
+                    .bind(created_at)
+                    .execute(fail_tx.conn())
+                    .await?;
+                    fail_tx.commit().await?;
+                    tracing::warn!(error = %message, subscriber = handler.subscriber_id(), "event handler moved to the dead letter");
+                    continue;
+                }
                 sqlx::query(
                     r#"
                     INSERT INTO platform_event_deliveries (tenant_id, subscriber_id, last_event_id, last_created_at)

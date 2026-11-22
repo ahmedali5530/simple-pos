@@ -29,16 +29,6 @@ pub mod builtins {
     pub const PLATFORM_ADMIN: &str = "platform.admin";
     pub const PLATFORM_PLUGINS: &str = "platform.plugins.manage";
     pub const PLATFORM_TOKENS: &str = "platform.tokens.manage";
-    pub const CATALOG_READ: &str = "catalog.read";
-    pub const CATALOG_WRITE: &str = "catalog.write";
-    pub const INVENTORY_READ: &str = "inventory.read";
-    pub const INVENTORY_WRITE: &str = "inventory.write";
-    pub const POS_BILL: &str = "pos.bills.post";
-    pub const POS_READ: &str = "pos.read";
-    pub const CASH_READ: &str = "cash.read";
-    pub const CASH_WRITE: &str = "cash.write";
-    pub const REPORTS_READ: &str = "reports.read";
-    pub const PRINTING_USE: &str = "printing.use";
     pub const SETTINGS_WRITE: &str = "settings.write";
     pub const USERS_WRITE: &str = "users.write";
 }

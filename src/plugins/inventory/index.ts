@@ -14,4 +14,12 @@ export const inventoryPlugin = defineUiPlugin({
   ],
   settingsPages: [],
   reportPages: [],
+  pages: [
+    {
+      path: '/stock',
+      title: 'Stock',
+      permission: 'inventory.write',
+      load: () => import('./screens/StockPage.svelte'),
+    },
+  ],
 })

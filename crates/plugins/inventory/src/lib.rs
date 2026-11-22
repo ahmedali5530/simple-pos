@@ -7,11 +7,18 @@ use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityHandle
 use platform_kernel::context::TenantTx;
 use platform_kernel::contract::Registrar;
 use platform_kernel::error::AppError;
+use platform_kernel::event::{EventEnvelope, EventHandler};
+use platform_kernel::events::PluginEvents;
 use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
+use platform_kernel::routes::RegistrationError;
 use platform_kernel::migrate::Migration;
-use platform_kernel::permission::{builtins, Permission};
+use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use serde_json::json;
+
+pub mod ledger;
+mod routes;
+pub mod sale;
 
 pub struct InventoryPlugin;
 
@@ -21,14 +28,14 @@ impl Plugin for InventoryPlugin {
         manifest.description = "Stock balances, average cost and movements.".into();
         manifest.requires = vec![Dependency::new("catalog", "^0.1")];
         manifest.permissions = vec![
-            Permission::new(builtins::INVENTORY_READ),
-            Permission::new(builtins::INVENTORY_WRITE),
+            Permission::new("inventory.read"),
+            Permission::new("inventory.write"),
         ];
         manifest.capabilities = vec![
             Capability {
                 id: "inventory.summary".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::INVENTORY_READ.into(),
+                permission: "inventory.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object","properties":{}}),
@@ -38,7 +45,7 @@ impl Plugin for InventoryPlugin {
             Capability {
                 id: "inventory.adjust".into(),
                 kind: CapabilityKind::Command,
-                permission: builtins::INVENTORY_WRITE.into(),
+                permission: "inventory.write".into(),
                 effect: CapabilityEffect::Write,
                 requires_confirmation: true,
                 input_schema: json!({
@@ -60,7 +67,7 @@ impl Plugin for InventoryPlugin {
             id: "stock".into(),
             label: "Stock In / Out".into(),
             href: "/stock".into(),
-            permission: Some(builtins::INVENTORY_WRITE.into()),
+            permission: Some("inventory.write".into()),
             order: 20,
         }];
         manifest
@@ -68,6 +75,15 @@ impl Plugin for InventoryPlugin {
 
     fn migrations(&self) -> &'static [Migration] {
         &[]
+    }
+
+    fn routes(&self, routes: &mut platform_kernel::routes::PluginRoutes) -> Result<(), RegistrationError> {
+        routes::mount(routes)
+    }
+
+    fn event_handlers(&self, events: &mut PluginEvents) -> Result<(), RegistrationError> {
+        events.on(Arc::new(OnBillPosted))?;
+        Ok(())
     }
 
     fn register(&self, registrar: &mut Registrar) {
@@ -83,7 +99,7 @@ impl Plugin for InventoryPlugin {
             Capability {
                 id: "inventory.summary".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::INVENTORY_READ.into(),
+                permission: "inventory.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object"}),
@@ -96,7 +112,7 @@ impl Plugin for InventoryPlugin {
             Capability {
                 id: "inventory.adjust".into(),
                 kind: CapabilityKind::Command,
-                permission: builtins::INVENTORY_WRITE.into(),
+                permission: "inventory.write".into(),
                 effect: CapabilityEffect::Write,
                 requires_confirmation: true,
                 input_schema: json!({
@@ -114,6 +130,26 @@ impl Plugin for InventoryPlugin {
             },
             Arc::new(AdjustCapability { catalog }),
         );
+    }
+}
+
+struct OnBillPosted;
+
+#[async_trait]
+impl EventHandler for OnBillPosted {
+    fn event_type(&self) -> &str {
+        "sales.bill_posted"
+    }
+
+    fn subscriber_id(&self) -> &str {
+        "sale"
+    }
+
+    async fn handle(&self, tx: &mut TenantTx<'_>, envelope: &EventEnvelope) -> Result<(), AppError> {
+        let Some(bill_no) = envelope.payload.get("bill_no").and_then(|value| value.as_str()) else {
+            return Ok(());
+        };
+        sale::apply_bill(tx.transaction(), bill_no).await
     }
 }
 

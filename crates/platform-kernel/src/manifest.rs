@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::capability::Capability;
 use crate::permission::Permission;
 
-/// Schema version of [`PluginManifest`]. Bump only on a breaking manifest change.
-pub const MANIFEST_VERSION: u32 = 1;
+/// Schema version of [`PluginManifest`]. Version 1 manifests stay readable.
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// Kernel API this binary implements. Plugins declare a compatible range.
 pub fn kernel_api_version() -> Version {
@@ -27,6 +27,32 @@ pub enum ManifestError {
     },
     #[error("plugin `{plugin}` cannot declare permission `{permission}`")]
     ForeignPermission { plugin: String, permission: String },
+    #[error("plugin `{plugin}` {direction} consent needs a title and a body")]
+    EmptyConsent { plugin: String, direction: &'static str },
+}
+
+/// Copy the operator must accept before a plugin is switched.
+/// A plugin omits this when that direction needs no extra confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwitchConsent {
+    pub title: String,
+    pub body: String,
+    /// The operator must tick an acknowledgement. Used when the plugin shares data outside the shop.
+    #[serde(default)]
+    pub acknowledge: bool,
+}
+
+/// Optional confirmations for turning a plugin on and off. Either side can be absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginConsents {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<SwitchConsent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable: Option<SwitchConsent>,
+}
+
+fn consents_are_empty(consents: &PluginConsents) -> bool {
+    consents.enable.is_none() && consents.disable.is_none()
 }
 
 /// Plugin identifier. Serialized as a plain string.
@@ -108,6 +134,26 @@ pub struct ReportPage {
     pub order: i32,
 }
 
+/// A screen the plugin contributes. The shell renders it; the kernel does not.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDecl {
+    pub path: String,
+    pub title: String,
+    pub permission: Option<String>,
+    /// `compact` or `touch`. Empty means the shell default.
+    #[serde(default)]
+    pub density: String,
+}
+
+/// A UI fragment rendered inside another plugin's screen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotDecl {
+    pub name: String,
+    pub contribution: String,
+    #[serde(default)]
+    pub order: i32,
+}
+
 /// Permissions a plugin may declare that are not under its own id prefix.
 const SHARED_PERMISSIONS: &[&str] = &["users.write", "settings.write"];
 
@@ -140,13 +186,22 @@ pub struct PluginManifest {
     pub settings_pages: Vec<SettingsPage>,
     #[serde(default)]
     pub report_pages: Vec<ReportPage>,
+    #[serde(default)]
+    pub pages: Vec<PageDecl>,
+    #[serde(default)]
+    pub slots_provided: Vec<String>,
+    #[serde(default)]
+    pub slot_contributions: Vec<SlotDecl>,
+    /// Confirmations shown before the plugin is turned on or off.
+    #[serde(default, skip_serializing_if = "consents_are_empty")]
+    pub consents: PluginConsents,
 }
 
 impl PluginManifest {
     /// A valid v1 manifest. Panics if `id` or `version` is not valid — compiled-in data only.
     pub fn v1(id: &str, name: impl Into<String>, version: &str) -> Self {
         Self {
-            manifest_version: MANIFEST_VERSION,
+            manifest_version: 1,
             id: PluginId::must(id),
             name: name.into(),
             version: Version::parse(version).unwrap_or_else(|err| panic!("plugin version `{version}`: {err}")),
@@ -162,12 +217,16 @@ impl PluginManifest {
             nav: Vec::new(),
             settings_pages: Vec::new(),
             report_pages: Vec::new(),
+            pages: Vec::new(),
+            slots_provided: Vec::new(),
+            slot_contributions: Vec::new(),
+            consents: PluginConsents::default(),
         }
     }
 
     pub fn validate(&self) -> Result<(), ManifestError> {
         PluginId::parse(self.id.as_str())?;
-        if self.manifest_version != MANIFEST_VERSION {
+        if self.manifest_version != 1 && self.manifest_version != MANIFEST_VERSION {
             return Err(ManifestError::UnsupportedVersion(self.manifest_version));
         }
         if !self.kernel_api.matches(&kernel_api_version()) {
@@ -187,6 +246,16 @@ impl PluginManifest {
                 plugin: self.id.to_string(),
                 permission: name.to_string(),
             });
+        }
+        for (direction, consent) in [("enable", &self.consents.enable), ("disable", &self.consents.disable)] {
+            if let Some(consent) = consent {
+                if consent.title.trim().is_empty() || consent.body.trim().is_empty() {
+                    return Err(ManifestError::EmptyConsent {
+                        plugin: self.id.to_string(),
+                        direction,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -244,5 +313,26 @@ mod tests {
             Permission::new("settings.write"),
         ];
         assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn consents_are_optional_and_each_direction_stands_alone() {
+        let mut manifest = PluginManifest::v1("filings", "Filings", "0.1.0");
+        assert!(manifest.validate().is_ok());
+        manifest.consents.enable = Some(SwitchConsent {
+            title: "Connect this shop".into(),
+            body: "Turning this on shares filings with the authority named by the plugin.".into(),
+            acknowledge: true,
+        });
+        assert!(manifest.validate().is_ok());
+        manifest.consents.enable = Some(SwitchConsent {
+            title: " ".into(),
+            body: "Body".into(),
+            acknowledge: false,
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::EmptyConsent { direction: "enable", .. })
+        ));
     }
 }

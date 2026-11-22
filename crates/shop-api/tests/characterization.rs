@@ -8,7 +8,8 @@ use axum::{
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use shop_api::build_router;
-use shop_core::{connect, ShopConfig};
+use plugin_pos::models::ShopConfig;
+use shop_api::connect;
 use tower::ServiceExt;
 
 fn shop() -> ShopConfig {
@@ -17,7 +18,7 @@ fn shop() -> ShopConfig {
         currency: "PKR".into(),
         locale: "en-PK".into(),
         bill_prefix: "BILL".into(),
-        barcode_rules: shop_core::BarcodeRule::defaults(),
+        barcode_rules: plugin_pos::models::BarcodeRule::defaults(),
     }
     .checked()
     .expect("shop config")
@@ -146,11 +147,11 @@ async fn bootstrap_is_public() {
 async fn protected_routes_require_auth() {
     let app = app().await;
     for path in [
-        "/api/pos",
-        "/api/cash",
-        "/api/reports",
-        "/api/stock/summary",
-        "/api/stock/movements",
+        "/api/v1/pos/snapshot",
+        "/api/v1/cash/desk",
+        "/api/v1/reports/summary",
+        "/api/v1/inventory/summary",
+        "/api/v1/inventory/movements",
         "/api/session",
     ] {
         let (status, _) = get(&app, path, None).await;
@@ -162,7 +163,7 @@ async fn protected_routes_require_auth() {
 async fn pos_snapshot_shape() {
     let app = app().await;
     let token = ensure_manager(&app).await;
-    let (status, body) = get(&app, "/api/pos", Some(&token)).await;
+    let (status, body) = get(&app, "/api/v1/pos/snapshot", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     for key in [
         "shop_name",
@@ -210,7 +211,7 @@ async fn session_and_logout() {
 async fn cash_desk_shape() {
     let app = app().await;
     let token = ensure_manager(&app).await;
-    let (status, body) = get(&app, "/api/cash", Some(&token)).await;
+    let (status, body) = get(&app, "/api/v1/cash/desk", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.get("suggested_opening").is_some());
     assert!(body.get("history").is_some());
@@ -220,7 +221,7 @@ async fn cash_desk_shape() {
 async fn reports_shape() {
     let app = app().await;
     let token = ensure_manager(&app).await;
-    let (status, body) = get(&app, "/api/reports", Some(&token)).await;
+    let (status, body) = get(&app, "/api/v1/reports/summary", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     for key in [
         "sections",
@@ -242,12 +243,87 @@ async fn reports_shape() {
 async fn stock_summary_and_movements() {
     let app = app().await;
     let token = ensure_manager(&app).await;
-    let (status, body) = get(&app, "/api/stock/summary", Some(&token)).await;
+    let (status, body) = get(&app, "/api/v1/inventory/summary", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.is_array());
-    let (status, body) = get(&app, "/api/stock/movements", Some(&token)).await;
+    let (status, body) = get(&app, "/api/v1/inventory/movements", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.is_array());
+}
+
+#[tokio::test]
+async fn till_scan_settle_stock_cash_and_reports() {
+    let app = app().await;
+    let token = ensure_manager(&app).await;
+    let (status, pos) = get(&app, "/api/v1/pos/snapshot", Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let section_id = pos["sections"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["id"].as_i64());
+    let item = pos["sections"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["items"].as_array())
+        .and_then(|items| items.first().cloned());
+
+    if let (Some(section_id), Some(item)) = (section_id, item) {
+        let item_id = item["id"].as_i64().expect("item id");
+        let rate = item["rate"].as_i64().unwrap_or(0);
+        let (status, stock) = post_json(
+            &app,
+            "/api/v1/inventory/adjust",
+            json!({
+                "item_id": item_id,
+                "qty": 1,
+                "direction": "in",
+                "note": "characterization"
+            }),
+            Some(&token),
+        )
+        .await;
+        assert!(status.is_success(), "stock adjust: {status} {stock}");
+
+        let (status, bill) = post_json(
+            &app,
+            "/api/v1/pos/bills",
+            json!({
+                "section_id": section_id,
+                "lines": [{ "item_id": item_id, "rate": rate, "qty": 1 }]
+            }),
+            Some(&token),
+        )
+        .await;
+        assert!(status.is_success(), "settle: {status} {bill}");
+        assert!(bill.get("bill_no").is_some());
+    }
+
+    let (status, desk) = get(&app, "/api/v1/cash/desk", Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    if desk.get("open").is_none() || desk["open"].is_null() {
+        let (status, opened) = post_json(
+            &app,
+            "/api/v1/cash/open",
+            json!({ "opening_cash": 0, "petty_cash": 0 }),
+            Some(&token),
+        )
+        .await;
+        assert!(status.is_success(), "open cash: {status} {opened}");
+    }
+
+    let (status, closed) = post_json(
+        &app,
+        "/api/v1/cash/close",
+        json!({ "expenses": [], "cash_taken": 0, "manual_count": 0 }),
+        Some(&token),
+    )
+    .await;
+    assert!(status.is_success(), "close cash: {status} {closed}");
+
+    let (status, reports) = get(&app, "/api/v1/reports/summary", Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(reports.get("bill_count").is_some());
 }
 
 #[tokio::test]

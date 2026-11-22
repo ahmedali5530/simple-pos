@@ -11,8 +11,10 @@ platform-kernel = { path = "../../platform-kernel" }
 platform-runtime = { path = "../../platform-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
-shop-core = { path = "../../shop-core" }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "macros"] }
+bcrypt = "0.16"
+getrandom = "0.2"
+plugin-inventory = { path = "../inventory" }
 catalog-contract = { path = "../../contracts/catalog-contract" }
 inventory-contract = { path = "../../contracts/inventory-contract" }
 sales-contract = { path = "../../contracts/sales-contract" }

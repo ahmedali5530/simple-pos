@@ -1,19 +1,32 @@
 <script lang="ts">
   import { request } from '../../../lib/api'
   import { toast, toastError } from '../../../lib/toast'
-  import { Button, Field, Input } from '../../../lib/ui'
+  import { Button, Field, Input, Switch } from '../../../lib/ui'
+
+  interface SwitchConsent {
+    title: string
+    body: string
+    acknowledge?: boolean
+  }
 
   interface PluginRow {
     id: string
     name: string
     version: string
+    description?: string
     enabled: boolean
+    consents?: {
+      enable?: SwitchConsent | null
+      disable?: SwitchConsent | null
+    }
   }
 
   let plugins = $state<PluginRow[]>([])
   let tokenName = $state('')
   let tokenResult = $state('')
   let pending = $state('')
+  let prompt = $state<{ plugin: PluginRow; enabled: boolean; consent: SwitchConsent } | null>(null)
+  let accepted = $state(false)
 
   $effect(() => {
     request<{ available?: PluginRow[] }>('/api/v1/platform/manifest')
@@ -25,8 +38,37 @@
       })
   })
 
-  async function toggle(plugin: PluginRow) {
+  function consentFor(plugin: PluginRow, enabled: boolean) {
+    const consent = enabled ? plugin.consents?.enable : plugin.consents?.disable
+    return consent?.title && consent.body ? consent : null
+  }
+
+  function toggle(plugin: PluginRow) {
     const enabled = !plugin.enabled
+    const consent = consentFor(plugin, enabled)
+    if (consent) {
+      accepted = false
+      prompt = { plugin, enabled, consent }
+      return
+    }
+    apply(plugin, enabled)
+  }
+
+  function dismiss() {
+    prompt = null
+    accepted = false
+  }
+
+  async function confirm() {
+    const current = prompt
+    if (!current) return
+    if (current.consent.acknowledge && !accepted) return
+    prompt = null
+    accepted = false
+    await apply(current.plugin, current.enabled)
+  }
+
+  async function apply(plugin: PluginRow, enabled: boolean) {
     pending = plugin.id
     try {
       await request(`/api/v1/platform/plugins/${plugin.id}`, {
@@ -71,8 +113,15 @@
   <ul class="plugin-list">
     {#each plugins as plugin (plugin.id)}
       <li>
-        <strong>{plugin.name}</strong>
-        <span class="hint">{plugin.id} · v{plugin.version}</span>
+        <div class="plugin-copy">
+          <div class="flex gap-5 items-center">
+            <strong>{plugin.name}</strong>
+            <span class="hint mt-0">{plugin.id} · v{plugin.version}</span>
+          </div>
+          {#if plugin.description}
+            <p class="hint">{plugin.description}</p>
+          {/if}
+        </div>
         <Button variant={plugin.enabled ? 'primary' : 'secondary'} size="sm" disabled={pending === plugin.id} onclick={() => toggle(plugin)}>
           {plugin.enabled ? 'On' : 'Off'}
         </Button>
@@ -90,3 +139,36 @@
     <p class="hint"><code>{tokenResult}</code></p>
   {/if}
 </section>
+
+{#if prompt}
+  <div
+    class="sheet-backdrop"
+    role="presentation"
+    onclick={dismiss}
+    onkeydown={(event) => {
+      if (event.key === 'Escape') dismiss()
+    }}
+  >
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="plugin-consent-title"
+      tabindex="-1"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => event.stopPropagation()}
+    >
+      <h2 id="plugin-consent-title">{prompt.consent.title}</h2>
+      <p class="hint">{prompt.consent.body}</p>
+      {#if prompt.consent.acknowledge}
+        <Switch bind:checked={accepted} label="I understand and agree" />
+      {/if}
+      <div class="sheet-actions">
+        <Button variant="secondary" onclick={dismiss}>Cancel</Button>
+        <Button disabled={prompt.consent.acknowledge && !accepted} onclick={confirm}>
+          {prompt.enabled ? 'Turn on' : 'Turn off'}
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}

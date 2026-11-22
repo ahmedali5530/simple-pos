@@ -5,7 +5,15 @@ export const printingPlugin = defineUiPlugin({
   permissions: ['printing.use'],
   nav: [],
   settingsPages: [
-    { id: 'system', label: 'System', href: '/settings/system', permission: 'settings.write', order: 50 },
+    { id: 'printing', label: 'Printing', href: '/settings/printing', permission: 'settings.write', order: 55 },
   ],
   reportPages: [],
+  pages: [
+    {
+      path: '/settings/printing',
+      title: 'Printing',
+      permission: 'settings.write',
+      load: () => import('./screens/PrintingPage.svelte'),
+    },
+  ],
 })

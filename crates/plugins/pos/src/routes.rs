@@ -2,30 +2,16 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use platform_kernel::error::AppError;
-use platform_kernel::permission::builtins;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
 use serde_json::json;
-use shop_core::{
-    load_pos_tx, post_bill_tx, set_pos_focus_tx, set_pos_sections_tx, AppError as ShopError, BarcodeRule,
-    PostBillRequest, SetFocusRequest, SetSectionsRequest, ShopConfig,
-};
+use crate::billing::{load_pos_tx, post_bill_tx, set_pos_focus_tx, set_pos_sections_tx};
+use crate::models::{BarcodeRule, PostBillRequest, SetFocusRequest, SetSectionsRequest, ShopConfig};
 
 struct Fail(AppError);
 
 impl From<AppError> for Fail {
     fn from(value: AppError) -> Self {
         Fail(value)
-    }
-}
-
-impl From<ShopError> for Fail {
-    fn from(value: ShopError) -> Self {
-        Fail(match value {
-            ShopError::BadRequest(message) => AppError::BadRequest(message),
-            ShopError::NotFound(message) => AppError::NotFound(message),
-            ShopError::Unauthorized(message) => AppError::Unauthorized(message),
-            ShopError::Db(error) => AppError::Db(error),
-        })
     }
 }
 
@@ -46,37 +32,37 @@ fn till_fallback() -> ShopConfig {
     }
 }
 
-async fn snapshot(db: TenantDb) -> Result<Json<shop_core::PosSnapshot>, Fail> {
+async fn snapshot(db: TenantDb) -> Result<Json<crate::models::PosSnapshot>, Fail> {
     let mut tx = db.begin(true).await?;
     let pos = load_pos_tx(tx.transaction(), &till_fallback()).await?;
     tx.commit().await?;
     Ok(Json(pos))
 }
 
-async fn focus(db: TenantDb, Json(body): Json<SetFocusRequest>) -> Result<Json<shop_core::PosFocus>, Fail> {
+async fn focus(db: TenantDb, Json(body): Json<SetFocusRequest>) -> Result<Json<crate::models::PosFocus>, Fail> {
     let mut tx = db.begin(false).await?;
     let last_section_id = set_pos_focus_tx(tx.transaction(), body.section_id).await?;
     tx.commit().await?;
-    Ok(Json(shop_core::PosFocus { last_section_id }))
+    Ok(Json(crate::models::PosFocus { last_section_id }))
 }
 
 async fn sections(
     db: TenantDb,
     Json(body): Json<SetSectionsRequest>,
-) -> Result<Json<shop_core::PosSnapshot>, Fail> {
+) -> Result<Json<crate::models::PosSnapshot>, Fail> {
     let mut tx = db.begin(false).await?;
     let pos = set_pos_sections_tx(tx.transaction(), &till_fallback(), &body.sections).await?;
     tx.commit().await?;
     Ok(Json(pos))
 }
 
-async fn post_bill(db: TenantDb, Json(body): Json<PostBillRequest>) -> Result<Json<shop_core::PostedBill>, Fail> {
+async fn post_bill(db: TenantDb, Json(body): Json<PostBillRequest>) -> Result<Json<crate::models::PostedBill>, Fail> {
     let user_id = db
         .actor()
         .user_id
         .ok_or_else(|| AppError::Unauthorized("Sign in before posting a bill.".into()))?;
     let mut tx = db.begin(false).await?;
-    let posted = post_bill_tx(
+    let mut posted = post_bill_tx(
         tx.transaction(),
         &till_fallback(),
         user_id,
@@ -85,14 +71,26 @@ async fn post_bill(db: TenantDb, Json(body): Json<PostBillRequest>) -> Result<Js
         body.customer.as_deref(),
     )
     .await?;
+    plugin_inventory::sale::apply_bill(tx.transaction(), &posted.bill_no).await?;
+    posted.pos = load_pos_tx(tx.transaction(), &till_fallback()).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO platform_events (tenant_id, event_type, version, payload)
+        VALUES (current_setting('app.tenant_id')::uuid, 'sales.bill_posted', 1, $1)
+        "#,
+    )
+    .bind(json!({ "bill_no": posted.bill_no, "total": posted.total }))
+    .execute(tx.conn())
+    .await
+    .map_err(AppError::from)?;
     tx.commit().await?;
     Ok(Json(posted))
 }
 
 pub fn mount(routes: &mut PluginRoutes) -> Result<(), RegistrationError> {
-    routes.get("snapshot", snapshot, builtins::POS_READ)?;
-    routes.put("focus", focus, builtins::POS_BILL)?;
-    routes.put("sections", sections, builtins::POS_BILL)?;
-    routes.post("bills", post_bill, builtins::POS_BILL)?;
+    routes.get("snapshot", snapshot, "pos.read")?;
+    routes.put("focus", focus, "pos.bills.post")?;
+    routes.put("sections", sections, "pos.bills.post")?;
+    routes.post("bills", post_bill, "pos.bills.post")?;
     Ok(())
 }

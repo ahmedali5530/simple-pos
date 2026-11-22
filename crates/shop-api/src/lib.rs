@@ -1,29 +1,26 @@
 use std::net::SocketAddr;
-use std::path::{Path as FilePath, PathBuf};
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
+    extract::{Path, Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{from_fn_with_state, Next},
     response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
-use shop_core::{
-    adjust_stock, cash_desk, clear_item_image, export_categories, export_items, export_movements,
-    import_categories, import_items, import_movements, item_image_ext, load_pos, load_reports,
-    login, logout, needs_first_user, open_session, open_shift, print_cash_shift,
-    print_product_mix, print_saved_bill, recent_movements, remove_user, save_settings, save_shift,
-    save_user, set_item_image, stock_summary, AppError, CashDesk, CategoryImport, ErrorBody,
-    ItemImport, LoginForm, LoginSession, MovementImport, OpenShift, OrderForm, PgPool, PosSnapshot,
-    PosUser, PrintOutcome, PrintRequest, Reports, SavedItem, SavedRecord, SettingsForm, ShiftForm,
-    ShopConfig, StockBalance, StockMove,
-    StockMovement, StockPage, UserForm,
+use platform_kernel::error::{AppError, ErrorBody};
+use plugin_pos::admin::{login, logout, needs_first_user, open_session, remove_user, save_user};
+use plugin_pos::billing::current_shop;
+use plugin_pos::models::{
+    BarcodeRule, LoginForm, LoginSession, PosSnapshot, PosUser, SavedRecord, ShopConfig, UserForm,
 };
+use sqlx::PgPool;
 use tower_http::cors::{Any, CorsLayer};
 
 #[cfg(feature = "bundle")]
 mod embedded;
+
+mod compose;
 
 #[cfg(feature = "web")]
 #[derive(rust_embed::RustEmbed)]
@@ -58,7 +55,7 @@ struct FileConfig {
 #[derive(serde::Deserialize, Default)]
 struct BarcodeFile {
     #[serde(default)]
-    rules: Vec<shop_core::BarcodeRule>,
+    rules: Vec<BarcodeRule>,
 }
 
 fn load_shop_config() -> ShopConfig {
@@ -71,7 +68,7 @@ fn load_shop_config() -> ShopConfig {
         toml::from_str(&text).unwrap_or_else(|err| panic!("could not parse config.toml: {err}"));
     let mut shop = file.shop.checked().unwrap_or_else(|err| panic!("{err}"));
     shop.barcode_rules = if file.barcode.rules.is_empty() {
-        shop_core::BarcodeRule::defaults()
+        BarcodeRule::defaults()
     } else {
         file.barcode
             .rules
@@ -117,6 +114,16 @@ pub async fn run() {
 
 pub async fn open() -> Result<Till, String> {
     open_with(true).await
+}
+
+/// Open the shop database and apply the legacy schema migrations.
+pub async fn connect(database_url: &str) -> Result<PgPool, AppError> {
+    let pool = PgPool::connect(database_url).await?;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|err| AppError::BadRequest(err.to_string()))?;
+    Ok(pool)
 }
 
 /// Host and port from a database URL, without the user or password.
@@ -165,7 +172,7 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
         }
         std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?
     };
-    let pool = shop_core::connect(&database_url).await.map_err(|err| {
+    let pool = connect(&database_url).await.map_err(|err| {
         format!(
             "Could not open the shop database at {}: {err}",
             database_target(&database_url)
@@ -227,18 +234,10 @@ async fn wait_for_stop() {
 }
 
 async fn boot_platform(database_url: &str) -> Option<std::sync::Arc<PlatformState>> {
-    use platform_kernel::plugin::Plugin;
     use platform_runtime::{BootConfig, Platform};
     use std::sync::Arc;
 
-    let plugins: Vec<Arc<dyn Plugin>> = vec![
-        Arc::new(plugin_catalog::CatalogPlugin),
-        Arc::new(plugin_inventory::InventoryPlugin),
-        Arc::new(plugin_pos::PosPlugin),
-        Arc::new(plugin_cash::CashPlugin),
-        Arc::new(plugin_printing::PrintingPlugin),
-        Arc::new(plugin_reports::ReportsPlugin),
-    ];
+    let plugins = compose::plugins();
     let admin_url = std::env::var("DATABASE_ADMIN_URL").ok();
     match Platform::boot(
         BootConfig {
@@ -304,73 +303,22 @@ fn build_router_inner(
         platform,
     };
     Router::new()
-        .route("/api/print", post(post_print))
-        .route("/api/print/mix", post(post_print_mix))
-        .route("/api/print/cash", post(post_print_cash))
-        .route("/api/cash", get(get_cash))
-        .route("/api/cash/open", post(post_cash_open))
-        .route("/api/cash/draft", post(post_cash_draft))
-        .route("/api/cash/close", post(post_cash_close))
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         .route("/api/session", get(get_session))
-        .route("/api/pos", get(get_pos))
+        .route("/api/v1/identity/login", post(post_identity_login))
+        .route("/api/v1/identity/logout", post(post_identity_logout))
+        .route("/api/v1/platform/settings/{plugin_id}", get(get_plugin_settings).put(put_plugin_settings))
+        .route("/api/v1/platform/shop", put(put_shop_profile))
         .route("/api/bootstrap", get(get_bootstrap))
-        .route("/api/sections", post(post_section))
-        .route("/api/sections/order", put(put_section_order))
-        .route(
-            "/api/sections/{id}",
-            put(put_section).delete(delete_section),
-        )
-        .route("/api/categories", post(post_category))
-        .route("/api/categories/order", put(put_category_order))
-        .route("/api/categories/export", get(get_categories_export))
-        .route(
-            "/api/categories/import",
-            post(post_categories_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-        )
-        .route(
-            "/api/categories/{id}",
-            put(put_category).delete(delete_category),
-        )
         .route("/api/users", post(post_user))
         .route("/api/users/{id}", put(put_user).delete(delete_user))
-        .route("/api/settings", put(put_settings))
-        .route("/api/stock", post(post_stock))
-        .route("/api/stock/movements", get(get_movements))
-        .route("/api/stock/summary", get(get_stock_summary))
-        .route("/api/stock/export", get(get_stock_export))
-        .route(
-            "/api/stock/import",
-            post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-        )
-        .route("/api/reports", get(get_reports))
-        .route("/api/items", post(post_item))
-        .route("/api/items/export", get(get_items_export))
-        .route(
-            "/api/items/import",
-            post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
-        )
-        .route("/api/items/{id}", put(put_item))
-        .route("/api/items/{id}/prompt", put(put_item_prompt))
-        .route(
-            "/api/items/{id}/image",
-            get(get_item_image)
-                .post(post_item_image)
-                .delete(delete_item_image)
-                .layer(DefaultBodyLimit::max(3 * 1024 * 1024)),
-        )
-        // Platform v1 API
         .route("/api/v1/platform/manifest", get(get_platform_manifest))
         .route("/api/v1/platform/tokens", post(post_platform_token))
         .route("/api/v1/platform/plugins/{id}", put(put_platform_plugin))
         .route("/api/v1/capabilities", get(get_capabilities))
         .route("/api/v1/capabilities/{id}/invoke", post(post_capability_invoke))
         .route("/api/v1/mcp", get(get_mcp_descriptor))
-        // Legacy aliases under /api/v1/*
-        .route("/api/v1/inventory/summary", get(get_stock_summary))
-        .route("/api/v1/cash", get(get_cash))
-        .route("/api/v1/reports", get(get_reports))
         .merge(plugin_router.with_state(()))
         .layer(from_fn_with_state(state.clone(), require_user))
         .layer(
@@ -395,10 +343,6 @@ fn serve_till(api: Router) -> Router {
     api
 }
 
-async fn get_pos(State(state): State<AppState>) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
 #[derive(serde::Serialize)]
 struct BootstrapStatus {
     needs_user: bool,
@@ -406,11 +350,113 @@ struct BootstrapStatus {
 }
 
 async fn get_bootstrap(State(state): State<AppState>) -> Result<Json<BootstrapStatus>, ApiError> {
-    let shop = shop_core::current_shop(&state.pool, &state.shop).await?;
+    let shop = current_shop(&state.pool, &state.shop).await?;
     Ok(Json(BootstrapStatus {
         needs_user: needs_first_user(&state.pool).await?,
         shop_name: shop.name,
     }))
+}
+
+fn lift_platform(err: platform_kernel::error::AppError) -> AppError {
+    match err {
+        platform_kernel::error::AppError::BadRequest(message) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::NotFound(message) => AppError::NotFound(message),
+        platform_kernel::error::AppError::Unauthorized(message) => AppError::Unauthorized(message),
+        platform_kernel::error::AppError::Forbidden(message) => AppError::Unauthorized(message),
+        platform_kernel::error::AppError::Conflict(message) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::Db(error) => AppError::Db(error),
+    }
+}
+
+async fn post_identity_login(
+    State(state): State<AppState>,
+    Json(body): Json<platform_identity::LoginForm>,
+) -> Result<Json<platform_identity::LoginSession>, ApiError> {
+    platform_identity::login(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        &body,
+    )
+    .await
+    .map(Json)
+    .map_err(|err| ApiError(lift_platform(err)))
+}
+
+async fn post_identity_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("");
+    platform_identity::logout(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        token,
+    )
+    .await
+    .map_err(|err| ApiError(lift_platform(err)))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_plugin_settings(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut tx = platform_kernel::context::TenantTx::begin_with(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        platform_kernel::context::Actor::system(),
+        true,
+    )
+    .await
+    .map_err(|err| ApiError(lift_platform(err)))?;
+    let value = platform_runtime::settings::load(&mut tx, &plugin_id)
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?;
+    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
+    Ok(Json(value))
+}
+
+async fn put_shop_profile(
+    State(state): State<AppState>,
+    Json(body): Json<plugin_pos::models::ShopProfileForm>,
+) -> Result<Json<PosSnapshot>, ApiError> {
+    let mut tx = platform_kernel::context::TenantTx::begin_with(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        platform_kernel::context::Actor::system(),
+        false,
+    )
+    .await
+    .map_err(|err| ApiError(lift_platform(err)))?;
+    let pos = plugin_pos::admin::save_shop_profile(tx.transaction(), &state.shop, &body)
+        .await
+        .map_err(ApiError::from)?;
+    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
+    Ok(Json(pos))
+}
+
+async fn put_plugin_settings(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut tx = platform_kernel::context::TenantTx::begin_with(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        platform_kernel::context::Actor::system(),
+        false,
+    )
+    .await
+    .map_err(|err| ApiError(lift_platform(err)))?;
+    platform_runtime::settings::save(&mut tx, &plugin_id, &body)
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?;
+    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
+    Ok(Json(body))
 }
 
 async fn post_login(
@@ -527,110 +573,6 @@ async fn require_user(State(state): State<AppState>, mut request: Request, next:
     }
 }
 
-async fn catalog_then_pos(
-    state: &AppState,
-    run: impl AsyncFnOnce(&mut platform_kernel::context::TenantTx<'_>) -> Result<i32, platform_kernel::error::AppError>,
-) -> Result<SavedRecord, ApiError> {
-    let mut tx = platform_kernel::context::TenantTx::begin_with(
-        &state.pool,
-        platform_kernel::context::TenantId::DEFAULT,
-        platform_kernel::context::Actor::system(),
-        false,
-    )
-    .await
-    .map_err(platform_to_api)?;
-    let id = run(&mut tx).await.map_err(platform_to_api)?;
-    tx.commit().await.map_err(platform_to_api)?;
-    let pos = load_pos(&state.pool, &state.shop).await?;
-    Ok(SavedRecord { id, pos })
-}
-
-async fn post_section(
-    State(state): State<AppState>,
-    Json(body): Json<plugin_catalog::service::SectionForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_section(tx, None, &body).await).await?,
-    ))
-}
-
-async fn put_section(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    Json(body): Json<plugin_catalog::service::SectionForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_section(tx, Some(id), &body).await).await?,
-    ))
-}
-
-async fn delete_section(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    catalog_then_pos(&state, async |tx| {
-        plugin_catalog::service::remove_section(tx, id).await?;
-        Ok(id)
-    })
-    .await?;
-    Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
-async fn put_section_order(
-    State(state): State<AppState>,
-    Json(body): Json<OrderForm>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    catalog_then_pos(&state, async |tx| {
-        plugin_catalog::service::reorder(tx, "sections", "pos_order", &body.ids).await?;
-        Ok(0)
-    })
-    .await?;
-    Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
-async fn post_category(
-    State(state): State<AppState>,
-    Json(body): Json<plugin_catalog::service::CategoryForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_category(tx, None, &body).await).await?,
-    ))
-}
-
-async fn put_category(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    Json(body): Json<plugin_catalog::service::CategoryForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_category(tx, Some(id), &body).await).await?,
-    ))
-}
-
-async fn delete_category(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    catalog_then_pos(&state, async |tx| {
-        plugin_catalog::service::remove_category(tx, id).await?;
-        Ok(id)
-    })
-    .await?;
-    Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
-async fn put_category_order(
-    State(state): State<AppState>,
-    Json(body): Json<OrderForm>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    catalog_then_pos(&state, async |tx| {
-        plugin_catalog::service::reorder(tx, "categories", "sort_order", &body.ids).await?;
-        Ok(0)
-    })
-    .await?;
-    Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
 async fn post_user(
     State(state): State<AppState>,
     Json(body): Json<UserForm>,
@@ -655,400 +597,6 @@ async fn delete_user(
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
     Ok(Json(remove_user(&state.pool, &state.shop, id).await?))
-}
-
-async fn put_settings(
-    State(state): State<AppState>,
-    Json(body): Json<SettingsForm>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(save_settings(&state.pool, &state.shop, &body).await?))
-}
-
-#[derive(serde::Deserialize)]
-struct MovementQuery {
-    item_id: Option<i32>,
-}
-
-#[derive(serde::Deserialize)]
-struct ReportQuery {
-    from: Option<String>,
-    to: Option<String>,
-}
-
-async fn post_stock(
-    State(state): State<AppState>,
-    Json(body): Json<StockMove>,
-) -> Result<Json<StockPage>, ApiError> {
-    Ok(Json(adjust_stock(&state.pool, &state.shop, &body).await?))
-}
-
-async fn get_stock_summary(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<StockBalance>>, ApiError> {
-    Ok(Json(stock_summary(&state.pool).await?))
-}
-
-async fn get_movements(
-    State(state): State<AppState>,
-    Query(query): Query<MovementQuery>,
-) -> Result<Json<Vec<StockMovement>>, ApiError> {
-    Ok(Json(recent_movements(&state.pool, query.item_id).await?))
-}
-
-async fn get_reports(
-    State(state): State<AppState>,
-    Query(query): Query<ReportQuery>,
-) -> Result<Json<Reports>, ApiError> {
-    Ok(Json(
-        load_reports(&state.pool, query.from.as_deref(), query.to.as_deref()).await?,
-    ))
-}
-
-async fn get_categories_export(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let bytes = export_categories(&state.pool).await?;
-    Ok(workbook_response("categories.xlsx", bytes))
-}
-
-async fn post_categories_import(
-    State(state): State<AppState>,
-    multipart: Multipart,
-) -> Result<Json<CategoryImport>, ApiError> {
-    let bytes = workbook_bytes(multipart).await?;
-    Ok(Json(
-        import_categories(&state.pool, &state.shop, &bytes).await?,
-    ))
-}
-
-async fn get_items_export(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let bytes = export_items(&state.pool).await?;
-    Ok(workbook_response("items.xlsx", bytes))
-}
-
-async fn post_items_import(
-    State(state): State<AppState>,
-    multipart: Multipart,
-) -> Result<Json<ItemImport>, ApiError> {
-    let bytes = workbook_bytes(multipart).await?;
-    Ok(Json(import_items(&state.pool, &state.shop, &bytes).await?))
-}
-
-async fn get_stock_export(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let bytes = export_movements(&state.pool).await?;
-    Ok(workbook_response("stock-movements.xlsx", bytes))
-}
-
-async fn post_stock_import(
-    State(state): State<AppState>,
-    multipart: Multipart,
-) -> Result<Json<MovementImport>, ApiError> {
-    let bytes = workbook_bytes(multipart).await?;
-    Ok(Json(
-        import_movements(&state.pool, &state.shop, &bytes).await?,
-    ))
-}
-
-fn workbook_response(filename: &str, bytes: Vec<u8>) -> Response {
-    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-        .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"workbook.xlsx\""));
-    (
-        StatusCode::OK,
-        [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            ),
-            (header::CONTENT_DISPOSITION, disposition),
-        ],
-        bytes,
-    )
-        .into_response()
-}
-
-async fn workbook_bytes(mut multipart: Multipart) -> Result<Vec<u8>, AppError> {
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::BadRequest("That workbook could not be read.".into()))?
-    {
-        if field.name() == Some("file") {
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|_| AppError::BadRequest("That workbook could not be read.".into()))?;
-            if bytes.is_empty() {
-                return Err(AppError::BadRequest("Choose an Excel workbook.".into()));
-            }
-            return Ok(bytes.to_vec());
-        }
-    }
-    Err(AppError::BadRequest("Choose an Excel workbook.".into()))
-}
-
-async fn post_item(
-    State(state): State<AppState>,
-    Json(body): Json<plugin_catalog::service::ItemForm>,
-) -> Result<Json<SavedItem>, ApiError> {
-    let saved = catalog_then_pos(&state, async |tx| plugin_catalog::service::save_item(tx, None, &body).await).await?;
-    Ok(Json(SavedItem { item_id: saved.id, pos: saved.pos }))
-}
-
-async fn put_item(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    Json(body): Json<plugin_catalog::service::ItemForm>,
-) -> Result<Json<SavedItem>, ApiError> {
-    let saved = catalog_then_pos(&state, async |tx| plugin_catalog::service::save_item(tx, Some(id), &body).await).await?;
-    Ok(Json(SavedItem { item_id: saved.id, pos: saved.pos }))
-}
-
-async fn put_item_prompt(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    Json(body): Json<plugin_catalog::service::ItemPromptRequest>,
-) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    let saved = catalog_then_pos(&state, async |tx| {
-        plugin_catalog::service::set_item_prompt(tx, id, &body).await?;
-        Ok(id)
-    })
-    .await?;
-    Ok(Json(saved.pos))
-}
-
-fn shop_root() -> PathBuf {
-    for candidate in [".", "../.."] {
-        let root = FilePath::new(candidate);
-        if root.join("config.toml").is_file() {
-            return root.to_path_buf();
-        }
-    }
-    PathBuf::from(".")
-}
-
-fn image_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("IMAGE_DIR") {
-        return PathBuf::from(dir);
-    }
-    shop_root().join("data/item-images")
-}
-
-fn known_ext(ext: &str) -> Option<&'static str> {
-    match ext {
-        "jpg" => Some("jpg"),
-        "png" => Some("png"),
-        "webp" => Some("webp"),
-        "gif" => Some("gif"),
-        _ => None,
-    }
-}
-
-fn image_file(id: i32, ext: &str) -> Option<PathBuf> {
-    let ext = known_ext(ext)?;
-    Some(image_root().join(format!("{id}.{ext}")))
-}
-
-fn sniff_image(bytes: &[u8]) -> Result<&'static str, AppError> {
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err(AppError::BadRequest("Use a picture under 2 MB.".into()));
-    }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Ok("jpg");
-    }
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        return Ok("png");
-    }
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Ok("gif");
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return Ok("webp");
-    }
-    Err(AppError::BadRequest(
-        "Use a JPEG, PNG, WebP, or GIF.".into(),
-    ))
-}
-
-fn content_type(ext: &str) -> &'static str {
-    match ext {
-        "png" => "image/png",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        _ => "image/jpeg",
-    }
-}
-
-fn write_image(id: i32, ext: &str, bytes: &[u8]) -> Result<(), AppError> {
-    let dir = image_root();
-    std::fs::create_dir_all(&dir)
-        .map_err(|_| AppError::BadRequest("The picture folder could not be created.".into()))?;
-    let path = image_file(id, ext)
-        .ok_or_else(|| AppError::BadRequest("Use a JPEG, PNG, WebP, or GIF.".into()))?;
-    let tmp = dir.join(format!("{id}.{ext}.tmp"));
-    std::fs::write(&tmp, bytes)
-        .map_err(|_| AppError::BadRequest("That picture could not be stored.".into()))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|_| AppError::BadRequest("That picture could not be stored.".into()))?;
-    Ok(())
-}
-
-fn remove_image_file(id: i32, ext: &str) {
-    if let Some(path) = image_file(id, ext) {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-async fn get_item_image(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> Result<axum::response::Response, ApiError> {
-    let Some(ext) = item_image_ext(&state.pool, id).await? else {
-        return Err(AppError::NotFound("This item has no picture.".into()).into());
-    };
-    let Some(path) = image_file(id, &ext) else {
-        return Err(AppError::NotFound("This item has no picture.".into()).into());
-    };
-    let bytes =
-        std::fs::read(&path).map_err(|_| AppError::NotFound("This item has no picture.".into()))?;
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, content_type(&ext)),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-        ],
-        bytes,
-    )
-        .into_response())
-}
-
-async fn post_item_image(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    mut multipart: Multipart,
-) -> Result<Json<SavedItem>, ApiError> {
-    let previous = item_image_ext(&state.pool, id).await?;
-    let mut picture: Option<Vec<u8>> = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::BadRequest("That picture could not be read.".into()))?
-    {
-        if field.name() == Some("picture") {
-            let data = field
-                .bytes()
-                .await
-                .map_err(|_| AppError::BadRequest("That picture could not be read.".into()))?;
-            picture = Some(data.to_vec());
-            break;
-        }
-    }
-    let Some(bytes) = picture else {
-        return Err(AppError::BadRequest("Choose a picture.".into()).into());
-    };
-    if bytes.is_empty() {
-        return Err(AppError::BadRequest("Choose a picture.".into()).into());
-    }
-    let ext = sniff_image(&bytes)?;
-    write_image(id, ext, &bytes)?;
-    match set_item_image(&state.pool, &state.shop, id, ext).await {
-        Ok(saved) => {
-            if let Some(old) = previous.as_deref() {
-                if old != ext {
-                    remove_image_file(id, old);
-                }
-            }
-            Ok(Json(saved))
-        }
-        Err(error) => {
-            remove_image_file(id, ext);
-            Err(error.into())
-        }
-    }
-}
-
-async fn delete_item_image(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> Result<Json<SavedItem>, ApiError> {
-    let previous = item_image_ext(&state.pool, id).await?;
-    let saved = clear_item_image(&state.pool, &state.shop, id).await?;
-    if let Some(ext) = previous.as_deref() {
-        remove_image_file(id, ext);
-    }
-    Ok(Json(saved))
-}
-
-async fn post_print(
-    State(state): State<AppState>,
-    Json(body): Json<PrintRequest>,
-) -> Result<Json<PrintOutcome>, ApiError> {
-    Ok(Json(
-        print_saved_bill(&state.pool, &state.shop, &body.bill_no).await?,
-    ))
-}
-
-async fn post_print_mix(
-    State(state): State<AppState>,
-    Json(body): Json<ReportQuery>,
-) -> Result<Json<PrintOutcome>, ApiError> {
-    Ok(Json(
-        print_product_mix(
-            &state.pool,
-            &state.shop,
-            body.from.as_deref(),
-            body.to.as_deref(),
-        )
-        .await?,
-    ))
-}
-
-#[derive(serde::Deserialize)]
-struct ShiftPrint {
-    id: i32,
-}
-
-async fn post_print_cash(
-    State(state): State<AppState>,
-    Json(body): Json<ShiftPrint>,
-) -> Result<Json<PrintOutcome>, ApiError> {
-    Ok(Json(
-        print_cash_shift(&state.pool, &state.shop, body.id).await?,
-    ))
-}
-
-async fn get_cash(State(state): State<AppState>) -> Result<Json<CashDesk>, ApiError> {
-    Ok(Json(cash_desk(&state.pool).await?))
-}
-
-async fn post_cash_open(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<OpenShift>,
-) -> Result<Json<CashDesk>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(open_shift(&state.pool, cashier.id, &body).await?))
-}
-
-async fn post_cash_draft(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<ShiftForm>,
-) -> Result<Json<CashDesk>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(
-        save_shift(&state.pool, cashier.id, &body, false).await?,
-    ))
-}
-
-async fn post_cash_close(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<ShiftForm>,
-) -> Result<Json<CashDesk>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(
-        save_shift(&state.pool, cashier.id, &body, true).await?,
-    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -1204,6 +752,8 @@ async fn get_platform_manifest(
                 "id": manifest.id,
                 "name": manifest.name,
                 "version": manifest.version.to_string(),
+                "description": manifest.description,
+                "consents": manifest.consents,
                 "enabled": enabled.contains(&manifest.id),
             })
         })
@@ -1318,7 +868,8 @@ impl axum::response::IntoResponse for ApiError {
         let status = match &self.0 {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
-            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::Unauthorized(_) | AppError::Forbidden(_) => StatusCode::UNAUTHORIZED,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(ErrorBody {

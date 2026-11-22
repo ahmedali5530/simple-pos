@@ -14,4 +14,7 @@ export const cashPlugin = defineUiPlugin({
   ],
   settingsPages: [],
   reportPages: [],
+  pages: [
+    { path: '/cash', title: 'Cash closing', permission: 'cash.read', load: () => import('./screens/CashPage.svelte') },
+  ],
 })

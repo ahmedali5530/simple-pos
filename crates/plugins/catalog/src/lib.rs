@@ -9,13 +9,15 @@ use platform_kernel::error::AppError;
 use platform_kernel::events::PluginEvents;
 use platform_kernel::manifest::{NavItem, PluginManifest, SettingsPage};
 use platform_kernel::migrate::Migration;
-use platform_kernel::permission::{builtins, Permission};
+use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
 use serde_json::json;
 
+mod images;
 mod routes;
 pub mod service;
+pub mod sheets;
 
 pub struct CatalogPlugin;
 
@@ -24,8 +26,8 @@ impl Plugin for CatalogPlugin {
         let mut manifest = PluginManifest::v1("catalog", "Catalog", "0.1.0");
         manifest.description = "Products, services, categories, units, variants and attributes.".into();
         manifest.permissions = vec![
-            Permission::new(builtins::CATALOG_READ),
-            Permission::new(builtins::CATALOG_WRITE),
+            Permission::new("catalog.read"),
+            Permission::new("catalog.write"),
         ];
         manifest.events_emitted = vec![
             catalog_contract::events::ITEM_SAVED.into(),
@@ -35,7 +37,7 @@ impl Plugin for CatalogPlugin {
             Capability {
                 id: "catalog.items.list".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::CATALOG_READ.into(),
+                permission: "catalog.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object"}),
@@ -45,7 +47,7 @@ impl Plugin for CatalogPlugin {
             Capability {
                 id: "catalog.items.get".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::CATALOG_READ.into(),
+                permission: "catalog.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object","properties":{"id":{"type":"integer"}}}),
@@ -55,7 +57,7 @@ impl Plugin for CatalogPlugin {
             Capability {
                 id: "catalog.units.list".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::CATALOG_READ.into(),
+                permission: "catalog.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object"}),
@@ -67,7 +69,7 @@ impl Plugin for CatalogPlugin {
             id: "settings".into(),
             label: "Settings".into(),
             href: "/settings/items".into(),
-            permission: Some(builtins::CATALOG_WRITE.into()),
+            permission: Some("catalog.write".into()),
             order: 50,
         }];
         manifest.settings_pages = vec![
@@ -75,28 +77,28 @@ impl Plugin for CatalogPlugin {
                 id: "items".into(),
                 label: "Items".into(),
                 href: "/settings/items".into(),
-                permission: Some(builtins::CATALOG_WRITE.into()),
+                permission: Some("catalog.write".into()),
                 order: 10,
             },
             SettingsPage {
                 id: "sections".into(),
                 label: "Sections".into(),
                 href: "/settings/sections".into(),
-                permission: Some(builtins::CATALOG_WRITE.into()),
+                permission: Some("catalog.write".into()),
                 order: 20,
             },
             SettingsPage {
                 id: "categories".into(),
                 label: "Categories".into(),
                 href: "/settings/categories".into(),
-                permission: Some(builtins::CATALOG_WRITE.into()),
+                permission: Some("catalog.write".into()),
                 order: 30,
             },
             SettingsPage {
                 id: "units".into(),
                 label: "Units".into(),
                 href: "/settings/units".into(),
-                permission: Some(builtins::CATALOG_WRITE.into()),
+                permission: Some("catalog.write".into()),
                 order: 35,
             },
         ];
@@ -121,7 +123,7 @@ impl Plugin for CatalogPlugin {
             Capability {
                 id: "catalog.items.list".into(),
                 kind: CapabilityKind::Query,
-                permission: builtins::CATALOG_READ.into(),
+                permission: "catalog.read".into(),
                 effect: CapabilityEffect::Read,
                 requires_confirmation: false,
                 input_schema: json!({"type":"object"}),

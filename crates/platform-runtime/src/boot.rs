@@ -90,6 +90,7 @@ impl Platform {
             let manifest = plugin.manifest();
             migrations::run_owner(&pools.migration, manifest.id.as_str(), plugin.migrations()).await?;
         }
+        roles::grant_existing(&pools.migration).await?;
         sync_permissions(&pools.migration, &catalog).await?;
         PluginStateStore::install_missing(&pools.runtime, TenantId::DEFAULT, &catalog).await?;
 
