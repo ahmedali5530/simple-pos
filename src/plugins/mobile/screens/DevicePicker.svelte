@@ -44,6 +44,14 @@
     }
   }
 
+  // A posted bill clears the cart: reload so its devices cannot be picked again.
+  let lastLineCount = 0
+  $effect(() => {
+    const count = lines.length
+    if (count === 0 && lastLineCount > 0) load()
+    lastLineCount = count
+  })
+
   function add(device: MobileDevice) {
     const ok = addLine({
       item_id: device.item_id,
