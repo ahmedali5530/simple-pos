@@ -35,6 +35,8 @@ export interface PosLineSourceContext {
   addLine: AddPosLine
   currency: string
   locale: string
+  /** The current cart, so a source can hide references already on the bill. */
+  lines: CartLine[]
 }
 
 export type LineMetadataPatch = Partial<Pick<CartLine, 'source' | 'reference' | 'details'>>

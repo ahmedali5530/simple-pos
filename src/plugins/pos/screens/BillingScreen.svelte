@@ -185,10 +185,17 @@
       return false
     }
     const reference = draft.reference?.trim() ?? ''
+    const lines = linesFor(sectionId)
+    if (
+      reference &&
+      lines.some((line) => line.reference === reference && (line.source ?? '') === source)
+    ) {
+      attention = { tone: 'warning', message: 'That line is already on this bill.' }
+      return false
+    }
     const key = lineKey(item.id, variant?.id ?? null, rate, units, source, reference)
     let name = variant ? `${item.name} · ${variant.name}` : item.name
     if (draft.label) name = `${name} · ${draft.label}`
-    const lines = linesFor(sectionId)
     const existing = lines.find((line) => line.key === key)
     carts = {
       ...carts,
@@ -342,6 +349,13 @@
     const section = sections.find((entry) => entry.id === sectionId)
     const current = linesFor(sectionId).find((line) => line.key === key)
     if (!section || !current) return false
+    if (current.source === 'mobile.device' && qty > 1) {
+      attention = {
+        tone: 'warning',
+        message: 'A device line is one phone. Remove it and add another device instead.',
+      }
+      return false
+    }
     if (qty < 1) {
       carts = { ...carts, [sectionId]: linesFor(sectionId).filter((line) => line.key !== key) }
       if (lastKey[sectionId] === key) {

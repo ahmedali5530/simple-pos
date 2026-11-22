@@ -325,7 +325,7 @@
     </div>
     <Slot
       name="pos.line-source"
-      context={{ section, addLine: onExternalLine, currency, locale }}
+      context={{ section, addLine: onExternalLine, currency, locale, lines }}
     />
     <div class="bill-lines">
       {#if lines.length === 0}
@@ -340,11 +340,17 @@
             <div class="line-meta">
               <span class="rate">{money(line.rate)}</span>
               <span class="qty">
-                <button type="button" aria-label="Decrease {line.name}" onclick={() => onQty(line.key, line.qty - 1)}>-</button>
+                <button
+                  type="button"
+                  aria-label="Decrease {line.name}"
+                  disabled={line.source === 'mobile.device'}
+                  onclick={() => onQty(line.key, line.qty - 1)}
+                >-</button>
                 <input
                   class="input"
                   inputmode="numeric"
                   aria-label="Quantity for {line.name}"
+                  readonly={line.source === 'mobile.device'}
                   value={line.qty}
                   oninput={(event) => commitQty(line, event.currentTarget.value, event.currentTarget)}
                   onblur={(event) => {
@@ -352,7 +358,12 @@
                     if (!Number.isInteger(qty) || qty < 1) onQty(line.key, 0)
                   }}
                 />
-                <button type="button" aria-label="Increase {line.name}" onclick={() => onQty(line.key, line.qty + 1)}>+</button>
+                <button
+                  type="button"
+                  aria-label="Increase {line.name}"
+                  disabled={line.source === 'mobile.device'}
+                  onclick={() => onQty(line.key, line.qty + 1)}
+                >+</button>
                 <button type="button" class="remove" aria-label="Remove {line.name}" onclick={() => onQty(line.key, 0)}>×</button>
               </span>
             </div>
