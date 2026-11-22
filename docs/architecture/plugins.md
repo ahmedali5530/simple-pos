@@ -49,6 +49,10 @@ The shell draws the top bar, the page outlet, and the settings list. It does not
 
 `bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. The `sales.bill_posted` event is version 2 and includes `SaleLine` entries (`source`, `reference`, `label`, `quantity`, `unit_amount`, `amount`, `details`), so a plugin can react to its own lines. Consumers that only need the bill can keep reading `bill_no` from the payload or query the tables.
 
+## Mobile shop example
+
+`plugin-mobile` shows the full pattern. It owns `mobile_models`, `mobile_devices`, `mobile_warranties`, and `mobile_claims`; contributes model fields to `catalog.item-form` and a device picker to `pos.line-source`; and consumes `sales.bill_posted` v2. A phone model is a catalog item, while each physical unit is a device row with an IMEI. The sale handler reads `bill_lines` by `bill_id` (the event does not carry `item_id`), marks the device sold, and inserts the warranty idempotently. POS inventory still decrements the catalog item's stock.
+
 ## Settings
 
 `settings_schema` is JSON Schema. Values are stored per tenant in `plugin_settings`. Disabling the plugin hides the values and does not delete them.

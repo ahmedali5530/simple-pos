@@ -1,0 +1,4 @@
+{
+  "id": "mobile_shop",
+  "plugins": ["catalog", "pos", "inventory", "cash", "printing", "reports", "mobile"]
+}
