@@ -1,61 +1,112 @@
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::extract::Request;
-use axum::middleware::Next;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use platform_kernel::error::AppError;
 use platform_kernel::manifest::PluginId;
-use platform_kernel::routes::{path_matches, RouteSpec};
+use platform_kernel::routes::{path_matches, RouteSpec, TenantDbSource};
+use sqlx::PgPool;
+use tower::Service;
+use tower::ServiceExt;
 
 use crate::http::auth::AuthUser;
 use crate::http::errors::ApiError;
 use crate::plugins::EnabledPlugins;
 
-/// Wrap one plugin's router so a disabled plugin returns 404 and a missing permission returns 403.
-pub fn wrap(
-    plugin_id: PluginId,
+struct PluginMount {
+    id: PluginId,
     specs: Vec<RouteSpec>,
-    enabled: Arc<EnabledPlugins>,
     router: Router,
-) -> Router {
-    let specs = Arc::new(specs);
-    router.layer(axum::middleware::from_fn(move |request: Request, next: Next| {
-        let plugin_id = plugin_id.clone();
-        let enabled = enabled.clone();
-        let specs = specs.clone();
-        async move { gate(plugin_id, specs, enabled, request, next).await }
-    }))
 }
 
-async fn gate(
-    plugin_id: PluginId,
-    specs: Arc<Vec<RouteSpec>>,
+/// Routes a plugin registered at boot.
+///
+/// Enablement is per tenant, so the process keeps the handlers, but a tenant's
+/// route table contains only the plugins that tenant has enabled. A disabled
+/// plugin is not matched. The response is the same 404 as a path that was never
+/// registered.
+#[derive(Clone)]
+pub struct PluginRouteTable {
+    mounts: Arc<Vec<PluginMount>>,
     enabled: Arc<EnabledPlugins>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let Some(user) = request.extensions().get::<AuthUser>().cloned() else {
-        return ApiError(AppError::Unauthorized("Sign in before continuing.".into())).into_response();
-    };
-    let tenant_id = user.tenant_id;
-    match enabled.is_enabled(tenant_id, &plugin_id).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return ApiError(AppError::NotFound(format!("Plugin `{plugin_id}` is not enabled."))).into_response();
+    pool: PgPool,
+}
+
+impl PluginRouteTable {
+    pub fn router(
+        mounts: Vec<(PluginId, Vec<RouteSpec>, Router)>,
+        enabled: Arc<EnabledPlugins>,
+        pool: PgPool,
+    ) -> Router {
+        let table = Self {
+            mounts: Arc::new(
+                mounts
+                    .into_iter()
+                    .map(|(id, specs, router)| PluginMount { id, specs, router })
+                    .collect(),
+            ),
+            enabled,
+            pool,
+        };
+        Router::new().fallback_service(table)
+    }
+
+    async fn dispatch(self, mut request: Request) -> Response {
+        let Some(user) = request.extensions().get::<AuthUser>().cloned() else {
+            return ApiError(AppError::Unauthorized("Sign in before continuing.".into())).into_response();
+        };
+        let enabled = match self.enabled.ids(user.tenant_id).await {
+            Ok(ids) => ids,
+            Err(err) => return ApiError(err).into_response(),
+        };
+        let method = request.method().clone();
+        let path = request.uri().path().to_string();
+        let Some(mount) = self.mounts.iter().find(|mount| {
+            enabled.contains(&mount.id)
+                && mount
+                    .specs
+                    .iter()
+                    .any(|spec| spec.method == method && path_matches(&spec.path, &path))
+        }) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let spec = mount
+            .specs
+            .iter()
+            .find(|spec| spec.method == method && path_matches(&spec.path, &path))
+            .expect("matched mount has this route");
+        if !user.actor().has_permission(&spec.permission) {
+            return ApiError(AppError::Forbidden("You do not have permission for that route.".into())).into_response();
         }
-        Err(err) => return ApiError(err).into_response(),
+        request.extensions_mut().insert(TenantDbSource::new(
+            self.pool.clone(),
+            user.tenant_id,
+            user.actor(),
+        ));
+        match mount.router.clone().oneshot(request).await {
+            Ok(response) => response,
+            Err(err) => match err {},
+        }
     }
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let Some(spec) = specs
-        .iter()
-        .find(|spec| spec.method == method && path_matches(&spec.path, &path))
-    else {
-        return ApiError(AppError::Forbidden("You do not have permission for that route.".into())).into_response();
-    };
-    if !user.actor().has_permission(&spec.permission) {
-        return ApiError(AppError::Forbidden("You do not have permission for that route.".into())).into_response();
+}
+
+impl Service<Request> for PluginRouteTable {
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
-    next.run(request).await
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        let table = self.clone();
+        Box::pin(async move { Ok(table.dispatch(request).await) })
+    }
 }

@@ -11,6 +11,7 @@ const CORE_SECURITY_DEFINER: &[&str] = &[
     "platform_resolve_session",
     "platform_resolve_tenant",
     "platform_provision_tenant",
+    "catalog_seed_units",
 ];
 
 /// Fail if any public table outside the allowlist lacks proper RLS.

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use catalog_contract::CatalogApi;
 use inventory_contract::{StockBalance, StockIssue, StockLedger};
 use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityHandler, CapabilityKind};
 use platform_kernel::context::TenantTx;
@@ -70,7 +71,14 @@ impl Plugin for InventoryPlugin {
     }
 
     fn register(&self, registrar: &mut Registrar) {
-        registrar.provide(Arc::new(PgStockLedger));
+        let catalog = registrar
+            .get::<CatalogApi>()
+            .expect("catalog is registered before inventory")
+            .as_ref()
+            .clone();
+        registrar.provide(Arc::new(PgStockLedger {
+            catalog: catalog.clone(),
+        }));
         registrar.capability(
             Capability {
                 id: "inventory.summary".into(),
@@ -104,12 +112,25 @@ impl Plugin for InventoryPlugin {
                 output_schema: json!({"type":"object"}),
                 description: "Adjust stock".into(),
             },
-            Arc::new(AdjustCapability),
+            Arc::new(AdjustCapability { catalog }),
         );
     }
 }
 
-struct PgStockLedger;
+struct PgStockLedger {
+    catalog: CatalogApi,
+}
+
+impl PgStockLedger {
+    async fn ensure_stocked(&self, tx: &mut TenantTx<'_>, item_id: i32) -> Result<(), AppError> {
+        if !self.catalog.0.is_stock_tracked(tx, item_id).await? {
+            return Err(AppError::BadRequest(
+                "Services are not tracked in stock.".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl StockLedger for PgStockLedger {
@@ -118,6 +139,7 @@ impl StockLedger for PgStockLedger {
         ids.sort_unstable();
         ids.dedup();
         for item_id in ids {
+            self.ensure_stocked(tx, item_id).await?;
             sqlx::query("SELECT id FROM items WHERE id = $1 FOR UPDATE")
                 .bind(item_id)
                 .fetch_optional(tx.conn())
@@ -176,6 +198,7 @@ impl StockLedger for PgStockLedger {
         total_major: Option<i64>,
         reason: &str,
     ) -> Result<StockBalance, AppError> {
+        self.ensure_stocked(tx, item_id).await?;
         let held: Option<(i32, i64)> =
             sqlx::query_as("SELECT stock, avg_cost FROM items WHERE id = $1 AND active FOR UPDATE")
                 .bind(item_id)
@@ -305,7 +328,9 @@ impl CapabilityHandler for SummaryCapability {
     }
 }
 
-struct AdjustCapability;
+struct AdjustCapability {
+    catalog: CatalogApi,
+}
 
 #[async_trait]
 impl CapabilityHandler for AdjustCapability {
@@ -327,7 +352,9 @@ impl CapabilityHandler for AdjustCapability {
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let ledger = PgStockLedger;
+        let ledger = PgStockLedger {
+            catalog: self.catalog.clone(),
+        };
         match direction {
             "in" => {
                 let bal = ledger.receive(tx, item_id, qty, None, "AI adjust").await?;

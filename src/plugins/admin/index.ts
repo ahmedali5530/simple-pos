@@ -5,6 +5,7 @@ export const adminPlugin = defineUiPlugin({
   permissions: ['platform.admin', 'platform.plugins.manage', 'platform.tokens.manage'],
   nav: [],
   settingsPages: [
+    { id: 'users', label: 'Users', href: '/settings/users', permission: 'users.write', order: 40 },
     {
       id: 'plugins',
       label: 'Plugins',

@@ -4,6 +4,7 @@
   import { formatMoney } from '../money'
   import { printCashShift } from '../print'
   import type { CashDesk, CashShift } from '../types'
+  import { toast, toastError } from '../toast'
 
   interface ExpenseLine {
     description: string
@@ -25,8 +26,6 @@
   let { currency, locale }: Props = $props()
 
   let desk = $state<CashDesk | null>(null)
-  let error = $state('')
-  let note = $state('')
   let saving = $state(false)
   let printingId = $state<number | null>(null)
   let showSystem = $state(false)
@@ -42,14 +41,13 @@
   })
 
   async function refresh() {
-    error = ''
     try {
       desk = await loadCashDesk()
       if (!desk.open && opening === '') opening = String(desk.suggested_opening)
       if (desk.open && desk.open.id !== hydratedId) hydrate(desk.open)
     } catch (reason) {
       desk = null
-      error = reason instanceof Error ? reason.message : 'The cash desk did not open.'
+      toastError(reason, 'The cash desk did not open.')
     }
   }
 
@@ -113,12 +111,10 @@
   async function startShift() {
     const problem = requireAmount(opening, 'Previous till cash') || requireAmount(petty, 'Petty cash')
     if (problem) {
-      error = problem
+      toast.error(problem)
       return
     }
     saving = true
-    error = ''
-    note = ''
     try {
       desk = await openCashShift(Number(opening), Number(petty))
       showSystem = false
@@ -126,8 +122,9 @@
       taken = ''
       manual = ''
       hydratedId = desk.open?.id ?? null
+      toast.success('The shift is open.')
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The shift did not start.'
+      toastError(reason, 'The shift did not start.')
     } finally {
       saving = false
     }
@@ -136,18 +133,16 @@
   async function saveDraft() {
     const problem = formProblem(false)
     if (problem) {
-      error = problem
+      toast.error(problem)
       return
     }
     saving = true
-    error = ''
-    note = ''
     try {
       desk = await saveCashDraft(formBody())
       if (desk.open) hydrate(desk.open)
-      note = 'Draft saved.'
+      toast.success('Draft saved.')
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The draft did not save.'
+      toastError(reason, 'The draft did not save.')
     } finally {
       saving = false
     }
@@ -156,15 +151,13 @@
   async function finishShift() {
     const problem = formProblem(true)
     if (problem) {
-      error = problem
+      toast.error(problem)
       return
     }
     saving = true
-    error = ''
-    note = ''
     try {
       desk = await closeCashShift(formBody())
-      note = 'The shift is closed.'
+      toast.success('The shift is closed.')
       showSystem = false
       lines = [blankExpense()]
       taken = ''
@@ -173,7 +166,7 @@
       hydratedId = null
       if (!desk.open) opening = String(desk.suggested_opening)
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The shift did not close.'
+      toastError(reason, 'The shift did not close.')
     } finally {
       saving = false
     }
@@ -181,12 +174,12 @@
 
   async function printShift(id: number) {
     printingId = id
-    error = ''
     try {
       const result = await printCashShift(id)
-      note = result.printed ? 'The closing slip was sent to the printer.' : 'Printing is turned off in System settings.'
+      if (result.printed) toast.success('The closing slip was sent to the printer.')
+      else toast.warning('Printing is turned off in System settings.')
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The closing slip did not print.'
+      toastError(reason, 'The closing slip did not print.')
     } finally {
       printingId = null
     }
@@ -196,8 +189,6 @@
 <div class="stock-board cash-board">
   <aside class="stock-form">
     <h2>Cash Closing</h2>
-    {#if error}<p class="field-error">{error}</p>{/if}
-    {#if note}<p class="mt-2 text-[12px] font-bold text-emerald-700">{note}</p>{/if}
     {#if !desk}
       <p class="hint">Opening the cash desk…</p>
     {:else if !desk.open}

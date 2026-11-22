@@ -1,6 +1,7 @@
 <script lang="ts">
   import { downloadWorkbook, importCategoriesWorkbook, orderCategories, removeCategory, saveCategory } from '../api'
   import type { Category, PosSnapshot } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     categories: Category[]
@@ -13,17 +14,13 @@
   let editing = $state<number | 'new' | null>(null)
   let loaded = $state<number | 'new' | null>(null)
   let name = $state('')
-  let formError = $state('')
   let confirmRemove = $state(false)
   let saving = $state(false)
   let sheetBusy = $state(false)
-  let sheetNote = $state('')
-  let sheetError = $state('')
 
   $effect(() => {
     if (editing === loaded) return
     loaded = editing
-    formError = ''
     confirmRemove = false
     name = categories.find((category) => category.id === editing)?.name ?? ''
   })
@@ -38,7 +35,7 @@
     orderCategories(ids)
       .then(onChange)
       .catch((error) => {
-        formError = error instanceof Error ? error.message : 'Could not reorder the categories.'
+        toastError(error, 'Could not reorder the categories.')
       })
       .finally(() => {
         saving = false
@@ -46,14 +43,12 @@
   }
 
   async function exportWorkbook() {
-    sheetError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       await downloadWorkbook('/api/categories/export', 'categories.xlsx')
-      sheetNote = 'The category workbook downloaded.'
+      toastSaved('The category workbook downloaded.')
     } catch (error) {
-      sheetError = error instanceof Error ? error.message : 'The workbook did not download.'
+      toastError(error, 'The workbook did not download.')
     } finally {
       sheetBusy = false
     }
@@ -64,8 +59,6 @@
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
-    sheetError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       const result = await importCategoriesWorkbook(file)
@@ -79,11 +72,11 @@
         result.updated ? `${result.updated} renamed` : '',
         result.removed ? `${result.removed} removed` : '',
       ].filter(Boolean)
-      if (parts.length) sheetNote = `Saved the workbook: ${parts.join(', ')}.`
-      else if (result.reordered) sheetNote = 'Saved the category order.'
-      else sheetNote = 'The workbook matched the catalog.'
+      if (parts.length) toastSaved(`Saved the workbook: ${parts.join(', ')}.`)
+      else if (result.reordered) toastSaved('Saved the category order.')
+      else toastSaved('The workbook matched the catalog.')
     } catch (error) {
-      sheetError = error instanceof Error ? error.message : 'The workbook was not saved.'
+      toastError(error, 'The workbook was not saved.')
     } finally {
       sheetBusy = false
     }
@@ -91,18 +84,18 @@
 
   async function save() {
     if (!name.trim()) {
-      formError = 'Enter a category name.'
+      toast.error('Enter a category name.')
       return
     }
-    formError = ''
     saving = true
     try {
       const saved = await saveCategory(editing === 'new' ? null : editing, name.trim())
       onChange(saved.pos)
       loaded = saved.id
       editing = saved.id
+      toastSaved('Category saved.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not save the category.'
+      toastError(error, 'Could not save the category.')
     } finally {
       saving = false
     }
@@ -115,8 +108,9 @@
       onChange(await removeCategory(editing))
       loaded = null
       editing = null
+      toastSaved('Category removed.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not remove the category.'
+      toastError(error, 'Could not remove the category.')
       confirmRemove = false
     } finally {
       saving = false
@@ -138,8 +132,6 @@
       </label>
     </div>
     <p class="hint">Categories filter the catalog inside a section. An item belongs to one category. Leave id blank to add one, and put yes in remove to delete one. Row order is the catalog order.</p>
-    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
-    {#if sheetError}<p class="field-error">{sheetError}</p>{/if}
     <div class="setup-list">
       {#each categories as category, index (category.id)}
         <div class="order-row">
@@ -163,7 +155,6 @@
         Name
         <input bind:value={name} />
       </label>
-      {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}

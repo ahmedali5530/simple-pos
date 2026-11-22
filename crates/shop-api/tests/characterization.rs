@@ -185,6 +185,14 @@ async fn pos_snapshot_shape() {
 }
 
 #[tokio::test]
+async fn legacy_bill_route_is_not_on_the_shop_router() {
+    let app = app().await;
+    let token = ensure_manager(&app).await;
+    let (status, _) = post_json(&app, "/api/bills", serde_json::json!({}), Some(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn session_and_logout() {
     let app = app().await;
     let token = ensure_manager(&app).await;

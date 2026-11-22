@@ -1,6 +1,7 @@
 <script lang="ts">
   import { saveSettings } from '../api'
   import type { BarcodeRule, PosSnapshot } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     snapshot: PosSnapshot
@@ -25,7 +26,6 @@
   let printerPort = $state('9100')
   let rules = $state<RuleDraft[]>([])
   let loaded = $state('')
-  let formError = $state('')
   let saving = $state(false)
 
   const key = $derived(
@@ -62,47 +62,46 @@
 
   async function save() {
     if (!name.trim()) {
-      formError = 'Enter a shop name.'
+      toast.error('Enter a shop name.')
       return
     }
     if (!/^[A-Za-z0-9]{1,8}$/.test(billPrefix.trim())) {
-      formError = 'The bill prefix is 1 to 8 letters or digits.'
+      toast.error('The bill prefix is 1 to 8 letters or digits.')
       return
     }
     if (!/^[A-Za-z]{3}$/.test(currency.trim())) {
-      formError = 'Currency is a 3-letter code, such as PKR.'
+      toast.error('Currency is a 3-letter code, such as PKR.')
       return
     }
     if (!locale.trim()) {
-      formError = 'Enter a locale, such as en-PK.'
+      toast.error('Enter a locale, such as en-PK.')
       return
     }
     if (!['network', 'usb', 'serial'].includes(printerKind)) {
-      formError = 'The printer is network, usb, or serial.'
+      toast.error('The printer is network, usb, or serial.')
       return
     }
     if (!/^\d+$/.test(printerPort) || Number(printerPort) < 1) {
-      formError = 'The printer port is not a usable number.'
+      toast.error('The printer port is not a usable number.')
       return
     }
     if (printEnabled && printerKind !== 'usb' && !printerTarget.trim()) {
-      formError = 'Enter the printer address.'
+      toast.error('Enter the printer address.')
       return
     }
     const barcodeRules: BarcodeRule[] = []
     for (const rule of rules) {
       const prefix = rule.prefix.trim()
       if (!/^\d{1,4}$/.test(prefix)) {
-        formError = 'A barcode prefix is 1 to 4 digits.'
+        toast.error('A barcode prefix is 1 to 4 digits.')
         return
       }
       if (!/^\d+$/.test(rule.scale) || Number(rule.scale) < 1) {
-        formError = 'Barcode scale must be at least 1.'
+        toast.error('Barcode scale must be at least 1.')
         return
       }
       barcodeRules.push({ prefix, mode: rule.mode, scale: Number(rule.scale) })
     }
-    formError = ''
     saving = true
     try {
       onChange(
@@ -118,8 +117,9 @@
           printer_port: Number(printerPort),
         }),
       )
+      toastSaved('Settings saved.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not save the settings.'
+      toastError(error, 'Could not save the settings.')
     } finally {
       saving = false
     }
@@ -210,7 +210,6 @@
       {/each}
       <button type="button" class="ghost light" onclick={addRule}>Add barcode rule</button>
     </div>
-    {#if formError}<p class="field-error">{formError}</p>{/if}
     <div class="sheet-actions">
       <button type="button" class="save" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
     </div>

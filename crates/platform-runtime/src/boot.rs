@@ -97,7 +97,7 @@ impl Platform {
         let lifecycle = PluginLifecycle::new(pools.runtime.clone(), catalog.clone(), enabled.clone());
 
         let mut registrar = Registrar::new();
-        let mut plugin_router = Router::new();
+        let mut route_mounts = Vec::new();
         let mut handlers = Vec::new();
         for plugin in catalog.plugins_in_order() {
             plugin.register(&mut registrar);
@@ -110,12 +110,7 @@ impl Platform {
             let mut routes = PluginRoutes::new(manifest.id.clone(), declared);
             plugin.routes(&mut routes)?;
             let (router, specs) = routes.finish();
-            plugin_router = plugin_router.merge(plugin_gate::wrap(
-                manifest.id.clone(),
-                specs,
-                enabled.clone(),
-                router,
-            ));
+            route_mounts.push((manifest.id.clone(), specs, router));
 
             let consumed: HashSet<String> = manifest.events_consumed.iter().cloned().collect();
             let mut events = PluginEvents::new(manifest.id.clone(), consumed);
@@ -136,6 +131,8 @@ impl Platform {
         rls_validator::validate(&pools.migration).await?;
         pools.guard_runtime().await.ok();
 
+        let plugin_router =
+            plugin_gate::PluginRouteTable::router(route_mounts, enabled.clone(), pools.runtime.clone());
         let gateway = CapabilityGateway::new(pools.runtime.clone(), capability_registry);
         let dispatcher = EventDispatcher::new(pools.runtime.clone(), handlers, enabled.clone());
         let stop_dispatcher = Some(dispatcher.spawn());

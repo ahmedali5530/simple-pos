@@ -2,10 +2,10 @@
   import { loadBootstrap, login, saveUser } from './api'
   import { navigate } from './route.svelte'
   import { signIn } from './session.svelte'
+  import { toast, toastError } from './toast'
 
   let name = $state('')
   let password = $state('')
-  let message = $state('')
   let sending = $state(false)
   let needsUser = $state(false)
   let shopName = $state('Shop')
@@ -32,11 +32,10 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault()
     if (!name.trim() || !password) {
-      message = 'Enter a name and a password.'
+      toast.error('Enter a name and a password.')
       return
     }
     sending = true
-    message = ''
     try {
       if (needsUser) {
         await saveUser(null, {
@@ -50,7 +49,7 @@
       signIn({ id: user.id, name: user.name, role: user.role, token: user.token })
       navigate('/billing')
     } catch (error) {
-      message = error instanceof Error ? error.message : 'Could not sign in.'
+      toastError(error, 'Could not sign in.')
     } finally {
       sending = false
     }
@@ -70,7 +69,6 @@
       Password
       <input type="password" autocomplete="current-password" bind:value={password} />
     </label>
-    {#if message}<p class="field-error">{message}</p>{/if}
     <div class="sheet-actions">
       <button type="submit" class="save" disabled={sending}>{sending ? 'Signing in…' : needsUser ? 'Create and sign in' : 'Sign in'}</button>
     </div>

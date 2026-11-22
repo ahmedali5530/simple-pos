@@ -17,3 +17,16 @@ catalog-contract = { path = "../../contracts/catalog-contract" }
 inventory-contract = { path = "../../contracts/inventory-contract" }
 sales-contract = { path = "../../contracts/sales-contract" }
 printing-contract = { path = "../../contracts/printing-contract" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+axum = { version = "0.8", features = ["json"] }
+tower = "0.5"
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+platform-runtime = { path = "../../platform-runtime" }
+plugin-catalog = { path = "../catalog" }
+plugin-inventory = { path = "../inventory" }
+plugin-cash = { path = "../cash" }
+plugin-printing = { path = "../printing" }
+plugin-reports = { path = "../reports" }

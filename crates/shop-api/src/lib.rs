@@ -12,15 +12,12 @@ use axum::{
 use shop_core::{
     adjust_stock, cash_desk, clear_item_image, export_categories, export_items, export_movements,
     import_categories, import_items, import_movements, item_image_ext, load_pos, load_reports,
-    login, logout, needs_first_user, open_session, open_shift, post_bill, print_cash_shift,
-    print_product_mix, print_saved_bill, recent_movements, remove_category, remove_section,
-    remove_user, reorder_categories, reorder_sections, save_category, save_item, save_section,
-    save_settings, save_shift, save_user, set_item_image, set_item_prompt, set_pos_focus,
-    set_pos_sections, stock_summary, AppError, CashDesk, CategoryForm, CategoryImport, ErrorBody,
-    ItemForm, ItemImport, ItemPromptRequest, LoginForm, LoginSession, MovementImport, OpenShift,
-    OrderForm, PgPool, PosFocus, PosSnapshot, PosUser, PostBillRequest, PostedBill, PrintOutcome,
-    PrintRequest, Reports, SavedItem, SavedRecord, SectionForm, SetFocusRequest,
-    SetSectionsRequest, SettingsForm, ShiftForm, ShopConfig, StockBalance, StockMove,
+    login, logout, needs_first_user, open_session, open_shift, print_cash_shift,
+    print_product_mix, print_saved_bill, recent_movements, remove_user, save_settings, save_shift,
+    save_user, set_item_image, stock_summary, AppError, CashDesk, CategoryImport, ErrorBody,
+    ItemImport, LoginForm, LoginSession, MovementImport, OpenShift, OrderForm, PgPool, PosSnapshot,
+    PosUser, PrintOutcome, PrintRequest, Reports, SavedItem, SavedRecord, SettingsForm, ShiftForm,
+    ShopConfig, StockBalance, StockMove,
     StockMovement, StockPage, UserForm,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -307,10 +304,6 @@ fn build_router_inner(
         platform,
     };
     Router::new()
-        .route("/api/pos", get(get_pos))
-        .route("/api/pos/focus", put(put_focus))
-        .route("/api/pos/sections", put(put_sections))
-        .route("/api/bills", axum::routing::post(post_bill_route))
         .route("/api/print", post(post_print))
         .route("/api/print/mix", post(post_print_mix))
         .route("/api/print/cash", post(post_print_cash))
@@ -321,6 +314,7 @@ fn build_router_inner(
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         .route("/api/session", get(get_session))
+        .route("/api/pos", get(get_pos))
         .route("/api/bootstrap", get(get_bootstrap))
         .route("/api/sections", post(post_section))
         .route("/api/sections/order", put(put_section_order))
@@ -374,8 +368,6 @@ fn build_router_inner(
         .route("/api/v1/capabilities/{id}/invoke", post(post_capability_invoke))
         .route("/api/v1/mcp", get(get_mcp_descriptor))
         // Legacy aliases under /api/v1/*
-        .route("/api/v1/pos", get(get_pos))
-        .route("/api/v1/catalog/items", post(post_item))
         .route("/api/v1/inventory/summary", get(get_stock_summary))
         .route("/api/v1/cash", get(get_cash))
         .route("/api/v1/reports", get(get_reports))
@@ -405,23 +397,6 @@ fn serve_till(api: Router) -> Router {
 
 async fn get_pos(State(state): State<AppState>) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
     Ok(Json(load_pos(&state.pool, &state.shop).await?))
-}
-
-async fn put_focus(
-    State(state): State<AppState>,
-    Json(body): Json<SetFocusRequest>,
-) -> Result<Json<PosFocus>, ApiError> {
-    let last_section_id = set_pos_focus(&state.pool, body.section_id).await?;
-    Ok(Json(PosFocus { last_section_id }))
-}
-
-async fn put_sections(
-    State(state): State<AppState>,
-    Json(body): Json<SetSectionsRequest>,
-) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    Ok(Json(
-        set_pos_sections(&state.pool, &state.shop, &body.sections).await?,
-    ))
 }
 
 #[derive(serde::Serialize)]
@@ -552,22 +527,40 @@ async fn require_user(State(state): State<AppState>, mut request: Request, next:
     }
 }
 
+async fn catalog_then_pos(
+    state: &AppState,
+    run: impl AsyncFnOnce(&mut platform_kernel::context::TenantTx<'_>) -> Result<i32, platform_kernel::error::AppError>,
+) -> Result<SavedRecord, ApiError> {
+    let mut tx = platform_kernel::context::TenantTx::begin_with(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        platform_kernel::context::Actor::system(),
+        false,
+    )
+    .await
+    .map_err(platform_to_api)?;
+    let id = run(&mut tx).await.map_err(platform_to_api)?;
+    tx.commit().await.map_err(platform_to_api)?;
+    let pos = load_pos(&state.pool, &state.shop).await?;
+    Ok(SavedRecord { id, pos })
+}
+
 async fn post_section(
     State(state): State<AppState>,
-    Json(body): Json<SectionForm>,
+    Json(body): Json<plugin_catalog::service::SectionForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
     Ok(Json(
-        save_section(&state.pool, &state.shop, None, &body).await?,
+        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_section(tx, None, &body).await).await?,
     ))
 }
 
 async fn put_section(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    Json(body): Json<SectionForm>,
+    Json(body): Json<plugin_catalog::service::SectionForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
     Ok(Json(
-        save_section(&state.pool, &state.shop, Some(id), &body).await?,
+        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_section(tx, Some(id), &body).await).await?,
     ))
 }
 
@@ -575,34 +568,42 @@ async fn delete_section(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(remove_section(&state.pool, &state.shop, id).await?))
+    catalog_then_pos(&state, async |tx| {
+        plugin_catalog::service::remove_section(tx, id).await?;
+        Ok(id)
+    })
+    .await?;
+    Ok(Json(load_pos(&state.pool, &state.shop).await?))
 }
 
 async fn put_section_order(
     State(state): State<AppState>,
     Json(body): Json<OrderForm>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(
-        reorder_sections(&state.pool, &state.shop, &body.ids).await?,
-    ))
+    catalog_then_pos(&state, async |tx| {
+        plugin_catalog::service::reorder(tx, "sections", "pos_order", &body.ids).await?;
+        Ok(0)
+    })
+    .await?;
+    Ok(Json(load_pos(&state.pool, &state.shop).await?))
 }
 
 async fn post_category(
     State(state): State<AppState>,
-    Json(body): Json<CategoryForm>,
+    Json(body): Json<plugin_catalog::service::CategoryForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
     Ok(Json(
-        save_category(&state.pool, &state.shop, None, &body).await?,
+        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_category(tx, None, &body).await).await?,
     ))
 }
 
 async fn put_category(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    Json(body): Json<CategoryForm>,
+    Json(body): Json<plugin_catalog::service::CategoryForm>,
 ) -> Result<Json<SavedRecord>, ApiError> {
     Ok(Json(
-        save_category(&state.pool, &state.shop, Some(id), &body).await?,
+        catalog_then_pos(&state, async |tx| plugin_catalog::service::save_category(tx, Some(id), &body).await).await?,
     ))
 }
 
@@ -610,16 +611,24 @@ async fn delete_category(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(remove_category(&state.pool, &state.shop, id).await?))
+    catalog_then_pos(&state, async |tx| {
+        plugin_catalog::service::remove_category(tx, id).await?;
+        Ok(id)
+    })
+    .await?;
+    Ok(Json(load_pos(&state.pool, &state.shop).await?))
 }
 
 async fn put_category_order(
     State(state): State<AppState>,
     Json(body): Json<OrderForm>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(
-        reorder_categories(&state.pool, &state.shop, &body.ids).await?,
-    ))
+    catalog_then_pos(&state, async |tx| {
+        plugin_catalog::service::reorder(tx, "categories", "sort_order", &body.ids).await?;
+        Ok(0)
+    })
+    .await?;
+    Ok(Json(load_pos(&state.pool, &state.shop).await?))
 }
 
 async fn post_user(
@@ -779,31 +788,32 @@ async fn workbook_bytes(mut multipart: Multipart) -> Result<Vec<u8>, AppError> {
 
 async fn post_item(
     State(state): State<AppState>,
-    Json(body): Json<ItemForm>,
+    Json(body): Json<plugin_catalog::service::ItemForm>,
 ) -> Result<Json<SavedItem>, ApiError> {
-    Ok(Json(
-        save_item(&state.pool, &state.shop, None, &body).await?,
-    ))
+    let saved = catalog_then_pos(&state, async |tx| plugin_catalog::service::save_item(tx, None, &body).await).await?;
+    Ok(Json(SavedItem { item_id: saved.id, pos: saved.pos }))
 }
 
 async fn put_item(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    Json(body): Json<ItemForm>,
+    Json(body): Json<plugin_catalog::service::ItemForm>,
 ) -> Result<Json<SavedItem>, ApiError> {
-    Ok(Json(
-        save_item(&state.pool, &state.shop, Some(id), &body).await?,
-    ))
+    let saved = catalog_then_pos(&state, async |tx| plugin_catalog::service::save_item(tx, Some(id), &body).await).await?;
+    Ok(Json(SavedItem { item_id: saved.id, pos: saved.pos }))
 }
 
 async fn put_item_prompt(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    Json(body): Json<ItemPromptRequest>,
+    Json(body): Json<plugin_catalog::service::ItemPromptRequest>,
 ) -> Result<Json<shop_core::PosSnapshot>, ApiError> {
-    Ok(Json(
-        set_item_prompt(&state.pool, &state.shop, id, &body).await?,
-    ))
+    let saved = catalog_then_pos(&state, async |tx| {
+        plugin_catalog::service::set_item_prompt(tx, id, &body).await?;
+        Ok(id)
+    })
+    .await?;
+    Ok(Json(saved.pos))
 }
 
 fn shop_root() -> PathBuf {
@@ -1038,25 +1048,6 @@ async fn post_cash_close(
     let cashier = open_session(&state.pool, &session_token(&headers)).await?;
     Ok(Json(
         save_shift(&state.pool, cashier.id, &body, true).await?,
-    ))
-}
-
-async fn post_bill_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<PostBillRequest>,
-) -> Result<Json<PostedBill>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(
-        post_bill(
-            &state.pool,
-            &state.shop,
-            cashier.id,
-            body.section_id,
-            &body.lines,
-            body.customer.as_deref(),
-        )
-        .await?,
     ))
 }
 

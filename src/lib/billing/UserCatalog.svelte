@@ -1,6 +1,7 @@
 <script lang="ts">
   import { removeUser, saveUser } from '../api'
   import type { PosSnapshot, PosUser } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     users: PosUser[]
@@ -15,7 +16,6 @@
   let password = $state('')
   let role = $state<'cashier' | 'manager'>('manager')
   let active = $state(true)
-  let formError = $state('')
   let confirmRemove = $state(false)
   let saving = $state(false)
 
@@ -24,7 +24,6 @@
   $effect(() => {
     if (editing === loaded) return
     loaded = editing
-    formError = ''
     confirmRemove = false
     password = ''
     const user = users.find((entry) => entry.id === editing) ?? null
@@ -39,18 +38,17 @@
 
   async function save() {
     if (!name.trim()) {
-      formError = 'Enter a name.'
+      toast.error('Enter a name.')
       return
     }
     if (editing === 'new' && password.trim().length < 4) {
-      formError = 'Use at least 4 characters for the password.'
+      toast.error('Use at least 4 characters for the password.')
       return
     }
     if (editing !== 'new' && password.trim() && password.trim().length < 4) {
-      formError = 'Use at least 4 characters for the password.'
+      toast.error('Use at least 4 characters for the password.')
       return
     }
-    formError = ''
     saving = true
     try {
       const saved = await saveUser(editing === 'new' ? null : editing, {
@@ -63,8 +61,9 @@
       loaded = saved.id
       editing = saved.id
       password = ''
+      toastSaved('User saved.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not save the user.'
+      toastError(error, 'Could not save the user.')
     } finally {
       saving = false
     }
@@ -77,8 +76,9 @@
       onChange(await removeUser(editing))
       loaded = null
       editing = null
+      toastSaved('User removed.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not remove the user.'
+      toastError(error, 'Could not remove the user.')
       confirmRemove = false
     } finally {
       saving = false
@@ -135,7 +135,6 @@
         ><i></i></button>
         {active ? 'Account is on' : 'Account is off'}
       </label>
-      {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}

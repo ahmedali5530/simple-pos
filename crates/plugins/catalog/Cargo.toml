@@ -12,6 +12,17 @@ platform-runtime = { path = "../../platform-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
-shop-core = { path = "../../shop-core" }
 catalog-contract = { path = "../../contracts/catalog-contract" }
-platform-sheets = { path = "../../platform-sheets" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+platform-runtime = { path = "../../platform-runtime" }
+plugin-inventory = { path = "../inventory" }
+plugin-pos = { path = "../pos" }
+plugin-cash = { path = "../cash" }
+plugin-printing = { path = "../printing" }
+plugin-reports = { path = "../reports" }
+axum = { version = "0.8", features = ["json"] }
+tower = "0.5"
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"

@@ -25,4 +25,4 @@ pub use migrate::Migration;
 pub use permission::Permission;
 pub use plugin::Plugin;
 pub use registry::{EnabledSet, PersistedPlugin, PluginCatalog, RegistryError};
-pub use routes::{PluginRoutes, RegistrationError, RouteSpec};
+pub use routes::{PluginRoutes, RegistrationError, RouteSpec, TenantDb, TenantDbSource};

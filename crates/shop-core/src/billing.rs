@@ -121,7 +121,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
     Ok(result)
 }
 
-pub(crate) async fn load_pos_tx(
+pub async fn load_pos_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     shop: &ShopConfig,
 ) -> Result<PosSnapshot, AppError> {
@@ -289,6 +289,15 @@ pub(crate) async fn load_pos_tx(
 
 pub async fn set_pos_focus(pool: &PgPool, section_id: i32) -> Result<i32, AppError> {
     let mut tx = crate::tenant::begin(pool).await?;
+    let saved = set_pos_focus_tx(&mut tx, section_id).await?;
+    tx.commit().await?;
+    Ok(saved)
+}
+
+pub async fn set_pos_focus_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    section_id: i32,
+) -> Result<i32, AppError> {
     let updated = sqlx::query(
         r#"
         UPDATE pos_state
@@ -298,19 +307,29 @@ pub async fn set_pos_focus(pool: &PgPool, section_id: i32) -> Result<i32, AppErr
         "#,
     )
     .bind(section_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound(
             "That section is no longer in the catalog.".into(),
         ));
     }
-    tx.commit().await?;
     Ok(section_id)
 }
 
 pub async fn set_pos_sections(
     pool: &PgPool,
+    shop: &ShopConfig,
+    layout: &[SectionLayout],
+) -> Result<PosSnapshot, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let pos = set_pos_sections_tx(&mut tx, shop, layout).await?;
+    tx.commit().await?;
+    Ok(pos)
+}
+
+pub async fn set_pos_sections_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     shop: &ShopConfig,
     layout: &[SectionLayout],
 ) -> Result<PosSnapshot, AppError> {
@@ -332,8 +351,6 @@ pub async fn set_pos_sections(
             ));
         }
     }
-
-    let mut tx = crate::tenant::begin(pool).await?;
     let known = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sections WHERE id = ANY($1)")
         .bind(
             layout
@@ -341,7 +358,7 @@ pub async fn set_pos_sections(
                 .map(|section| section.id)
                 .collect::<Vec<_>>(),
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
     if known != layout.len() as i64 {
         return Err(AppError::NotFound(
@@ -356,12 +373,10 @@ pub async fn set_pos_sections(
         .bind(section.show_on_pos)
         .bind(index as i32)
         .bind(section.id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    let pos = load_pos_tx(&mut tx, shop).await?;
-    tx.commit().await?;
-    Ok(pos)
+    load_pos_tx(tx, shop).await
 }
 
 pub async fn set_item_prompt(
@@ -771,6 +786,20 @@ pub async fn post_bill(
     lines: &[BillLineInput],
     customer: Option<&str>,
 ) -> Result<PostedBill, AppError> {
+    let mut tx = crate::tenant::begin(pool).await?;
+    let posted = post_bill_tx(&mut tx, shop, user_id, section_id, lines, customer).await?;
+    tx.commit().await?;
+    Ok(posted)
+}
+
+pub async fn post_bill_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    shop: &ShopConfig,
+    user_id: i32,
+    section_id: i32,
+    lines: &[BillLineInput],
+    customer: Option<&str>,
+) -> Result<PostedBill, AppError> {
     if lines.is_empty() {
         return Err(AppError::BadRequest(
             "Add at least one item before posting the bill.".into(),
@@ -782,14 +811,13 @@ pub async fn post_bill(
             "Keep the customer name to 80 characters.".into(),
         ));
     }
-    let mut tx = crate::tenant::begin(pool).await?;
-    let shop = current_shop_tx(&mut tx, shop).await?;
+    let shop = current_shop_tx(tx, shop).await?;
     let shop = &shop;
     let section_name = sqlx::query_scalar::<_, String>(
         "SELECT name FROM sections WHERE id = $1",
     )
     .bind(section_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| AppError::NotFound("That section is not in the catalog.".into()))?;
 
@@ -830,7 +858,7 @@ pub async fn post_bill(
             )
             .bind(line.item_id)
             .bind(section_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?
             .ok_or_else(|| {
                 AppError::BadRequest(format!("That item is not sold in {section_name}."))
@@ -851,7 +879,7 @@ pub async fn post_bill(
                 )
                 .bind(variant_id)
                 .bind(item.id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut **tx)
                 .await?
                 .ok_or_else(|| {
                     AppError::BadRequest(format!("{} does not have that option.", item.name))
@@ -955,7 +983,7 @@ pub async fn post_bill(
     }
 
     let bill_id = sqlx::query_scalar::<_, i32>("SELECT nextval('bills_id_seq')::int")
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
     let bill_no = format!("{}-{}", shop.bill_prefix, 1000 + bill_id);
     sqlx::query(
@@ -970,14 +998,14 @@ pub async fn post_bill(
     .bind(user_id)
     .bind(total)
     .bind(customer)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     for (item_id, stock_units) in &taken {
         sqlx::query("UPDATE items SET stock = stock - $1 WHERE id = $2")
             .bind(stock_units)
             .bind(item_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     for sale in &prepared {
@@ -996,7 +1024,7 @@ pub async fn post_bill(
         .bind(sale.units)
         .bind(sale.amount)
         .bind(sale.cost_total)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         sqlx::query(
             r#"
@@ -1008,12 +1036,11 @@ pub async fn post_bill(
         .bind(-sale.stock_units)
         .bind(format!("POS bill {bill_no}"))
         .bind(bill_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
 
-    let pos = load_pos_tx(&mut tx, shop).await?;
-    tx.commit().await?;
+    let pos = load_pos_tx(tx, shop).await?;
     Ok(PostedBill {
         bill_no,
         total,

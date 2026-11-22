@@ -27,11 +27,14 @@
   import VariantDialog from './VariantDialog.svelte'
   import PluginAdmin from '../../plugins/admin/screens/PluginAdmin.svelte'
   import type { UiNavItem } from '../../platform/registry'
+  import { pluginForPath } from '../../plugins/registry'
 
   interface Props {
     pluginNav?: UiNavItem[]
+    settingsPages?: { id: string; label: string; href: string }[]
+    available?: { id: string; enabled: boolean }[] | null
   }
-  let { pluginNav }: Props = $props()
+  let { pluginNav, settingsPages = [], available = null }: Props = $props()
 
   let snapshot = $state<PosSnapshot | null>(null)
   let loadFailed = $state(false)
@@ -52,7 +55,20 @@
 
   const sections = $derived(snapshot?.sections ?? [])
   const active = $derived(sections.find((section) => section.id === focusId) ?? sections[0] ?? null)
-  const screen = $derived(screenOf(location.path))
+  const screen = $derived.by(() => {
+    const path = location.path
+    const raw = screenOf(path)
+    const owner = pluginForPath(path)
+    if (available == null) return owner ? 'pending' : raw
+    if (owner) {
+      const row = available.find((plugin) => plugin.id === owner)
+      if (row && !row.enabled) return 'missing'
+    }
+    if (raw === 'settings' && settingsPages.length > 0 && !settingsPages.some((page) => page.href === path)) {
+      return 'missing'
+    }
+    return raw
+  })
   const subtitle = $derived(
     screen === 'settings'
       ? 'Settings'
@@ -562,21 +578,13 @@
       </div>
     </div>
     <nav class="nav" aria-label="Main">
-      {#if pluginNav && pluginNav.length > 0}
-        {#each pluginNav as item (item.id)}
-          <a
-            href={item.href}
-            class:active={location.path === item.href || location.path.startsWith(item.href + '/') || (item.href.startsWith('/settings') && screen === 'settings' && item.id === 'settings') || (item.href.startsWith('/reports') && screen === 'reports')}
-            onclick={(event) => (item.href === '/billing' ? openBilling(event) : followLink(event, item.href))}
-          >{item.label}</a>
-        {/each}
-      {:else}
-        <a href="/billing" class:active={screen === 'billing'} onclick={openBilling}>POS Billing</a>
-        <a href="/stock" class:active={screen === 'stock'} onclick={(event) => followLink(event, '/stock')}>Stock In / Out</a>
-        <a href="/reports/sales" class:active={screen === 'reports'} onclick={(event) => followLink(event, '/reports/sales')}>Reports & Summary</a>
-        <a href="/cash" class:active={screen === 'cash'} onclick={(event) => followLink(event, '/cash')}>Cash Closing</a>
-        <a href="/settings/items" class:active={screen === 'settings'} onclick={(event) => followLink(event, '/settings/items')}>Settings</a>
-      {/if}
+      {#each pluginNav ?? [] as item (item.id)}
+        <a
+          href={item.href}
+          class:active={location.path === item.href || location.path.startsWith(item.href + '/') || (item.href.startsWith('/settings') && screen === 'settings' && item.id === 'settings') || (item.href.startsWith('/reports') && screen === 'reports')}
+          onclick={(event) => (item.href === '/billing' ? openBilling(event) : followLink(event, item.href))}
+        >{item.label}</a>
+      {/each}
     </nav>
     <div class="top-actions">
       {#if session.user}
@@ -588,12 +596,20 @@
     </div>
   </header>
 
-  {#if !snapshot && !loadFailed}
+  {#if screen === 'pending' || (!snapshot && !loadFailed)}
     <p class="loading">Opening the till…</p>
   {:else if !snapshot}
     <p class="loading">The till did not open.</p>
+  {:else if screen === 'missing'}
+    <main class="stage">
+      <section class="place">
+        <h2>404</h2>
+        <p class="hint">That page is not in the till.</p>
+        <p class="hint"><a href="/billing" onclick={openBilling}>Back to billing</a></p>
+      </section>
+    </main>
   {:else if screen === 'settings'}
-    <SettingsScreen page={settingsPage(location.path)} {snapshot} saving={savingItem} onSave={saveItem} onChange={applyPos} />
+    <SettingsScreen page={settingsPage(location.path)} {snapshot} saving={savingItem} onSave={saveItem} onChange={applyPos} pages={settingsPages} />
   {:else if screen === 'stock'}
     <main class="stage">
       <StockScreen sections={snapshot.sections} categories={snapshot.categories} currency={snapshot.currency} locale={snapshot.locale} onChange={applyPos} />
@@ -603,13 +619,6 @@
   {:else if screen === 'cash'}
     <main class="stage">
       <CashScreen currency={snapshot.currency} locale={snapshot.locale} />
-    </main>
-  {:else if screen === 'missing'}
-    <main class="stage">
-      <section class="place">
-        <h2>That page is not in the till.</h2>
-        <p class="hint"><a href="/billing" onclick={openBilling}>Back to billing</a></p>
-      </section>
     </main>
   {:else}
     <div class="section-tabs" role="tablist" aria-label="Sections">

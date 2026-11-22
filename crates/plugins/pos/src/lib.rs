@@ -9,8 +9,12 @@ use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::{builtins, Permission};
 use platform_kernel::plugin::Plugin;
+use platform_kernel::routes::{PluginRoutes, RegistrationError};
+use catalog_contract::CatalogApi;
 use sales_contract::{SalesQuery, SalesTotal};
 use serde_json::json;
+
+mod routes;
 
 pub struct PosPlugin;
 
@@ -52,9 +56,18 @@ impl Plugin for PosPlugin {
         &[]
     }
 
+    fn routes(&self, routes: &mut PluginRoutes) -> Result<(), RegistrationError> {
+        routes::mount(routes)
+    }
+
     fn register(&self, registrar: &mut Registrar) {
+        let catalog = registrar
+            .get::<CatalogApi>()
+            .expect("catalog is registered before pos")
+            .as_ref()
+            .clone();
         registrar.provide(Arc::new(PgSalesQuery));
-        registrar.deletion_veto(Arc::new(PosDeletionVeto));
+        registrar.deletion_veto(Arc::new(PosDeletionVeto { catalog }));
     }
 }
 
@@ -85,7 +98,9 @@ impl SalesQuery for PgSalesQuery {
     }
 }
 
-struct PosDeletionVeto;
+struct PosDeletionVeto {
+    catalog: CatalogApi,
+}
 
 #[async_trait]
 impl DeletionVeto for PosDeletionVeto {
@@ -96,6 +111,10 @@ impl DeletionVeto for PosDeletionVeto {
         id: i32,
     ) -> Result<Option<String>, AppError> {
         if entity == "section" {
+            let sections = self.catalog.0.list_sections(tx).await?;
+            if !sections.iter().any(|section| section.id == id) {
+                return Ok(None);
+            }
             let bills: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bills WHERE section_id = $1")
                 .bind(id)
                 .fetch_one(tx.conn())
@@ -118,5 +137,26 @@ impl DeletionVeto for PosDeletionVeto {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use platform_kernel::plugin::Plugin;
+
+    #[test]
+    fn bill_routes_are_registered_on_the_pos_plugin() {
+        let plugin = PosPlugin;
+        let manifest = plugin.manifest();
+        manifest.validate().unwrap();
+        let declared = manifest.permissions.iter().map(|p| p.as_str().to_string()).collect();
+        let mut routes = PluginRoutes::new(manifest.id.clone(), declared);
+        plugin.routes(&mut routes).unwrap();
+        let (_router, specs) = routes.finish();
+        let paths: Vec<_> = specs.iter().map(|spec| spec.path.as_str()).collect();
+        assert!(paths.contains(&"/api/v1/pos/bills"));
+        assert!(paths.contains(&"/api/v1/pos/snapshot"));
+        assert!(paths.iter().all(|path| path.starts_with("/api/v1/pos/")));
     }
 }

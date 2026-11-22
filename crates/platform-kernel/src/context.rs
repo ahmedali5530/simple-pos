@@ -92,6 +92,10 @@ impl<'a> TenantTx<'a> {
         &mut self.inner
     }
 
+    pub fn transaction(&mut self) -> &mut Transaction<'a, Postgres> {
+        &mut self.inner
+    }
+
     /// Borrow the underlying Postgres connection for sqlx queries.
     pub fn conn(&mut self) -> &mut sqlx::PgConnection {
         &mut *self.inner

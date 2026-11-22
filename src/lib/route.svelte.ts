@@ -1,4 +1,4 @@
-const settingsPages = ['items', 'sections', 'categories', 'users', 'system', 'plugins'] as const
+const settingsPages = ['items', 'sections', 'categories', 'units', 'users', 'system', 'plugins'] as const
 const reportPages = ['sales', 'ledger', 'mix'] as const
 
 export type SettingsPage = (typeof settingsPages)[number]

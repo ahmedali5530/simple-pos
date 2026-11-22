@@ -4,6 +4,7 @@
   import type { ReportSpan } from '../range'
   import type { Reports, StockMovement } from '../types'
   import ReportRange from './ReportRange.svelte'
+  import { toast, toastError } from '../toast'
   import VirtualList from './VirtualList.svelte'
 
   interface Props {
@@ -14,7 +15,7 @@
   let { currency, locale }: Props = $props()
 
   let report = $state<Reports | null>(null)
-  let error = $state('')
+  let failed = $state(false)
   let query = $state('')
 
   function money(cents: number) {
@@ -44,22 +45,21 @@
   )
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
-    error = ''
+    failed = false
     try {
       report = await loadReports(span.from, span.to)
     } catch (reason) {
       report = null
-      error = reason instanceof Error ? reason.message : 'The report did not open.'
+      failed = true
+      toastError(reason, 'The report did not open.')
     }
   }
 </script>
 
 <div class="report-board">
-  <ReportRange label={report?.range_label ?? ''} onchange={reload} oninvalid={(message) => (error = message)} />
-  {#if error}
-    <p class="field-error">{error}</p>
-  {:else if !report}
-    <p class="hint">Opening the report…</p>
+  <ReportRange label={report?.range_label ?? ''} onchange={reload} oninvalid={(message) => toast.error(message)} />
+  {#if !report}
+    {#if !failed}<p class="hint">Opening the report…</p>{/if}
   {:else}
     <div class="kpi-row">
       <article class="kpi">

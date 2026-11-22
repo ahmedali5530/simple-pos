@@ -41,6 +41,7 @@ export interface PlatformManifest {
   nav?: UiNavItem[]
   settings_pages?: UiSettingsPage[]
   report_pages?: UiReportPage[]
+  available?: { id: string; name: string; version: string; enabled: boolean }[]
 }
 
 export function filterNav(items: UiNavItem[], permissions: string[]): UiNavItem[] {

@@ -1780,6 +1780,7 @@ dependencies = [
  "serde_json",
  "sqlx 0.8.6",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -1843,11 +1844,17 @@ dependencies = [
  "catalog-contract",
  "platform-kernel",
  "platform-runtime",
- "platform-sheets",
+ "plugin-cash",
+ "plugin-inventory",
+ "plugin-pos",
+ "plugin-printing",
+ "plugin-reports",
  "serde",
  "serde_json",
- "shop-core",
  "sqlx 0.8.6",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -1856,6 +1863,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "catalog-contract",
  "inventory-contract",
  "platform-kernel",
  "platform-runtime",
@@ -1876,12 +1884,20 @@ dependencies = [
  "inventory-contract",
  "platform-kernel",
  "platform-runtime",
+ "plugin-cash",
+ "plugin-catalog",
+ "plugin-inventory",
+ "plugin-printing",
+ "plugin-reports",
  "printing-contract",
  "sales-contract",
  "serde",
  "serde_json",
  "shop-core",
  "sqlx 0.8.6",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]

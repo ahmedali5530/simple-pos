@@ -16,7 +16,7 @@ export const catalogPlugin = defineUiPlugin({
     { id: 'items', label: 'Items', href: '/settings/items', permission: 'catalog.write', order: 10 },
     { id: 'sections', label: 'Sections', href: '/settings/sections', permission: 'catalog.write', order: 20 },
     { id: 'categories', label: 'Categories', href: '/settings/categories', permission: 'catalog.write', order: 30 },
-    { id: 'users', label: 'Users', href: '/settings/users', permission: 'users.write', order: 40 },
+    { id: 'units', label: 'Units', href: '/settings/units', permission: 'catalog.write', order: 35 },
   ],
   reportPages: [],
 })

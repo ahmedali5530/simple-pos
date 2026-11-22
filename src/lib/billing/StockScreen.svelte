@@ -4,6 +4,7 @@
   import { adjustStock, downloadWorkbook, importMovementsWorkbook, loadStockSummary, saveCatalogItem } from '../api'
   import { formatCost, formatMoney, nextAverageCost } from '../money'
   import type { Category, PosSection, PosSnapshot, StockBalance } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     sections: PosSection[]
@@ -42,8 +43,6 @@
   let headId = $state('all')
   let query = $state('')
   let balances = $state<StockBalance[]>([])
-  let formError = $state('')
-  let itemError = $state('')
   let saving = $state(false)
   let savingItem = $state(false)
   let newSection = $state('')
@@ -52,7 +51,6 @@
   let newRate = $state('')
   let newOpening = $state('0')
   let sheetBusy = $state(false)
-  let sheetNote = $state('')
 
   const catalog = $derived(sections.flatMap((section) => section.items.map((item) => ({ item, section }))))
   const selected = $derived(catalog.find((row) => String(row.item.id) === itemId) ?? null)
@@ -87,7 +85,7 @@
         balances = rows
       })
       .catch(() => {
-        formError = 'The stock summary did not open.'
+        toast.error('The stock summary did not open.')
       })
   })
 
@@ -181,14 +179,12 @@
   }
 
   async function exportWorkbook() {
-    formError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       await downloadWorkbook('/api/stock/export', 'stock-movements.xlsx')
-      sheetNote = 'The movement workbook downloaded.'
+      toastSaved('The movement workbook downloaded.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'The workbook did not download.'
+      toastError(error, 'The workbook did not download.')
     } finally {
       sheetBusy = false
     }
@@ -199,17 +195,17 @@
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
-    formError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       const result = await importMovementsWorkbook(file)
       await refresh(result.pos)
-      sheetNote = result.applied
-        ? `Saved ${result.applied} ${result.applied === 1 ? 'movement' : 'movements'}.`
-        : 'No new movements were in the workbook. Rows that already have an id stay as history.'
+      toastSaved(
+        result.applied
+          ? `Saved ${result.applied} ${result.applied === 1 ? 'movement' : 'movements'}.`
+          : 'No new movements were in the workbook. Rows that already have an id stay as history.',
+      )
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'The workbook was not saved.'
+      toastError(error, 'The workbook was not saved.')
     } finally {
       sheetBusy = false
     }
@@ -217,14 +213,13 @@
 
   async function updateBalance() {
     if (!selected) {
-      formError = 'Select an item.'
+      toast.error('Select an item.')
       return
     }
     if (!/^\d+$/.test(qty.trim()) || Number(qty) < 1) {
-      formError = 'Enter a quantity of at least 1.'
+      toast.error('Enter a quantity of at least 1.')
       return
     }
-    formError = ''
     saving = true
     try {
       const label = kinds.find((item) => item.id === kind)?.label ?? 'Count correction'
@@ -242,8 +237,9 @@
       qty = '1'
       amount = ''
       note = ''
+      toastSaved('Stock updated.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not update the stock.'
+      toastError(error, 'Could not update the stock.')
     } finally {
       saving = false
     }
@@ -253,26 +249,25 @@
     const sectionId = Number(newSection)
     const category = categories.find((entry) => entry.name === 'Shop') ?? categories[0]
     if (!sectionId) {
-      itemError = 'Choose a head.'
+      toast.error('Choose a head.')
       return
     }
     if (!newName.trim()) {
-      itemError = 'Enter an item name.'
+      toast.error('Enter an item name.')
       return
     }
     if (!/^\d+$/.test(newRate.trim()) || Number(newRate) < 1) {
-      itemError = 'Enter a sale rate of at least 1.'
+      toast.error('Enter a sale rate of at least 1.')
       return
     }
     if (!/^\d+$/.test(newOpening.trim())) {
-      itemError = 'Opening stock is a whole number.'
+      toast.error('Opening stock is a whole number.')
       return
     }
     if (!category) {
-      itemError = 'Add a category in Settings before saving an item.'
+      toast.error('Add a category in Settings before saving an item.')
       return
     }
-    itemError = ''
     savingItem = true
     try {
       const saved = await saveCatalogItem(null, {
@@ -306,8 +301,9 @@
       newName = ''
       newRate = ''
       newOpening = '0'
+      toastSaved('Item saved.')
     } catch (error) {
-      itemError = error instanceof Error ? error.message : 'Could not save the item.'
+      toastError(error, 'Could not save the item.')
     } finally {
       savingItem = false
     }
@@ -408,7 +404,6 @@
     {:else if kind === 'purchase' && selected}
       <p class="hint">Enter the total you paid and this purchase will update the average cost.</p>
     {/if}
-    {#if formError}<p class="field-error">{formError}</p>{/if}
     <button type="button" class="stock-update" disabled={saving} onclick={updateBalance}>{saving ? 'Saving…' : 'Update Stock Balance'}</button>
     <p class="stock-label">Excel</p>
     <div class="mt-2.5 grid grid-cols-2 gap-2">
@@ -419,7 +414,6 @@
       </label>
     </div>
     <p class="hint">Add rows with a blank id. Direction in adds stock and out deducts it.</p>
-    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
 
     <div class="new-item">
       <p class="stock-label add">Add new item to inventory</p>
@@ -451,7 +445,6 @@
           <input inputmode="numeric" bind:value={newOpening} />
         </label>
       </div>
-      {#if itemError}<p class="field-error">{itemError}</p>{/if}
       <button type="button" class="stock-create" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</button>
     </div>
   </aside>

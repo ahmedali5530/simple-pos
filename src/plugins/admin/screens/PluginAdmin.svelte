@@ -1,5 +1,6 @@
 <script lang="ts">
   import { request } from '../../../lib/api'
+  import { toast, toastError } from '../../../lib/toast'
 
   interface PluginRow {
     id: string
@@ -9,7 +10,6 @@
   }
 
   let plugins = $state<PluginRow[]>([])
-  let message = $state('')
   let tokenName = $state('')
   let tokenResult = $state('')
   let pending = $state('')
@@ -20,22 +20,23 @@
         plugins = body.available ?? []
       })
       .catch((error: unknown) => {
-        message = error instanceof Error ? error.message : 'Could not load plugins.'
+        toastError(error, 'Could not load plugins.')
       })
   })
 
   async function toggle(plugin: PluginRow) {
     const enabled = !plugin.enabled
     pending = plugin.id
-    message = ''
     try {
       await request(`/api/v1/platform/plugins/${plugin.id}`, {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       })
       plugin.enabled = enabled
+      window.dispatchEvent(new Event('plugins-changed'))
+      toast.success(enabled ? `${plugin.name} is on.` : `${plugin.name} is off.`)
     } catch (error) {
-      message = error instanceof Error ? error.message : 'Could not update the plugin.'
+      toastError(error, 'Could not update the plugin.')
     } finally {
       pending = ''
     }
@@ -43,7 +44,7 @@
 
   async function createToken() {
     if (!tokenName.trim()) {
-      message = 'Enter a token name.'
+      toast.error('Enter a token name.')
       return
     }
     try {
@@ -56,9 +57,9 @@
         }),
       })
       tokenResult = result.token
-      message = 'Token created. Copy it now; it will not be shown again.'
+      toast.success('Token created. Copy it now; it will not be shown again.')
     } catch (error) {
-      message = error instanceof Error ? error.message : 'Could not create token.'
+      toastError(error, 'Could not create token.')
     }
   }
 </script>
@@ -90,5 +91,4 @@
   {#if tokenResult}
     <p class="hint"><code>{tokenResult}</code></p>
   {/if}
-  {#if message}<p class="field-error">{message}</p>{/if}
 </section>

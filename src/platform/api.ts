@@ -27,7 +27,7 @@ export function loadPos(): Promise<PosSnapshot> {
 }
 
 export function rememberSection(sectionId: number): Promise<{ last_section_id: number }> {
-  return request('/api/pos/focus', {
+  return request('/api/v1/pos/focus', {
     method: 'PUT',
     body: JSON.stringify({ section_id: sectionId }),
   })
@@ -36,7 +36,7 @@ export function rememberSection(sectionId: number): Promise<{ last_section_id: n
 export function saveSectionLayout(
   sections: { id: number; show_on_pos: boolean }[],
 ): Promise<PosSnapshot> {
-  return request('/api/pos/sections', {
+  return request('/api/v1/pos/sections', {
     method: 'PUT',
     body: JSON.stringify({ sections }),
   })
@@ -300,7 +300,7 @@ export function postBill(
   }[],
   customer: string | null,
 ): Promise<PostedBill> {
-  return request('/api/bills', {
+  return request('/api/v1/pos/bills', {
     method: 'POST',
     body: JSON.stringify({ section_id: sectionId, lines, customer }),
   })

@@ -8,6 +8,7 @@
   import SystemSettings from './SystemSettings.svelte'
   import UserCatalog from './UserCatalog.svelte'
   import PluginAdmin from '../../plugins/admin/screens/PluginAdmin.svelte'
+  import UnitCatalog from '../../plugins/catalog/screens/UnitCatalog.svelte'
 
   interface Props {
     snapshot: PosSnapshot
@@ -19,18 +20,21 @@
       picture: { file: File | null; remove: boolean },
     ) => Promise<{ item: PosItem; pictureError: string | null }>
     onChange: (pos: PosSnapshot) => void
+    pages?: { id: string; label: string; href: string }[]
   }
 
-  let { snapshot, page, saving, onSave, onChange }: Props = $props()
+  let { snapshot, page, saving, onSave, onChange, pages = [] }: Props = $props()
 
-  const pages: { id: SettingsPage; label: string }[] = [
+  const fallback: { id: SettingsPage; label: string }[] = [
     { id: 'items', label: 'Items' },
     { id: 'sections', label: 'Sections' },
     { id: 'categories', label: 'Categories' },
+    { id: 'units', label: 'Units' },
     { id: 'users', label: 'Users' },
     { id: 'system', label: 'System' },
     { id: 'plugins', label: 'Plugins' },
   ]
+  const shown = $derived(pages.length > 0 ? pages : fallback)
 
   const sectionCounts = $derived(
     Object.fromEntries(
@@ -55,7 +59,7 @@
 
 <div class="settings">
   <nav class="settings-nav" aria-label="Settings">
-    {#each pages as entry (entry.id)}
+    {#each shown as entry (entry.id)}
       <a
         href="/settings/{entry.id}"
         class:active={page === entry.id}
@@ -82,6 +86,8 @@
       <CategoryCatalog categories={snapshot.categories} counts={categoryCounts} {onChange} />
     {:else if page === 'users'}
       <UserCatalog users={snapshot.users ?? []} {onChange} />
+    {:else if page === 'units'}
+      <UnitCatalog />
     {:else if page === 'plugins'}
       <PluginAdmin />
     {:else}

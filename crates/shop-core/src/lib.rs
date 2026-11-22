@@ -10,9 +10,9 @@ mod sheets;
 pub mod tenant;
 
 pub use billing::{
-    clear_item_image, connect, current_shop, item_image_ext, load_pos, post_bill, save_item, set_item_image,
-    set_item_prompt,
-    set_pos_focus, set_pos_sections,
+    clear_item_image, connect, current_shop, item_image_ext, load_pos, load_pos_tx, post_bill, post_bill_tx,
+    save_item, set_item_image, set_item_prompt, set_pos_focus, set_pos_focus_tx, set_pos_sections,
+    set_pos_sections_tx,
 };
 pub use sqlx::PgPool;
 pub use error::{AppError, ErrorBody};

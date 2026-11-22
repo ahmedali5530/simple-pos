@@ -1,11 +1,87 @@
 use std::collections::HashSet;
 
+use axum::extract::{FromRequestParts, Request};
 use axum::handler::Handler;
-use axum::http::Method;
+use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
+use sqlx::PgPool;
 
+use crate::context::{Actor, TenantId, TenantTx};
+use crate::error::AppError;
 use crate::manifest::PluginId;
+
+/// Runtime-injected database access for a plugin route.
+///
+/// The pool is private. A plugin can only open a transaction for the tenant and
+/// actor already on the request.
+#[derive(Clone)]
+pub struct TenantDbSource {
+    pool: PgPool,
+    pub tenant_id: TenantId,
+    pub actor: Actor,
+}
+
+impl TenantDbSource {
+    pub fn new(pool: PgPool, tenant_id: TenantId, actor: Actor) -> Self {
+        Self {
+            pool,
+            tenant_id,
+            actor,
+        }
+    }
+}
+
+pub struct TenantDb(TenantDbSource);
+
+impl TenantDb {
+    pub fn actor(&self) -> &Actor {
+        &self.0.actor
+    }
+
+    pub async fn begin(&self, read_only: bool) -> Result<TenantTx<'_>, AppError> {
+        TenantTx::begin_with(&self.0.pool, self.0.tenant_id, self.0.actor.clone(), read_only).await
+    }
+}
+
+pub struct TenantDbRejection;
+
+impl IntoResponse for TenantDbRejection {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The platform did not attach a tenant database handle.",
+        )
+            .into_response()
+    }
+}
+
+impl<S> FromRequestParts<S> for TenantDb
+where
+    S: Send + Sync,
+{
+    type Rejection = TenantDbRejection;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<TenantDbSource>()
+            .cloned()
+            .map(TenantDb)
+            .ok_or(TenantDbRejection)
+    }
+}
+
+/// Used by the unit test to prove a missing handle never opens a connection.
+pub async fn reject_without_handle(request: Request) -> Response {
+    let (mut parts, _body) = request.into_parts();
+    match TenantDb::from_request_parts(&mut parts, &()).await {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(rejection) => rejection.into_response(),
+    }
+}
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum RegistrationError {
@@ -185,5 +261,16 @@ mod tests {
     fn path_template_matches_params_only() {
         assert!(path_matches("/api/v1/catalog/items/{id}", "/api/v1/catalog/items/4"));
         assert!(!path_matches("/api/v1/catalog/items/{id}", "/api/v1/other/items/4"));
+    }
+
+    #[tokio::test]
+    async fn missing_tenant_handle_is_rejected_without_a_connection() {
+        let request = axum::body::Body::empty();
+        let request = axum::extract::Request::builder()
+            .uri("/api/v1/catalog/items")
+            .body(request)
+            .unwrap();
+        let response = super::reject_without_handle(request).await;
+        assert_eq!(response.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

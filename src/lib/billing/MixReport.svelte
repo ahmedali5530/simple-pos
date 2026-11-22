@@ -4,6 +4,7 @@
   import type { ReportSpan } from '../range'
   import type { Reports } from '../types'
   import ReportRange from './ReportRange.svelte'
+  import { toast, toastError } from '../toast'
   import VirtualTable from './VirtualTable.svelte'
 
   interface Props {
@@ -14,10 +15,9 @@
   let { currency: _currency, locale: _locale }: Props = $props()
 
   let report = $state<Reports | null>(null)
-  let error = $state('')
+  let failed = $state(false)
   let query = $state('')
   let printing = $state(false)
-  let printNote = $state('')
   let span = $state<Extract<ReportSpan, { kind: 'ready' }>>({ kind: 'ready' })
 
   function hit(needle: string, parts: Array<string | null | undefined>) {
@@ -30,24 +30,24 @@
 
   async function reload(next: Extract<ReportSpan, { kind: 'ready' }>) {
     span = next
-    error = ''
-    printNote = ''
+    failed = false
     try {
       report = await loadReports(next.from, next.to)
     } catch (reason) {
       report = null
-      error = reason instanceof Error ? reason.message : 'The report did not open.'
+      failed = true
+      toastError(reason, 'The report did not open.')
     }
   }
 
   async function printMix() {
     printing = true
-    printNote = ''
     try {
       const result = await printProductMix(span.from, span.to)
-      printNote = result.printed ? 'The product mix was sent to the printer.' : 'Printing is turned off in System settings.'
+      if (result.printed) toast.success('The product mix was sent to the printer.')
+      else toast.warning('Printing is turned off in System settings.')
     } catch (reason) {
-      printNote = reason instanceof Error ? reason.message : 'The product mix did not print.'
+      toastError(reason, 'The product mix did not print.')
     } finally {
       printing = false
     }
@@ -55,11 +55,9 @@
 </script>
 
 <div class="report-board">
-  <ReportRange label={report?.range_label ?? ''} onchange={reload} oninvalid={(message) => (error = message)} />
-  {#if error}
-    <p class="field-error">{error}</p>
-  {:else if !report}
-    <p class="hint">Opening the report…</p>
+  <ReportRange label={report?.range_label ?? ''} onchange={reload} oninvalid={(message) => toast.error(message)} />
+  {#if !report}
+    {#if !failed}<p class="hint">Opening the report…</p>{/if}
   {:else}
     <section class="report-card">
       <div class="summary-head">
@@ -69,7 +67,6 @@
         </div>
         <button type="button" class="save" disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
       </div>
-      {#if printNote}<p class="mt-2 text-[12px] font-bold {printNote.includes('sent') ? 'text-emerald-700' : 'text-rose-700'}">{printNote}</p>{/if}
       <input class="mb-2 mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search items" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={mix} estimate={49} columns={6} reset={query} key={(line) => line.id}>
         {#snippet header()}

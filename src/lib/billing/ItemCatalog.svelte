@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { downloadWorkbook, importItemsWorkbook, type CatalogItem } from '../api'
+  import { downloadWorkbook, importItemsWorkbook, request, type CatalogItem } from '../api'
   import ItemPicture from './ItemPicture.svelte'
   import VirtualList from './VirtualList.svelte'
   import { centsToInput, formatCost, formatMoney, moneyToCents } from '../money'
   import type { Category, PosItem, PosSection, PosSnapshot } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     sections: PosSection[]
@@ -38,17 +39,27 @@
   let sectionId = $state('')
   let categoryId = $state('')
   let prompt = $state<'none' | 'quantity' | 'price'>('none')
+  let itemType = $state<'product' | 'service'>('product')
+  let unitId = $state('')
+  let units = $state<{ id: number; name: string }[]>([])
+
+  $effect(() => {
+    request<{ units: { id: number; name: string }[] }>('/api/v1/catalog/units')
+      .then((body) => {
+        units = body.units ?? []
+      })
+      .catch(() => {
+        units = []
+      })
+  })
   let baseRate = $state('')
   let scale = $state('1')
   let variants = $state<DraftOption[]>([])
-  let formError = $state('')
   let loaded = $state<number | 'new' | null>(null)
   let pictureFile = $state<File | null>(null)
   let pictureRemoved = $state(false)
   let picturePreview = $state<string | null>(null)
   let sheetBusy = $state(false)
-  let sheetNote = $state('')
-  let sheetError = $state('')
 
   const shelfProfit = $derived.by(() => {
     const cents = cost.trim() === '' ? 0 : moneyToCents(cost)
@@ -72,7 +83,6 @@
   $effect(() => {
     if (editing === loaded) return
     loaded = editing
-    formError = ''
     if (editing === 'new') {
       fill(null)
       return
@@ -81,14 +91,12 @@
   })
 
   async function exportWorkbook() {
-    sheetError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       await downloadWorkbook('/api/items/export', 'items.xlsx')
-      sheetNote = 'The item workbook downloaded.'
+      toastSaved('The item workbook downloaded.')
     } catch (error) {
-      sheetError = error instanceof Error ? error.message : 'The workbook did not download.'
+      toastError(error, 'The workbook did not download.')
     } finally {
       sheetBusy = false
     }
@@ -99,8 +107,6 @@
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
-    sheetError = ''
-    sheetNote = ''
     sheetBusy = true
     try {
       const result = await importItemsWorkbook(file)
@@ -111,9 +117,9 @@
         result.options ? `${result.options} options saved` : '',
         result.counted ? `${result.counted} stock counts saved` : '',
       ].filter(Boolean)
-      sheetNote = parts.length ? `Saved the workbook: ${parts.join(', ')}.` : 'The workbook matched the catalog.'
+      toastSaved(parts.length ? `Saved the workbook: ${parts.join(', ')}.` : 'The workbook matched the catalog.')
     } catch (error) {
-      sheetError = error instanceof Error ? error.message : 'The workbook was not saved.'
+      toastError(error, 'The workbook was not saved.')
     } finally {
       sheetBusy = false
     }
@@ -153,14 +159,13 @@
     if (!file) return
     const allowed = !file.type || ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)
     if (!allowed) {
-      formError = 'Use a JPEG, PNG, WebP, or GIF.'
+      toast.error('Use a JPEG, PNG, WebP, or GIF.')
       return
     }
     if (file.size > 2 * 1024 * 1024) {
-      formError = 'Use a picture under 2 MB.'
+      toast.error('Use a picture under 2 MB.')
       return
     }
-    formError = ''
     releasePreview()
     pictureFile = file
     pictureRemoved = false
@@ -193,20 +198,20 @@
   async function save() {
     const whole = (value: string) => /^\d+$/.test(value.trim())
     if (!name.trim()) {
-      formError = 'Enter an item name.'
+      toast.error('Enter an item name.')
       return
     }
     if (!whole(rate) || Number(rate) < 1) {
-      formError = 'Enter a shelf rate above 0.'
+      toast.error('Enter a shelf rate above 0.')
       return
     }
     const costCents = cost.trim() === '' ? 0 : moneyToCents(cost)
     if (costCents == null) {
-      formError = 'Enter a cost of 0 or more, with up to 2 decimals.'
+      toast.error('Enter a cost of 0 or more, with up to 2 decimals.')
       return
     }
     if (!sectionId || !categoryId) {
-      formError = 'Choose a section and a category.'
+      toast.error('Choose a section and a category.')
       return
     }
     const asking = variants.length ? 'none' : prompt
@@ -214,11 +219,11 @@
     let nextScale = 1
     if (asking !== 'none') {
       if (!whole(baseRate) || Number(baseRate) < 1) {
-        formError = 'Enter a base rate above 0.'
+        toast.error('Enter a base rate above 0.')
         return
       }
       if (!whole(scale) || Number(scale) < 1) {
-        formError = 'Stock per 1 must be at least 1.'
+        toast.error('Stock per 1 must be at least 1.')
         return
       }
       nextBase = Number(baseRate)
@@ -227,15 +232,15 @@
     const options = []
     for (const variant of variants) {
       if (!variant.name.trim()) {
-        formError = 'Name each option.'
+        toast.error('Name each option.')
         return
       }
       if (!whole(variant.rate) || Number(variant.rate) < 1) {
-        formError = `${variant.name.trim()} needs a rate above 0.`
+        toast.error(`${variant.name.trim()} needs a rate above 0.`)
         return
       }
       if (!whole(variant.units) || Number(variant.units) < 1) {
-        formError = `${variant.name.trim()} must take at least 1 from stock.`
+        toast.error(`${variant.name.trim()} must take at least 1 from stock.`)
         return
       }
       options.push({
@@ -246,7 +251,6 @@
         barcode: variant.barcode.trim() || null,
       })
     }
-    formError = ''
     try {
       const result = await onSave(
         editing === 'new' ? null : editing,
@@ -261,15 +265,18 @@
           base_rate: nextBase,
           scale: nextScale,
           variants: options,
+          item_type: itemType,
+          unit_id: unitId ? Number(unitId) : null,
         },
         { file: pictureFile, remove: pictureRemoved },
       )
       loaded = result.item.id
       editing = result.item.id
       fill(result.item)
-      if (result.pictureError) formError = result.pictureError
+      if (result.pictureError) toast.error(result.pictureError)
+      else toastSaved('Item saved.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not save the item.'
+      toastError(error, 'Could not save the item.')
     }
   }
 </script>
@@ -288,8 +295,6 @@
       </label>
     </div>
     <p class="hint">Leave counted blank unless you recounted that item. Options are the second sheet.</p>
-    {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
-    {#if sheetError}<p class="field-error">{sheetError}</p>{/if}
     <input class="setup-search" placeholder="Find an item" bind:value={query} />
     <VirtualList class="setup-list" items={visible} estimate={64} reset={query} key={(row) => row.item.id}>
       {#snippet children(row)}
@@ -374,6 +379,22 @@
           {/each}
         </select>
       </label>
+      <label>
+        Type
+        <select bind:value={itemType}>
+          <option value="product">Product</option>
+          <option value="service">Service</option>
+        </select>
+      </label>
+      <label>
+        Unit
+        <select bind:value={unitId}>
+          <option value="">Piece</option>
+          {#each units as unit (unit.id)}
+            <option value={String(unit.id)}>{unit.name}</option>
+          {/each}
+        </select>
+      </label>
 
       <div class="option-block">
         <h3>Options</h3>
@@ -428,7 +449,6 @@
           </p>
         {/if}
       {/if}
-      {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
         <button type="button" class="save" disabled={saving} onclick={save}>
           {saving ? 'Saving…' : 'Save'}

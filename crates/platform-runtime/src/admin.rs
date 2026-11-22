@@ -49,5 +49,9 @@ pub async fn provision_tenant(
         .bind(name)
         .fetch_one(pool)
         .await?;
+    sqlx::query("SELECT catalog_seed_units($1)")
+        .bind(row.0)
+        .execute(pool)
+        .await?;
     Ok(TenantId(row.0))
 }

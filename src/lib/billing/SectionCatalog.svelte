@@ -1,6 +1,7 @@
 <script lang="ts">
   import { orderSections, removeSection, saveSection } from '../api'
   import type { PosSnapshot, SectionChoice, SectionKind } from '../types'
+  import { toast, toastError, toastSaved } from '../toast'
 
   interface Props {
     sections: SectionChoice[]
@@ -16,7 +17,6 @@
   let shortName = $state('')
   let kind = $state<SectionKind>('retail')
   let accent = $state('#0f766e')
-  let formError = $state('')
   let confirmRemove = $state(false)
   let saving = $state(false)
 
@@ -25,7 +25,6 @@
   $effect(() => {
     if (editing === loaded) return
     loaded = editing
-    formError = ''
     confirmRemove = false
     const section = sections.find((entry) => entry.id === editing) ?? null
     name = section?.name ?? ''
@@ -44,7 +43,7 @@
     orderSections(ids)
       .then(onChange)
       .catch((error) => {
-        formError = error instanceof Error ? error.message : 'Could not reorder the sections.'
+        toastError(error, 'Could not reorder the sections.')
       })
       .finally(() => {
         saving = false
@@ -53,14 +52,13 @@
 
   async function save() {
     if (!name.trim()) {
-      formError = 'Enter a section name.'
+      toast.error('Enter a section name.')
       return
     }
     if (!shortName.trim()) {
-      formError = 'Enter the short name shown on the tab.'
+      toast.error('Enter the short name shown on the tab.')
       return
     }
-    formError = ''
     saving = true
     try {
       const saved = await saveSection(editing === 'new' ? null : editing, {
@@ -72,8 +70,9 @@
       onChange(saved.pos)
       loaded = saved.id
       editing = saved.id
+      toastSaved('Section saved.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not save the section.'
+      toastError(error, 'Could not save the section.')
     } finally {
       saving = false
     }
@@ -86,8 +85,9 @@
       onChange(await removeSection(editing))
       loaded = null
       editing = null
+      toastSaved('Section removed.')
     } catch (error) {
-      formError = error instanceof Error ? error.message : 'Could not remove the section.'
+      toastError(error, 'Could not remove the section.')
       confirmRemove = false
     } finally {
       saving = false
@@ -141,7 +141,6 @@
         Color
         <input type="color" bind:value={accent} />
       </label>
-      {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
         {#if editing !== 'new'}
           {#if confirmRemove}

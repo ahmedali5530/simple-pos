@@ -2,6 +2,7 @@
   import { promptSale } from '../barcode'
   import { formatMoney } from '../money'
   import type { PosItem } from '../types'
+  import { toast } from '../toast'
 
   interface Props {
     item: PosItem
@@ -14,7 +15,6 @@
   let { item, currency, locale, onClose, onAdd }: Props = $props()
 
   let value = $state('')
-  let error = $state('')
   let field = $state<HTMLInputElement | null>(null)
 
   const askingPrice = $derived(item.prompt === 'price')
@@ -31,10 +31,9 @@
   function confirm() {
     const entry = value.trim()
     if (!quote) {
-      error = askingPrice ? 'Enter a whole price above 0.' : 'Enter a quantity like 1 or 1.25.'
+      toast.error(askingPrice ? 'Enter a whole price above 0.' : 'Enter a quantity like 1 or 1.25.')
       return
     }
-    error = ''
     onAdd({ ...quote, entry })
   }
 </script>
@@ -85,7 +84,6 @@
         · takes {quote.units * quote.qty} from stock
       </p>
     {/if}
-    {#if error}<p class="field-error">{error}</p>{/if}
     <div class="sheet-actions">
       <button type="button" class="ghost" onclick={onClose}>Cancel</button>
       <button type="button" class="save" onclick={confirm}>Add to bill</button>
