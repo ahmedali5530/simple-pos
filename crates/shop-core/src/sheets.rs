@@ -83,6 +83,7 @@ struct OptionDraft {
     row: u32,
     item_id: Option<i32>,
     item_barcode: Option<String>,
+    item_name: String,
     option_id: Option<i32>,
     name: String,
     barcode: Option<String>,
@@ -194,6 +195,7 @@ pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
     guide.set_name("Guide").sheet()?;
     let lines = [
         "Items: one row per item. Leave id blank to add an item. An id, or a barcode that already exists, updates that item.",
+        "A workbook from another install can carry old ids; import matches the barcode, or a unique item name, instead.",
         "section is the business head. category is the category name. prompt is none, quantity, or price.",
         "cost is the average cost of one stock unit. Leave it blank to keep the current cost.",
         "base_rate and scale are used when prompt is quantity or price.",
@@ -202,6 +204,7 @@ pub async fn export_items(pool: &PgPool) -> Result<Vec<u8>, AppError> {
         "A new item can use stock or counted as its opening amount.",
         "Options: one row per Piece, Pack, Full, Half, or any other option.",
         "Point the option at an item with item_id or item_barcode. Leave option_id blank to add one.",
+        "If the item id is from another install, the importer finds the item by barcode or unique name.",
         "Put yes in remove to delete that option. Options you do not list are left as they are.",
         "Pictures are not part of this workbook.",
     ];
@@ -947,15 +950,32 @@ fn parse_items(
             errors.push(format!("{label}: stock cannot be negative."));
             continue;
         }
-        if id.is_some_and(|value| !existing.iter().any(|item| item.id == value)) {
-            errors.push(format!("{label}: that item is not in the catalog."));
-            continue;
-        }
         let barcode = clean_code(&barcode);
         if barcode.as_ref().is_some_and(|code| code.chars().count() > 64) {
             errors.push(format!("{label}: keep the barcode to 64 characters."));
             continue;
         }
+        // Barcodes travel between installs; ids do not. A workbook exported
+        // elsewhere can carry an id this catalog never had, so fall back to the
+        // barcode (as the Guide promises). A blank id with a known barcode is an
+        // update too, instead of a duplicate insert.
+        let id = match id {
+            Some(value) if existing.iter().any(|item| item.id == value) => Some(value),
+            Some(value) => {
+                let matched = existing_item_by_barcode(existing, barcode.as_deref())
+                    .or_else(|| existing_item_by_name(existing, &name));
+                match matched {
+                    Some(item) => Some(item.id),
+                    None => {
+                        errors.push(format!(
+                            "{label}: item {value} is not in the catalog. Use a current id, an existing barcode, or a unique name."
+                        ));
+                        continue;
+                    }
+                }
+            }
+            None => existing_item_by_barcode(existing, barcode.as_deref()).map(|item| item.id),
+        };
         drafts.push(ItemDraft {
             row: *excel_row,
             id,
@@ -985,6 +1005,7 @@ fn parse_options(
     }
     let item_col = column(header, &["item_id"]);
     let item_code_col = column(header, &["item_barcode"]);
+    let item_name_col = column(header, &["item_name"]);
     let option_col = column(header, &["option_id", "variant_id"]);
     let name_col = column(header, &["name", "option", "option_name"]);
     let barcode_col = column(header, &["barcode", "option_barcode"]);
@@ -1002,6 +1023,7 @@ fn parse_options(
         }
         let item_id_text = cell_text(row, item_col);
         let item_barcode = clean_code(&cell_text(row, item_code_col));
+        let item_name = cell_text(row, item_name_col);
         let option_text = cell_text(row, option_col);
         let name = cell_text(row, name_col);
         let barcode = cell_text(row, barcode_col);
@@ -1064,6 +1086,7 @@ fn parse_options(
             row: *excel_row,
             item_id,
             item_barcode,
+            item_name,
             option_id,
             name,
             barcode,
@@ -1440,6 +1463,50 @@ fn check_item_plan(
     }
 }
 
+fn existing_item_by_barcode<'a>(
+    existing: &'a [LoadedItem],
+    barcode: Option<&str>,
+) -> Option<&'a LoadedItem> {
+    let code = barcode?;
+    existing
+        .iter()
+        .find(|item| item.barcode.as_deref() == Some(code))
+}
+
+/// Names are the only portable pointer for items without barcodes. Only a
+/// unique match counts, so a duplicated name cannot move options to the wrong
+/// item.
+fn existing_item_by_name<'a>(existing: &'a [LoadedItem], name: &str) -> Option<&'a LoadedItem> {
+    let needle = name.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut hits = existing
+        .iter()
+        .filter(|item| item.name.eq_ignore_ascii_case(needle));
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn item_id_for_barcode(
+    code: &str,
+    id_of_row: &HashMap<u32, i32>,
+    items: &[ItemDraft],
+    barcode_of_new: &HashMap<String, u32>,
+    existing: &[LoadedItem],
+) -> Option<i32> {
+    if let Some(row) = barcode_of_new.get(code) {
+        return id_of_row.get(row).copied();
+    }
+    if let Some(item) = items.iter().find(|item| item.barcode.as_deref() == Some(code)) {
+        return id_of_row.get(&item.row).copied();
+    }
+    existing_item_by_barcode(existing, Some(code)).map(|item| item.id)
+}
+
 fn resolve_option_item(
     draft: &OptionDraft,
     id_of_row: &HashMap<u32, i32>,
@@ -1450,26 +1517,36 @@ fn resolve_option_item(
     if let Some(item_id) = draft.item_id {
         let known = existing.iter().any(|item| item.id == item_id)
             || id_of_row.values().any(|id| *id == item_id);
-        if !known {
-            return Err(AppError::BadRequest(format!(
-                "Options row {}: that item is not in the catalog.",
-                draft.row
-            )));
+        if known {
+            if let Some(code) = &draft.item_barcode {
+                let matches = existing.iter().any(|item| item.id == item_id && item.barcode.as_ref() == Some(code))
+                    || items.iter().any(|item| item.id == Some(item_id) && item.barcode.as_ref() == Some(code))
+                    || items.iter().any(|item| {
+                        id_of_row.get(&item.row) == Some(&item_id) && item.barcode.as_ref() == Some(code)
+                    });
+                if !matches {
+                    return Err(AppError::BadRequest(format!(
+                        "Options row {}: that barcode does not belong to item {item_id}.",
+                        draft.row
+                    )));
+                }
+            }
+            return Ok(item_id);
         }
+        // The workbook may come from another install where this id belongs to
+        // something else. Barcodes and unique names travel; ids do not.
         if let Some(code) = &draft.item_barcode {
-            let matches = existing.iter().any(|item| item.id == item_id && item.barcode.as_ref() == Some(code))
-                || items.iter().any(|item| item.id == Some(item_id) && item.barcode.as_ref() == Some(code))
-                || items.iter().any(|item| {
-                    id_of_row.get(&item.row) == Some(&item_id) && item.barcode.as_ref() == Some(code)
-                });
-            if !matches {
-                return Err(AppError::BadRequest(format!(
-                    "Options row {}: that barcode does not belong to item {item_id}.",
-                    draft.row
-                )));
+            if let Some(found) = item_id_for_barcode(code, id_of_row, items, barcode_of_new, existing) {
+                return Ok(found);
             }
         }
-        return Ok(item_id);
+        if let Some(item) = existing_item_by_name(existing, &draft.item_name) {
+            return Ok(item.id);
+        }
+        return Err(AppError::BadRequest(format!(
+            "Options row {}: item {item_id} is not in the catalog. Use a current item id, the item barcode, or a unique item name.",
+            draft.row
+        )));
     }
     let Some(code) = &draft.item_barcode else {
         return Err(AppError::BadRequest(format!(
@@ -1477,19 +1554,12 @@ fn resolve_option_item(
             draft.row
         )));
     };
-    if let Some(row) = barcode_of_new.get(code) {
-        return Ok(id_of_row[row]);
-    }
-    if let Some(item) = items.iter().find(|item| item.barcode.as_ref() == Some(code)) {
-        return Ok(id_of_row[&item.row]);
-    }
-    if let Some(item) = existing.iter().find(|item| item.barcode.as_ref() == Some(code)) {
-        return Ok(item.id);
-    }
-    Err(AppError::BadRequest(format!(
-        "Options row {}: no item has barcode {code}.",
-        draft.row
-    )))
+    item_id_for_barcode(code, id_of_row, items, barcode_of_new, existing).ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "Options row {}: no item has barcode {code}.",
+            draft.row
+        ))
+    })
 }
 
 fn find_section(sections: &[SectionRef], label: &str) -> Option<i32> {
@@ -1741,4 +1811,174 @@ struct MovementSheetRow {
     qty: i32,
     reason: String,
     bill_no: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use calamine::Data;
+
+    fn item_headers() -> HashMap<String, usize> {
+        header_map(&[
+            Data::String("id".into()),
+            Data::String("barcode".into()),
+            Data::String("name".into()),
+            Data::String("section".into()),
+            Data::String("category".into()),
+            Data::String("rate".into()),
+        ])
+    }
+
+    fn header_row() -> (u32, Vec<Data>) {
+        (
+            1,
+            ["id", "barcode", "name", "section", "category", "rate"]
+                .into_iter()
+                .map(|name| Data::String(name.into()))
+                .collect(),
+        )
+    }
+
+    fn row(id: &str, barcode: &str) -> (u32, Vec<Data>) {
+        (
+            2,
+            vec![
+                Data::String(id.into()),
+                Data::String(barcode.into()),
+                Data::String("Pan".into()),
+                Data::String("Shop".into()),
+                Data::String("Snacks".into()),
+                Data::Float(50.0),
+            ],
+        )
+    }
+
+    fn existing_pan() -> Vec<LoadedItem> {
+        vec![LoadedItem {
+            id: 1,
+            barcode: Some("1001".into()),
+            name: "Pan".into(),
+        }]
+    }
+
+    fn refs() -> (Vec<SectionRef>, Vec<CategoryRef>) {
+        (
+            vec![SectionRef {
+                id: 1,
+                name: "Shop".into(),
+                short_name: "Shop".into(),
+            }],
+            vec![CategoryRef {
+                id: 1,
+                name: "Snacks".into(),
+            }],
+        )
+    }
+
+    #[test]
+    fn an_items_row_with_a_stale_id_updates_the_barcode_match() {
+        let (sections, categories) = refs();
+        let mut errors = Vec::new();
+        let drafts = parse_items(
+            &item_headers(),
+            &[header_row(), row("9999", "1001")],
+            &sections,
+            &categories,
+            &existing_pan(),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(drafts[0].id, Some(1));
+    }
+
+    #[test]
+    fn a_blank_id_with_a_known_barcode_updates_instead_of_adding() {
+        let (sections, categories) = refs();
+        let mut errors = Vec::new();
+        let drafts = parse_items(
+            &item_headers(),
+            &[header_row(), row("", "1001")],
+            &sections,
+            &categories,
+            &existing_pan(),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(drafts[0].id, Some(1));
+    }
+
+    #[test]
+    fn an_option_with_a_stale_id_falls_back_to_its_item_barcode() {
+        let draft = OptionDraft {
+            row: 2,
+            item_id: Some(9999),
+            item_barcode: Some("1001".into()),
+            item_name: String::new(),
+            option_id: None,
+            name: "Piece".into(),
+            barcode: None,
+            rate: 10,
+            units: 1,
+            remove: false,
+        };
+        let found = resolve_option_item(
+            &draft,
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &existing_pan(),
+        )
+        .unwrap();
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn an_option_with_a_stale_id_falls_back_to_a_unique_item_name() {
+        let draft = OptionDraft {
+            row: 3,
+            item_id: Some(9999),
+            item_barcode: None,
+            item_name: "Pan".into(),
+            option_id: None,
+            name: "Piece".into(),
+            barcode: None,
+            rate: 10,
+            units: 1,
+            remove: false,
+        };
+        let found = resolve_option_item(
+            &draft,
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &existing_pan(),
+        )
+        .unwrap();
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn an_option_with_a_stale_id_and_no_barcode_says_how_to_fix_it() {
+        let draft = OptionDraft {
+            row: 2,
+            item_id: Some(9999),
+            item_barcode: None,
+            item_name: String::new(),
+            option_id: None,
+            name: "Piece".into(),
+            barcode: None,
+            rate: 10,
+            units: 1,
+            remove: false,
+        };
+        let error = resolve_option_item(
+            &draft,
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &existing_pan(),
+        )
+        .unwrap_err();
+        assert!(format!("{error}").contains("Use a current item id, the item barcode, or a unique item name"));
+    }
 }
