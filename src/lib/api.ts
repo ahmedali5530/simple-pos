@@ -156,8 +156,20 @@ export function saveSettings(body: {
   printer_kind: string
   printer_target: string
   printer_port: number
+  printer_command_set: string
+  printer_paper_width: number
 }): Promise<PosSnapshot> {
   return request('/api/settings', { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export function printTestPrinter(body: {
+  printer_kind: string
+  printer_target: string
+  printer_port: number
+  printer_command_set: string
+  printer_paper_width: number
+}): Promise<{ printed: boolean }> {
+  return request('/api/print/test', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function adjustStock(body: {

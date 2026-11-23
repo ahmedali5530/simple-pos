@@ -13,7 +13,7 @@ use shop_core::{
     adjust_stock, cash_desk, clear_item_image, export_categories, export_items, export_movements,
     import_categories, import_items, import_movements, item_image_ext, load_pos, load_reports,
     login, logout, needs_first_user, open_session, open_shift, post_bill, print_cash_shift,
-    print_product_mix, print_saved_bill, recent_movements, remove_category, remove_section,
+    print_product_mix, print_saved_bill, print_test, recent_movements, remove_category, remove_section,
     remove_user, reorder_categories, reorder_sections, save_category, save_item, save_section,
     save_settings, save_shift, save_user, set_item_image, set_item_prompt, set_pos_focus,
     set_pos_sections, stock_summary, AppError, CashDesk, CategoryForm, CategoryImport, ErrorBody,
@@ -21,7 +21,7 @@ use shop_core::{
     OrderForm, PgPool, PosFocus, PosSnapshot, PosUser, PostBillRequest, PostedBill, PrintOutcome,
     PrintRequest, Reports, SavedItem, SavedRecord, SectionForm, SetFocusRequest,
     SetSectionsRequest, SettingsForm, ShiftForm, ShopConfig, StockBalance, StockMove,
-    StockMovement, StockPage, UserForm,
+    StockMovement, StockPage, TestPrintRequest, UserForm,
 };
 use tower_http::cors::{Any, CorsLayer};
 
@@ -171,6 +171,7 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
             .route("/api/pos/sections", put(put_sections))
             .route("/api/bills", axum::routing::post(post_bill_route))
             .route("/api/print", post(post_print))
+            .route("/api/print/test", post(post_print_test))
             .route("/api/print/mix", post(post_print_mix))
             .route("/api/print/cash", post(post_print_cash))
             .route("/api/cash", get(get_cash))
@@ -870,6 +871,15 @@ async fn post_print(
 ) -> Result<Json<PrintOutcome>, ApiError> {
     Ok(Json(
         print_saved_bill(&state.pool, &state.shop, &body.bill_no).await?,
+    ))
+}
+
+async fn post_print_test(
+    State(state): State<AppState>,
+    Json(body): Json<TestPrintRequest>,
+) -> Result<Json<PrintOutcome>, ApiError> {
+    Ok(Json(
+        print_test(&state.pool, &state.shop, body).await?,
     ))
 }
 

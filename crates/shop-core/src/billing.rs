@@ -65,6 +65,8 @@ struct PrinterRow {
     printer_kind: String,
     printer_target: String,
     printer_port: i32,
+    printer_command_set: String,
+    printer_paper_width: i32,
 }
 
 #[derive(sqlx::FromRow)]
@@ -216,7 +218,7 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
 
     let printer = sqlx::query_as::<_, PrinterRow>(
         r#"
-        SELECT print_enabled, printer_kind, printer_target, printer_port
+        SELECT print_enabled, printer_kind, printer_target, printer_port, printer_command_set, printer_paper_width
         FROM shop_settings
         WHERE id = 1
         "#,
@@ -228,12 +230,16 @@ pub async fn load_pos(pool: &PgPool, shop: &ShopConfig) -> Result<PosSnapshot, A
         kind: row.printer_kind,
         target: row.printer_target,
         port: row.printer_port,
+        command_set: row.printer_command_set,
+        paper_width: row.printer_paper_width,
     })
     .unwrap_or(PrinterSettings {
         enabled: false,
         kind: "network".into(),
         target: String::new(),
         port: 9100,
+        command_set: "escpos".into(),
+        paper_width: 80,
     });
 
     let sections = all_sections

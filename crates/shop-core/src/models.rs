@@ -162,6 +162,8 @@ pub struct PrinterSettings {
     pub kind: String,
     pub target: String,
     pub port: i32,
+    pub command_set: String,
+    pub paper_width: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +231,10 @@ pub struct SettingsForm {
     pub printer_target: String,
     #[serde(default = "printer_port")]
     pub printer_port: i32,
+    #[serde(default = "escpos_commands")]
+    pub printer_command_set: String,
+    #[serde(default = "paper_width")]
+    pub printer_paper_width: i32,
 }
 
 fn network_printer() -> String {
@@ -237,6 +243,14 @@ fn network_printer() -> String {
 
 fn printer_port() -> i32 {
     9100
+}
+
+fn escpos_commands() -> String {
+    "escpos".into()
+}
+
+fn paper_width() -> i32 {
+    80
 }
 
 #[derive(Debug, Serialize)]

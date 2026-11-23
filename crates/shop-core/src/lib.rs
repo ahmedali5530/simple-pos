@@ -29,7 +29,10 @@ pub use admin::{
     reorder_categories,
     reorder_sections, save_category, save_section, save_settings, save_user,
 };
-pub use print::{print_cash_shift, print_product_mix, print_saved_bill, PrintOutcome, PrintRequest};
+pub use print::{
+    print_cash_shift, print_product_mix, print_saved_bill, print_test, PrintOutcome, PrintRequest,
+    TestPrintRequest,
+};
 pub use models::{
     BarcodeRule, BillLineInput, CategoryForm, ItemForm, ItemPromptRequest, LoginForm, OrderForm,
     LoginSession, PosFocus, PosSnapshot, PosUser, PostBillRequest, PostedBill, PrinterSettings,

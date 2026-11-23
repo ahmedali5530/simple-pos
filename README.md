@@ -20,6 +20,13 @@ DATABASE_URL=postgres://shop:shop@127.0.0.1:5433/shop
 
 The shop name, currency, and locale start in `config.toml`. After the first save they live in Settings. Item rates are whole units of that currency. Changing the currency does not convert prices already stored.
 
+The receipt printer takes ESC/POS commands by default. Set **Settings → Receipt printer → Commands** for Star printers:
+
+- **Star (line)** sends Star Line Mode text to TSP650/TSP700/TSP800/FVP10 and similar printers.
+- **Star (graphic / TSP100)** renders the receipt as a 1-bit image for TSP100-class printers, which have no text fonts.
+
+Set **Paper width** to 58, 72, or 80 mm. The receipt columns and the Star raster width follow it; 80 mm is the default.
+
 `npm run app` builds the till and opens it in a desktop window with its own database.
 
 ## What it does

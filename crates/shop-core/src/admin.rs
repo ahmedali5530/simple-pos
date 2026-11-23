@@ -599,14 +599,25 @@ pub async fn save_settings(
             "Enter the printer address.".into(),
         ));
     }
+    let printer_command_set = form.printer_command_set.trim().to_lowercase();
+    if !matches!(printer_command_set.as_str(), "escpos" | "star" | "star-graphic") {
+        return Err(AppError::BadRequest(
+            "The printer commands are ESC/POS, Star, or Star graphic.".into(),
+        ));
+    }
+    if !matches!(form.printer_paper_width, 58 | 72 | 80) {
+        return Err(AppError::BadRequest(
+            "The printer paper is 58, 72, or 80 mm.".into(),
+        ));
+    }
 
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"
         INSERT INTO shop_settings (
-            id, name, currency, locale, bill_prefix, print_enabled, printer_kind, printer_target, printer_port
+            id, name, currency, locale, bill_prefix, print_enabled, printer_kind, printer_target, printer_port, printer_command_set, printer_paper_width
         )
-        VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
         SET name = EXCLUDED.name,
             currency = EXCLUDED.currency,
@@ -615,7 +626,9 @@ pub async fn save_settings(
             print_enabled = EXCLUDED.print_enabled,
             printer_kind = EXCLUDED.printer_kind,
             printer_target = EXCLUDED.printer_target,
-            printer_port = EXCLUDED.printer_port
+            printer_port = EXCLUDED.printer_port,
+            printer_command_set = EXCLUDED.printer_command_set,
+            printer_paper_width = EXCLUDED.printer_paper_width
         "#,
     )
     .bind(&shop.name)
@@ -626,6 +639,8 @@ pub async fn save_settings(
     .bind(&printer_kind)
     .bind(&printer_target)
     .bind(form.printer_port)
+    .bind(&printer_command_set)
+    .bind(form.printer_paper_width)
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM barcode_rules")

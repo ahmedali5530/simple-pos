@@ -73,6 +73,8 @@ export interface PrinterSettings {
   kind: 'network' | 'usb' | 'serial' | string
   target: string
   port: number
+  command_set: 'escpos' | 'star' | 'star-graphic' | string
+  paper_width: number
 }
 
 export interface PosSnapshot {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { saveSettings } from '../api'
+  import { printTestPrinter, saveSettings } from '../api'
   import type { BarcodeRule, PosSnapshot } from '../types'
 
   interface Props {
@@ -23,13 +23,18 @@
   let printerKind = $state('network')
   let printerTarget = $state('')
   let printerPort = $state('9100')
+  let printerCommands = $state('escpos')
+  let printerPaperWidth = $state('80')
   let rules = $state<RuleDraft[]>([])
   let loaded = $state('')
   let formError = $state('')
   let saving = $state(false)
+  let testBusy = $state(false)
+  let testNote = $state('')
+  let testError = $state('')
 
   const key = $derived(
-    `${snapshot.shop_name}|${snapshot.bill_prefix}|${snapshot.currency}|${snapshot.locale}|${snapshot.printer.enabled}|${snapshot.printer.kind}|${snapshot.printer.target}|${snapshot.printer.port}|${snapshot.barcode_rules
+    `${snapshot.shop_name}|${snapshot.bill_prefix}|${snapshot.currency}|${snapshot.locale}|${snapshot.printer.enabled}|${snapshot.printer.kind}|${snapshot.printer.target}|${snapshot.printer.port}|${snapshot.printer.command_set}|${snapshot.printer.paper_width}|${snapshot.barcode_rules
       .map((rule) => `${rule.prefix}:${rule.mode}:${rule.scale}`)
       .join(',')}`,
   )
@@ -45,6 +50,8 @@
     printerKind = snapshot.printer.kind
     printerTarget = snapshot.printer.target
     printerPort = String(snapshot.printer.port)
+    printerCommands = snapshot.printer.command_set || 'escpos'
+    printerPaperWidth = String(snapshot.printer.paper_width || 80)
     rules = snapshot.barcode_rules.map((rule) => ({
       prefix: rule.prefix,
       mode: rule.mode,
@@ -89,6 +96,14 @@
       formError = 'Enter the printer address.'
       return
     }
+    if (printerCommands !== 'escpos' && printerCommands !== 'star' && printerCommands !== 'star-graphic') {
+      formError = 'The printer commands are ESC/POS, Star, or Star graphic.'
+      return
+    }
+    if (!['58', '72', '80'].includes(printerPaperWidth)) {
+      formError = 'The printer paper is 58, 72, or 80 mm.'
+      return
+    }
     const barcodeRules: BarcodeRule[] = []
     for (const rule of rules) {
       const prefix = rule.prefix.trim()
@@ -116,12 +131,66 @@
           printer_kind: printerKind,
           printer_target: printerTarget.trim(),
           printer_port: Number(printerPort),
+          printer_command_set: printerCommands,
+          printer_paper_width: Number(printerPaperWidth),
         }),
       )
     } catch (error) {
       formError = error instanceof Error ? error.message : 'Could not save the settings.'
     } finally {
       saving = false
+    }
+  }
+
+  async function testPrinter() {
+    testNote = ''
+    testError = ''
+    if (!['network', 'usb', 'serial'].includes(printerKind)) {
+      testError = 'The printer is network, usb, or serial.'
+      return
+    }
+    if (!/^\d+$/.test(printerPort) || Number(printerPort) < 1) {
+      testError = 'The printer port is not a usable number.'
+      return
+    }
+    if (printerKind !== 'usb' && !printerTarget.trim()) {
+      testError = 'Enter the printer address before testing.'
+      return
+    }
+    if (printerCommands !== 'escpos' && printerCommands !== 'star' && printerCommands !== 'star-graphic') {
+      testError = 'The printer commands are ESC/POS, Star, or Star graphic.'
+      return
+    }
+    if (!['58', '72', '80'].includes(printerPaperWidth)) {
+      testError = 'The printer paper is 58, 72, or 80 mm.'
+      return
+    }
+    testBusy = true
+    try {
+      await printTestPrinter({
+        printer_kind: printerKind,
+        printer_target: printerTarget.trim(),
+        printer_port: Number(printerPort),
+        printer_command_set: printerCommands,
+        printer_paper_width: Number(printerPaperWidth),
+      })
+      const commands =
+        printerCommands === 'star-graphic'
+          ? 'Star graphic'
+          : printerCommands === 'star'
+            ? 'Star line'
+            : 'ESC/POS'
+      const target =
+        printerKind === 'network'
+          ? `${printerTarget.trim()}:${printerPort}`
+          : printerKind === 'serial'
+            ? printerTarget.trim()
+            : 'USB printer'
+      testNote = `Test print sent (${commands}) to ${target}.`
+    } catch (error) {
+      testError = error instanceof Error ? error.message : 'The test print failed.'
+    } finally {
+      testBusy = false
     }
   }
 </script>
@@ -184,6 +253,32 @@
         {printerKind === 'serial' ? 'Baud' : 'Port'}
         <input inputmode="numeric" bind:value={printerPort} />
       </label>
+      <label>
+        Commands
+        <select bind:value={printerCommands}>
+          <option value="escpos">ESC/POS</option>
+          <option value="star">Star (line)</option>
+          <option value="star-graphic">Star (graphic / TSP100)</option>
+        </select>
+      </label>
+      <label>
+        Paper width
+        <select bind:value={printerPaperWidth}>
+          <option value="58">58 mm</option>
+          <option value="72">72 mm</option>
+          <option value="80">80 mm</option>
+        </select>
+      </label>
+      <p class="hint">
+        Star (line) sends text commands for TSP650/TSP700/TSP800/FVP10. Star (graphic) renders the receipt as an image for TSP100-class printers. Keep ESC/POS for Epson-compatible printers.
+      </p>
+      <div class="sheet-actions">
+        <button type="button" class="ghost light" onclick={testPrinter} disabled={testBusy}>
+          {testBusy ? 'Testing…' : 'Test printer'}
+        </button>
+      </div>
+      {#if testNote}<p class="hint">{testNote}</p>{/if}
+      {#if testError}<p class="field-error">{testError}</p>{/if}
     </div>
     <div class="option-block">
       <h3>Barcode rules</h3>
