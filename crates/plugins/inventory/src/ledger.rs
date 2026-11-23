@@ -72,7 +72,11 @@ pub struct SectionTotal {
 pub struct BillLineView {
     pub name: String,
     pub qty: i32,
+    pub rate: i32,
     pub amount: i32,
+    /// What the item cost when this line sold. Reports never read the current
+    /// item cost for an old bill.
+    pub unit_cost: i64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -138,7 +142,9 @@ struct LineRow {
     bill_id: i32,
     name: String,
     qty: i32,
+    rate: i32,
     amount: i32,
+    unit_cost: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -341,15 +347,9 @@ pub async fn load_reports(
     .await?;
     let goods = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT COALESCE(SUM(
-            CASE
-                WHEN bl.cost_total <> 0 THEN bl.cost_total
-                ELSE i.avg_cost * bl.qty::bigint * bl.units::bigint
-            END
-        ), 0)::bigint
+        SELECT COALESCE(SUM(bl.cost_total), 0)::bigint
         FROM bill_lines bl
         JOIN bills b ON b.id = bl.bill_id
-        JOIN items i ON i.id = bl.item_id
         WHERE ($1::text IS NULL OR b.created_at >= $1::timestamptz)
           AND ($2::text IS NULL OR b.created_at < $2::timestamptz)
         "#,
@@ -392,7 +392,7 @@ pub async fn load_reports(
     } else {
         sqlx::query_as::<_, LineRow>(
             r#"
-            SELECT bill_id, name, qty, amount
+            SELECT bill_id, name, qty, rate, amount, unit_cost
             FROM bill_lines
             WHERE bill_id = ANY($1)
             ORDER BY id
@@ -408,17 +408,11 @@ pub async fn load_reports(
         sqlx::query_as::<_, CostRow>(
             r#"
             SELECT
-                bl.bill_id,
-                COALESCE(SUM(
-                    CASE
-                        WHEN bl.cost_total <> 0 THEN bl.cost_total
-                        ELSE i.avg_cost * bl.qty::bigint * bl.units::bigint
-                    END
-                ), 0)::bigint AS cost
-            FROM bill_lines bl
-            JOIN items i ON i.id = bl.item_id
-            WHERE bl.bill_id = ANY($1)
-            GROUP BY bl.bill_id
+                bill_id,
+                COALESCE(SUM(cost_total), 0)::bigint AS cost
+            FROM bill_lines
+            WHERE bill_id = ANY($1)
+            GROUP BY bill_id
             "#,
         )
         .bind(&bill_ids)
@@ -435,7 +429,9 @@ pub async fn load_reports(
                 .map(|line| BillLineView {
                     name: line.name.clone(),
                     qty: line.qty,
+                    rate: line.rate,
                     amount: line.amount,
+                    unit_cost: line.unit_cost,
                 })
                 .collect(),
             id: bill.id,

@@ -2,6 +2,7 @@
   import type { CatalogItemFormContext } from '../../../platform/slots'
   import { Field, Input } from '../../../lib/ui'
   import { clearModel, getModel, saveModel } from '../api'
+  import { invalidateMobileItemOptions } from '../options'
 
   let { itemId, registerExtraSave }: CatalogItemFormContext = $props()
 
@@ -71,6 +72,7 @@
       const nextModel = model.trim()
       if (!nextBrand && !nextModel) {
         await clearModel(id)
+        invalidateMobileItemOptions()
         return
       }
       await saveModel(id, {
@@ -78,6 +80,7 @@
         model: nextModel,
         warranty_months: months,
       })
+      invalidateMobileItemOptions()
     })
   })
 </script>

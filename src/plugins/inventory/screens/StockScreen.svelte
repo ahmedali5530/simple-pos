@@ -52,6 +52,8 @@
   let newRate = $state('')
   let newOpening = $state('0')
   let sheetBusy = $state(false)
+  // Item creation belongs to the catalog screen for now.
+  const showNewItemForm = false
 
   const catalog = $derived(sections.flatMap((section) => section.items.map((item) => ({ item, section }))))
   const selected = $derived(catalog.find((row) => String(row.item.id) === itemId) ?? null)
@@ -422,6 +424,7 @@
     </div>
     <p class="hint">Add rows with a blank id. Direction in adds stock and out deducts it.</p>
 
+    {#if showNewItemForm}
     <div class="new-item">
       <p class="stock-label add">Add new item to inventory</p>
       <div class="stock-pair">
@@ -454,6 +457,7 @@
       </div>
       <Button variant="success" class="mt-4 w-full" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</Button>
     </div>
+    {/if}
   </aside>
 
   <section class="stock-summary">

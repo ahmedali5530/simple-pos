@@ -10,6 +10,7 @@
   import { formatMoney } from '../../../lib/money'
   import { printReceipt } from '../../../lib/print'
   import { pluginEnabled } from '../../../platform/enabled.svelte'
+  import { hasItemOptions, prepareItemOptions } from '../../../platform/itemOptions'
   import { location, screenOf } from '../../../lib/route.svelte'
   import { session } from '../../../lib/session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../../../lib/types'
@@ -42,8 +43,8 @@
 
   $effect(() => {
     if (session.user) currentSession().catch(() => {})
-    loadPos()
-      .then(async (pos) => {
+    Promise.all([loadPos(), prepareItemOptions()])
+      .then(async ([pos]) => {
         snapshot = pos
         const saved = pos.sections.some((section) => section.id === pos.last_section_id)
         focusId = saved ? pos.last_section_id : (pos.sections[0]?.id ?? null)
@@ -76,7 +77,12 @@
     const section = snapshot.sections.find((entry) => entry.id === pending.sectionId)
     const item = section?.items.find((entry) => entry.id === pending.itemId)
     if (!section || !item) return null
-    return { sectionId: section.id, item, available: item.stock - reserved(section.id, item.id) }
+    return {
+      sectionId: section.id,
+      section,
+      item,
+      available: item.stock - reserved(section.id, item.id),
+    }
   })
 
   function remember(id: number) {
@@ -180,11 +186,17 @@
       attention = { tone: 'error', message: 'That line is missing its source.' }
       return false
     }
-    if (item.stock - reserved(sectionId, item.id) < units * qty) {
+    const reference = draft.reference?.trim() ?? ''
+    // A referenced line names an external unit the plugin has already checked
+    // (an IMEI, a job). Do not block it on this snapshot's catalog quantity,
+    // which may be stale; the server still enforces stock when the bill posts.
+    if (
+      !reference &&
+      item.stock - reserved(sectionId, item.id) < units * qty
+    ) {
       attention = { tone: 'warning', message: `Only ${item.stock} left for ${item.name}.` }
       return false
     }
-    const reference = draft.reference?.trim() ?? ''
     const lines = linesFor(sectionId)
     if (
       reference &&
@@ -252,7 +264,7 @@
 
   function requestAdd(sectionId: number, item: PosItem) {
     focusId = sectionId
-    if (item.variants.length > 0) {
+    if (item.variants.length > 0 || hasItemOptions(item.id)) {
       pending = { sectionId, itemId: item.id }
       attention = null
       return
@@ -281,7 +293,7 @@
     }
     const item = section?.items.find((entry) => entry.barcode === code)
     if (item) {
-      if (item.variants.length > 0) {
+      if (item.variants.length > 0 || hasItemOptions(item.id)) {
         focusId = sectionId
         pending = { sectionId, itemId: item.id }
         attention = null
@@ -301,6 +313,12 @@
         attention = { tone: 'warning', message: `${found.item.name} needs an option.` }
         return 'rejected'
       }
+      if (found.variant == null && hasItemOptions(found.item.id)) {
+        focusId = sectionId
+        pending = { sectionId, itemId: found.item.id }
+        attention = null
+        return 'done'
+      }
       const unitRate = found.variant?.rate ?? found.item.rate
       const priced = embeddedSale(unitRate, embedded)
       if (!priced) {
@@ -315,7 +333,7 @@
   function pick(sectionId: number, item: PosItem, variant: ItemVariant | null, qty: number) {
     focusId = sectionId
     if (variant) return addLine(sectionId, item, variant, qty)
-    if (item.variants.length > 0) {
+    if (item.variants.length > 0 || hasItemOptions(item.id)) {
       pending = { sectionId, itemId: item.id }
       attention = null
       return true
@@ -651,11 +669,14 @@
 {#if pendingChoice && snapshot}
   <VariantDialog
     item={pendingChoice.item}
+    section={pendingChoice.section}
+    lines={linesFor(pendingChoice.sectionId)}
     available={pendingChoice.available}
     currency={snapshot.currency}
     locale={snapshot.locale}
     onClose={() => (pending = null)}
     onAdd={confirmVariants}
+    onExternalLine={(draft) => addExternalLine(pendingChoice.sectionId, draft)}
   />
 {/if}
 

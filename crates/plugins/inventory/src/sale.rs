@@ -25,6 +25,7 @@ pub async fn apply_bill(tx: &mut Transaction<'_, Postgres>, bill_no: &str) -> Re
         SELECT item_id, COALESCE(SUM(qty * units), 0)::int
         FROM bill_lines
         WHERE bill_id = $1
+          AND reference = ''
         GROUP BY item_id
         "#,
     )

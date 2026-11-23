@@ -66,12 +66,17 @@ export function clearModel(itemId: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/mobile/models/${itemId}`, { method: 'DELETE' })
 }
 
-export function listDevices(params: { status?: string; search?: string } = {}): Promise<{
+export function listDevices(
+  params: { status?: string; search?: string; item_id?: number } = {},
+): Promise<{
   devices: MobileDevice[]
+  in_stock: number
+  sold: number
 }> {
   const query = new URLSearchParams()
   if (params.status) query.set('status', params.status)
   if (params.search) query.set('search', params.search)
+  if (params.item_id) query.set('item_id', String(params.item_id))
   const suffix = query.toString()
   return request(`/api/v1/mobile/devices${suffix ? `?${suffix}` : ''}`)
 }

@@ -15,8 +15,19 @@ export function setCompiledPlugins(ids: string[]) {
   enabledPlugins.compiled = ids
 }
 
+let readyWaiters: Array<() => void> = []
+
 export function markPluginsReady() {
   enabledPlugins.ready = true
+  const waiters = readyWaiters
+  readyWaiters = []
+  for (const resolve of waiters) resolve()
+}
+
+/** Resolve once the shell has applied a plugin manifest. */
+export function whenPluginsReady(): Promise<void> {
+  if (enabledPlugins.ready) return Promise.resolve()
+  return new Promise((resolve) => readyWaiters.push(resolve))
 }
 
 export function resetPluginState() {

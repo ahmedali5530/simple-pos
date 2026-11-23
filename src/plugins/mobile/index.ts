@@ -1,4 +1,5 @@
 import { defineUiPlugin } from '../../platform/registry'
+import './options'
 
 export const mobilePlugin = defineUiPlugin({
   id: 'mobile',
@@ -44,9 +45,9 @@ export const mobilePlugin = defineUiPlugin({
     },
     {
       id: 'mobile.device',
-      slot: 'pos.line-source',
+      slot: 'pos.item-options',
       order: 25,
-      component: () => import('./screens/DevicePicker.svelte'),
+      component: () => import('./screens/DeviceOptions.svelte'),
     },
   ],
 })

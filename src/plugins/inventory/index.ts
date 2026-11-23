@@ -19,6 +19,8 @@ export const inventoryPlugin = defineUiPlugin({
       path: '/stock',
       title: 'Stock',
       permission: 'inventory.write',
+      // Split layout: each panel owns its scroll area.
+      density: 'touch',
       load: () => import('./screens/StockPage.svelte'),
     },
   ],

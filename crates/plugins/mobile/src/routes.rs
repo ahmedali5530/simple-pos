@@ -245,23 +245,53 @@ struct DeviceQuery {
     status: String,
     #[serde(default)]
     search: String,
+    #[serde(default)]
+    item_id: Option<i32>,
 }
 
+/// Device status is derived from the bills too, not only from `mobile_devices`.
+/// The warranty handler marks the row sold a moment after the bill commits, so
+/// between those two steps a just-sold unit would otherwise still look available.
 const DEVICE_SQL: &str = r#"
-    SELECT d.id, d.item_id, d.imei, d.serial, d.status,
-           d.received_on::text AS received_on,
-           d.warranty_months, d.sold_bill_no,
-           d.sold_at::text AS sold_at,
-           d.customer_name,
-           COALESCE(m.brand, '') AS brand,
-           COALESCE(m.model, '') AS model,
-           w.starts_on::text AS starts_on,
-           w.ends_on::text AS ends_on
-    FROM mobile_devices d
-    LEFT JOIN mobile_models m
-      ON m.tenant_id = d.tenant_id AND m.item_id = d.item_id
-    LEFT JOIN mobile_warranties w
-      ON w.tenant_id = d.tenant_id AND w.device_id = d.id
+    WITH devices AS (
+        SELECT d.id, d.item_id, d.imei, d.serial,
+               CASE
+                   WHEN d.status = 'sold' OR sold.bill_id IS NOT NULL THEN 'sold'
+                   ELSE 'in_stock'
+               END AS status,
+               d.received_on::text AS received_on,
+               d.warranty_months,
+               COALESCE(NULLIF(d.sold_bill_no, ''), sold.bill_no, '') AS sold_bill_no,
+               COALESCE(d.sold_at::text, sold.created_at) AS sold_at,
+               COALESCE(NULLIF(d.customer_name, ''), sold.customer, '') AS customer_name,
+               COALESCE(m.brand, '') AS brand,
+               COALESCE(m.model, '') AS model,
+               w.starts_on,
+               w.ends_on
+        FROM mobile_devices d
+        LEFT JOIN LATERAL (
+            SELECT b.id AS bill_id,
+                   b.bill_no,
+                   b.created_at::text AS created_at,
+                   COALESCE(b.customer, '') AS customer
+            FROM bill_lines bl
+            JOIN bills b ON b.tenant_id = bl.tenant_id AND b.id = bl.bill_id
+            WHERE bl.tenant_id = d.tenant_id
+              AND bl.source = 'mobile.device'
+              AND bl.reference = 'device:' || d.id::text
+            ORDER BY bl.id DESC
+            LIMIT 1
+        ) sold ON true
+        LEFT JOIN mobile_models m
+          ON m.tenant_id = d.tenant_id AND m.item_id = d.item_id
+        LEFT JOIN LATERAL (
+            SELECT starts_on::text AS starts_on, ends_on::text AS ends_on
+            FROM mobile_warranties
+            WHERE tenant_id = d.tenant_id AND device_id = d.id
+            ORDER BY id DESC
+            LIMIT 1
+        ) w ON true
+    )
 "#;
 
 async fn list_devices(
@@ -273,22 +303,35 @@ async fn list_devices(
     let mut tx = db.begin(true).await?;
     let rows: Vec<DeviceRow> = sqlx::query_as(&format!(
         "{DEVICE_SQL}
-        WHERE ($1::text = '' OR d.status = $1)
+        SELECT * FROM devices
+        WHERE ($1::text = '' OR status = $1)
           AND ($2::text = ''
-               OR d.imei ILIKE $2
-               OR d.serial ILIKE $2
-               OR COALESCE(m.brand, '') ILIKE $2
-               OR COALESCE(m.model, '') ILIKE $2)
-        ORDER BY d.id DESC
+               OR imei ILIKE $2
+               OR serial ILIKE $2
+               OR brand ILIKE $2
+               OR model ILIKE $2)
+          AND ($3::int IS NULL OR item_id = $3)
+        ORDER BY id DESC
         LIMIT 200"
     ))
     .bind(&status)
     .bind(&search)
+    .bind(query.item_id)
     .fetch_all(tx.conn())
+    .await?;
+    let (in_stock, sold): (i64, i64) = sqlx::query_as(&format!(
+        "{DEVICE_SQL}
+        SELECT COUNT(*) FILTER (WHERE status = 'in_stock'),
+               COUNT(*) FILTER (WHERE status = 'sold')
+        FROM devices"
+    ))
+    .fetch_one(tx.conn())
     .await?;
     tx.commit().await?;
     Ok(Json(json!({
         "devices": rows.into_iter().map(device_json).collect::<Vec<_>>(),
+        "in_stock": in_stock,
+        "sold": sold,
     })))
 }
 
@@ -339,6 +382,8 @@ async fn add_device(db: TenantDb, Json(body): Json<NewDevice>) -> Result<Json<Va
             "That IMEI is already registered.".into(),
         ));
     };
+    // The device registry owns phone availability. Device lines are
+    // stock-neutral, so registering one does not touch the catalog quantity.
     tx.commit().await?;
     Ok(Json(json!({ "id": id })))
 }

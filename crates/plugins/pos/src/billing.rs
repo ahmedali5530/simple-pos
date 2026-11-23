@@ -18,6 +18,7 @@ struct Sale {
     qty: i32,
     units: i32,
     amount: i32,
+    unit_cost: i64,
     cost_total: i64,
     source: String,
     reference: String,
@@ -490,6 +491,19 @@ fn clean_code(value: &Option<String>) -> Option<String> {
         .as_ref()
         .map(|code| code.trim().to_string())
         .filter(|code| !code.is_empty())
+}
+
+/// Triggers raise P0001 with a user-facing message (for example, a plugin line
+/// whose external reference is already on another bill). Surface it as a 400
+/// instead of a database error.
+fn map_bill_line_error(err: sqlx::Error) -> AppError {
+    let Some(db) = err.as_database_error() else {
+        return AppError::Db(err);
+    };
+    if db.code().as_deref() == Some("P0001") {
+        return AppError::BadRequest(db.message().to_string());
+    }
+    AppError::Db(err)
 }
 
 fn map_catalog_error(err: sqlx::Error) -> AppError {
@@ -1002,20 +1016,27 @@ pub async fn post_bill_tx(
         let stock_units = units.checked_mul(line.qty).ok_or_else(|| {
             AppError::BadRequest("That line takes too much stock.".into())
         })?;
-        let used = taken.entry(item.id).or_insert(0);
-        *used = used.checked_add(stock_units).ok_or_else(|| {
-            AppError::BadRequest("That bill takes too much stock.".into())
-        })?;
-        if *used > item.stock {
-            return Err(AppError::BadRequest(format!(
-                "Only {} left for {}.",
-                item.stock, item.name
-            )));
+        // A referenced line is one external unit (an IMEI, a job). Its source
+        // owns availability, so it does not consume the catalog quantity.
+        if reference.is_empty() {
+            let used = taken.entry(item.id).or_insert(0);
+            *used = used.checked_add(stock_units).ok_or_else(|| {
+                AppError::BadRequest("That bill takes too much stock.".into())
+            })?;
+            if *used > item.stock {
+                return Err(AppError::BadRequest(format!(
+                    "Only {} left for {}.",
+                    item.stock, item.name
+                )));
+            }
         }
         let amount = line.rate.checked_mul(line.qty).ok_or_else(|| {
             AppError::BadRequest("That line amount is too large.".into())
         })?;
-        let cost_total = i64::from(stock_units).checked_mul(item.avg_cost).ok_or_else(|| {
+        let unit_cost = i64::from(units).checked_mul(item.avg_cost).ok_or_else(|| {
+            AppError::BadRequest("That line cost is too large.".into())
+        })?;
+        let cost_total = unit_cost.checked_mul(i64::from(line.qty)).ok_or_else(|| {
             AppError::BadRequest("That line cost is too large.".into())
         })?;
         total = total.checked_add(amount).ok_or_else(|| {
@@ -1029,6 +1050,7 @@ pub async fn post_bill_tx(
             qty: line.qty,
             units,
             amount,
+            unit_cost,
             cost_total,
             source,
             reference,
@@ -1059,8 +1081,8 @@ pub async fn post_bill_tx(
         sqlx::query(
             r#"
             INSERT INTO bill_lines
-                (bill_id, item_id, variant_id, name, rate, qty, units, amount, cost_total, source, reference, details)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                (bill_id, item_id, variant_id, name, rate, qty, units, amount, unit_cost, cost_total, source, reference, details)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
         .bind(bill_id)
@@ -1071,12 +1093,14 @@ pub async fn post_bill_tx(
         .bind(sale.qty)
         .bind(sale.units)
         .bind(sale.amount)
+        .bind(sale.unit_cost)
         .bind(sale.cost_total)
         .bind(&sale.source)
         .bind(&sale.reference)
         .bind(&sale.details)
         .execute(&mut **tx)
-        .await?;
+        .await
+        .map_err(map_bill_line_error)?;
     }
 
     let event = BillPostedV2 {
@@ -1164,6 +1188,7 @@ mod line_metadata_tests {
             qty: 2,
             units: 1,
             amount: 1000,
+            unit_cost: 0,
             cost_total: 0,
             source: "mobile.device".into(),
             reference: "device:7".into(),

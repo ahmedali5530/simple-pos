@@ -6,6 +6,7 @@
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../../../lib/types'
   import { Button, Switch } from '../../../lib/ui'
   import Slot from '../../../platform/Slot.svelte'
+  import { hasItemOptions } from '../../../platform/itemOptions'
   import type { AddPosLine, LineMetadataPatch } from '../../../platform/slots'
 
   interface Props {
@@ -101,7 +102,9 @@
   const minimum = (item: PosItem) =>
     item.variants.length ? Math.min(...item.variants.map((variant) => variant.units)) : 1
 
-  const sellable = (item: PosItem) => item.stock - reserved(item.id) >= minimum(item)
+  // An item with plugin options opens a chooser; the chooser decides availability.
+  const sellable = (item: PosItem) =>
+    hasItemOptions(item.id) || item.stock - reserved(item.id) >= minimum(item)
 
   function priceLabel(item: PosItem) {
     if (item.prompt !== 'none' && item.base_rate) return money(item.base_rate)
@@ -281,7 +284,7 @@
         class:out={!sellable(item)}
         disabled={!sellable(item)}
         aria-label={
-          item.variants.length
+          item.variants.length || hasItemOptions(item.id)
             ? `Choose ${item.name}`
             : item.prompt === 'quantity'
               ? `Enter quantity for ${item.name}`
@@ -303,6 +306,8 @@
           </span>
           {#if item.variants.length}
             <span class="card-options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
+          {:else if hasItemOptions(item.id)}
+            <span class="card-tag">Choose IMEI</span>
           {:else if item.prompt === 'quantity'}
             <span class="card-tag">Asks quantity / weight</span>
           {:else if item.prompt === 'price'}
@@ -310,7 +315,9 @@
           {/if}
           <span class="card-foot">
             <span class="price">{priceLabel(item)}</span>
-            <span class="card-stock">{item.stock} on hand</span>
+            <span class="card-stock">
+              {hasItemOptions(item.id) ? 'IMEI tracked' : `${item.stock} on hand`}
+            </span>
           </span>
         </span>
       </button>

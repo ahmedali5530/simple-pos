@@ -55,16 +55,27 @@ impl Plugin for PosPlugin {
             permission: Some("pos.bills.post".into()),
             order: 10,
         }];
-        manifest.slots_provided = vec!["pos.line-source".into(), "pos.line-detail".into()];
+        manifest.slots_provided = vec![
+            "pos.line-source".into(),
+            "pos.line-detail".into(),
+            "pos.item-options".into(),
+        ];
         manifest
     }
 
     fn migrations(&self) -> &'static [Migration] {
-        static MIGRATIONS: &[Migration] = &[Migration::new(
-            1,
-            "line_source",
-            include_str!("../migrations/001_line_source.sql"),
-        )];
+        static MIGRATIONS: &[Migration] = &[
+            Migration::new(
+                1,
+                "line_source",
+                include_str!("../migrations/001_line_source.sql"),
+            ),
+            Migration::new(
+                2,
+                "line_cost",
+                include_str!("../migrations/002_line_cost.sql"),
+            ),
+        ];
         MIGRATIONS
     }
 

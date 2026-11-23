@@ -5,6 +5,7 @@
   import { request } from './http'
   import { filterNav, type PlatformManifest, type UiNavItem, type UiSettingsPage } from './registry'
   import { navForEnabled, settingsForEnabled } from '../plugins/registry'
+  import { prepareItemOptions, resetItemOptions } from './itemOptions'
   import {
     markPluginsReady,
     setCompiledPlugins,
@@ -31,6 +32,8 @@
     setEnabledPlugins(enabledIds)
     setCompiledPlugins(compiledIds)
     markPluginsReady()
+    resetItemOptions()
+    void prepareItemOptions()
     settingsPages = settingsForEnabled(enabled, compiled)
     const items = navForEnabled(enabled, compiled).filter((item) => {
       if (item.id === 'settings') return settingsPages.length > 0
@@ -60,6 +63,7 @@
   $effect(() => {
     if (!session.user) {
       resetPluginState()
+      resetItemOptions()
       return
     }
     const load = () => {

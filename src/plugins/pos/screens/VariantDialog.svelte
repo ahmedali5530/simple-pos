@@ -1,18 +1,33 @@
 <script lang="ts">
   import { formatMoney } from '../../../lib/money'
-  import type { ItemVariant, PosItem } from '../../../lib/types'
+  import type { CartLine, ItemVariant, PosItem, PosSection } from '../../../lib/types'
   import { Button } from '../../../lib/ui'
+  import Slot from '../../../platform/Slot.svelte'
+  import type { AddPosLine } from '../../../platform/slots'
 
   interface Props {
     item: PosItem
+    section: PosSection
+    lines: CartLine[]
     available: number
     currency: string
     locale: string
     onClose: () => void
     onAdd: (picks: { variant: ItemVariant; qty: number }[]) => void
+    onExternalLine: AddPosLine
   }
 
-  let { item, available, currency, locale, onClose, onAdd }: Props = $props()
+  let {
+    item,
+    section,
+    lines,
+    available,
+    currency,
+    locale,
+    onClose,
+    onAdd,
+    onExternalLine,
+  }: Props = $props()
 
   let counts = $state<Record<number, number>>({})
 
@@ -86,9 +101,13 @@
     }}
   >
     <h2 id="variant-title">{item.name}</h2>
-    <p class="hint">
-      {available} in stock. Choose one option, or several. Each option has its own rate.
-    </p>
+    {#if item.variants.length > 0}
+      <p class="hint">
+        {available} in stock. Choose one option, or several. Each option has its own rate.
+      </p>
+    {:else}
+      <p class="hint">Choose an IMEI for this item. Each device is one unit.</p>
+    {/if}
     {#each item.variants as variant, index (variant.id)}
       <div class="variant-row">
         <div>
@@ -128,9 +147,25 @@
         </span>
       </div>
     {/each}
+    <Slot
+      name="pos.item-options"
+      context={{
+        item,
+        section,
+        lines,
+        addLine: onExternalLine,
+        close: onClose,
+        currency,
+        locale,
+      }}
+    />
     <div class="sheet-actions">
-      <Button variant="secondary" onclick={onClose}>Cancel</Button>
-      <Button disabled={planned === 0} onclick={confirm}>Add to bill</Button>
+      <Button variant="secondary" onclick={onClose}>
+        {item.variants.length > 0 ? 'Cancel' : 'Close'}
+      </Button>
+      {#if item.variants.length > 0}
+        <Button disabled={planned === 0} onclick={confirm}>Add to bill</Button>
+      {/if}
     </div>
   </div>
 </div>

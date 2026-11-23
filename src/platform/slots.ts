@@ -39,6 +39,17 @@ export interface PosLineSourceContext {
   lines: CartLine[]
 }
 
+/** Options a plugin contributes inside the POS variant sheet for one catalog item. */
+export interface PosItemOptionsContext {
+  item: PosItem
+  section: PosSection
+  lines: CartLine[]
+  addLine: AddPosLine
+  close: () => void
+  currency: string
+  locale: string
+}
+
 export type LineMetadataPatch = Partial<Pick<CartLine, 'source' | 'reference' | 'details'>>
 
 export interface PosLineDetailContext {

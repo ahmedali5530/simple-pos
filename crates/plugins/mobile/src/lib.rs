@@ -48,7 +48,7 @@ impl Plugin for MobilePlugin {
                 order: 10,
             },
             SlotDecl {
-                name: "pos.line-source".into(),
+                name: "pos.item-options".into(),
                 contribution: "mobile.device".into(),
                 order: 25,
             },
@@ -57,11 +57,14 @@ impl Plugin for MobilePlugin {
     }
 
     fn migrations(&self) -> &'static [Migration] {
-        static MIGRATIONS: &[Migration] = &[Migration::new(
-            1,
-            "mobile",
-            include_str!("../migrations/001_mobile.sql"),
-        )];
+        static MIGRATIONS: &[Migration] = &[
+            Migration::new(1, "mobile", include_str!("../migrations/001_mobile.sql")),
+            Migration::new(
+                2,
+                "mobile_sale_gate",
+                include_str!("../migrations/002_sale_gate.sql"),
+            ),
+        ];
         MIGRATIONS
     }
 
