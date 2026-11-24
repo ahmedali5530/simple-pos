@@ -107,13 +107,20 @@ impl Dependency {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NavItem {
     pub id: String,
     pub label: String,
+    /// Empty when this entry is only a group that opens its `children`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub href: String,
+    #[serde(default)]
     pub permission: Option<String>,
+    #[serde(default)]
     pub order: i32,
+    /// Sub-links rendered as a dropdown under this entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<NavItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +320,42 @@ mod tests {
             Permission::new("settings.write"),
         ];
         assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn nav_items_carry_children_and_groups_need_no_href() {
+        let json = serde_json::json!({
+            "id": "mobile",
+            "label": "Mobile",
+            "permission": "mobile.read",
+            "order": 48,
+            "children": [
+                { "id": "mobile_devices", "label": "Devices", "href": "/mobile/devices" },
+                { "id": "mobile_warranty", "label": "Warranty", "href": "/mobile/warranty" }
+            ]
+        });
+        let entry: NavItem = serde_json::from_value(json).unwrap();
+        assert!(entry.href.is_empty());
+        assert_eq!(entry.children.len(), 2);
+        assert_eq!(entry.children[1].href, "/mobile/warranty");
+
+        let round_trip = serde_json::to_value(&entry).unwrap();
+        assert_eq!(round_trip["children"].as_array().unwrap().len(), 2);
+        assert!(round_trip.get("href").is_none(), "an empty group href is omitted");
+    }
+
+    #[test]
+    fn nav_items_without_children_omit_the_key() {
+        let entry = NavItem {
+            id: "billing".into(),
+            label: "Billing".into(),
+            href: "/billing".into(),
+            permission: None,
+            order: 10,
+            children: Vec::new(),
+        };
+        let value = serde_json::to_value(&entry).unwrap();
+        assert!(value.get("children").is_none());
     }
 
     #[test]

@@ -12,6 +12,11 @@ mod sale;
 
 pub struct MobilePlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(MobilePlugin)
+}
+
 impl Plugin for MobilePlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("mobile", "Mobile & Warranty", "0.1.0");
@@ -25,22 +30,31 @@ impl Plugin for MobilePlugin {
             Permission::new("mobile.write"),
         ];
         manifest.events_consumed = vec!["sales.bill_posted".into()];
-        manifest.nav = vec![
-            NavItem {
-                id: "mobile_devices".into(),
-                label: "Devices".into(),
-                href: "/mobile/devices".into(),
-                permission: Some("mobile.read".into()),
-                order: 48,
-            },
-            NavItem {
-                id: "mobile_warranty".into(),
-                label: "Warranty".into(),
-                href: "/mobile/warranty".into(),
-                permission: Some("mobile.read".into()),
-                order: 49,
-            },
-        ];
+        manifest.nav = vec![NavItem {
+            id: "mobile".into(),
+            label: "Mobile".into(),
+            href: String::new(),
+            permission: Some("mobile.read".into()),
+            order: 48,
+            children: vec![
+                NavItem {
+                    id: "mobile_devices".into(),
+                    label: "Devices".into(),
+                    href: "/mobile/devices".into(),
+                    permission: Some("mobile.read".into()),
+                    order: 10,
+                    children: Vec::new(),
+                },
+                NavItem {
+                    id: "mobile_warranty".into(),
+                    label: "Warranty".into(),
+                    href: "/mobile/warranty".into(),
+                    permission: Some("mobile.read".into()),
+                    order: 20,
+                    children: Vec::new(),
+                },
+            ],
+        }];
         manifest.slot_contributions = vec![
             SlotDecl {
                 name: "catalog.item-form".into(),
@@ -91,6 +105,11 @@ mod tests {
         manifest.validate().unwrap();
         assert!(manifest.events_consumed.iter().any(|event| event == "sales.bill_posted"));
         assert_eq!(manifest.slot_contributions.len(), 2);
+        assert_eq!(manifest.nav.len(), 1, "devices and warranty sit under one group");
+        let group = &manifest.nav[0];
+        assert!(group.href.is_empty());
+        let children: Vec<_> = group.children.iter().map(|item| item.href.as_str()).collect();
+        assert_eq!(children, vec!["/mobile/devices", "/mobile/warranty"]);
         let declared = manifest
             .permissions
             .iter()

@@ -105,11 +105,178 @@ impl Till {
 }
 
 pub async fn run() {
-    let till = open_with(std::env::args().any(|arg| arg == "--embedded"))
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--list-plugins") {
+        print_plugins();
+        return;
+    }
+    if let Some(mode) = maintenance_mode(&args) {
+        if let Err(err) = maintenance(mode, args.iter().any(|arg| arg == "--embedded")).await {
+            panic!("{err}");
+        }
+        return;
+    }
+    let till = open_with(args.iter().any(|arg| arg == "--embedded"))
         .await
         .unwrap_or_else(|err| panic!("{err}"));
     wait_for_stop().await;
     till.stop().await;
+}
+
+/// Print the compiled plugin set in dependency order, without opening a database.
+/// Used by `cargo xtask plugins list`.
+pub fn print_plugins() {
+    match platform_kernel::registry::PluginCatalog::build(compose::plugins()) {
+        Ok(catalog) => {
+            for manifest in catalog.manifests() {
+                let requires = manifest
+                    .requires
+                    .iter()
+                    .map(|dependency| format!("{} {}", dependency.id, dependency.version))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let suffix = if requires.is_empty() {
+                    String::new()
+                } else {
+                    format!("  requires {requires}")
+                };
+                println!(
+                    "{:<14} {:<8} {}{}",
+                    manifest.id.as_str(),
+                    manifest.version,
+                    manifest.name,
+                    suffix
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+enum Maintenance {
+    MigrateOnly,
+    PurgePlugin {
+        id: String,
+        sql: Option<std::path::PathBuf>,
+    },
+}
+
+fn maintenance_mode(args: &[String]) -> Option<Maintenance> {
+    if args.iter().any(|arg| arg == "--migrate-only") {
+        return Some(Maintenance::MigrateOnly);
+    }
+    let position = args.iter().position(|arg| arg == "--purge-plugin")?;
+    let id = args.get(position + 1)?.clone();
+    let sql = args
+        .iter()
+        .position(|arg| arg == "--sql")
+        .and_then(|index| args.get(index + 1))
+        .map(std::path::PathBuf::from);
+    Some(Maintenance::PurgePlugin { id, sql })
+}
+
+struct MaintenanceDatabase {
+    pool: PgPool,
+    #[cfg(feature = "bundle")]
+    _db: Option<embedded::EmbeddedDb>,
+}
+
+async fn open_maintenance_database(embedded: bool) -> Result<(String, MaintenanceDatabase), String> {
+    #[cfg(feature = "bundle")]
+    let db = if embedded {
+        Some(embedded::EmbeddedDb::start().await?)
+    } else {
+        None
+    };
+    #[cfg(feature = "bundle")]
+    let database_url = match &db {
+        Some(db) => db.url.clone(),
+        None => std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?,
+    };
+    #[cfg(not(feature = "bundle"))]
+    let database_url = {
+        if embedded {
+            return Err(
+                "This build has no embedded database. Rebuild with --features bundle".into(),
+            );
+        }
+        std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?
+    };
+    let pool = connect(&database_url).await.map_err(|error| {
+        format!(
+            "Could not open the shop database at {}: {error}",
+            database_target(&database_url)
+        )
+    })?;
+    Ok((
+        database_url,
+        MaintenanceDatabase {
+            pool,
+            #[cfg(feature = "bundle")]
+            _db: db,
+        },
+    ))
+}
+
+/// Apply migrations or drop one plugin's data, then exit. Runs the real platform boot so
+/// migrations, RLS validation and permission sync behave exactly as they do at startup.
+async fn maintenance(mode: Maintenance, embedded: bool) -> Result<(), String> {
+    let _ = dotenvy::from_filename(".env");
+    let _ = dotenvy::from_filename("../../.env");
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .try_init();
+
+    let (database_url, database) = open_maintenance_database(embedded).await?;
+    let platform = platform_runtime::Platform::boot(
+        platform_runtime::BootConfig {
+            database_url,
+            database_admin_url: std::env::var("DATABASE_ADMIN_URL").ok(),
+            app_password: std::env::var("PLATFORM_APP_PASSWORD").ok(),
+        },
+        compose::plugins(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+
+    match mode {
+        Maintenance::MigrateOnly => {
+            tracing::info!("migrations applied");
+        }
+        Maintenance::PurgePlugin { id, sql } => {
+            let owner = platform.migration_pool();
+            if let Some(path) = sql {
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                sqlx::raw_sql(&text)
+                    .execute(owner)
+                    .await
+                    .map_err(|error| format!("uninstall.sql failed: {error}"))?;
+            }
+            for statement in [
+                "DELETE FROM plugin_settings WHERE plugin_id = $1",
+                "DELETE FROM tenant_plugins WHERE plugin_id = $1",
+                "DELETE FROM platform_permissions WHERE plugin_id = $1",
+                "DELETE FROM platform_migrations WHERE owner = $1",
+            ] {
+                sqlx::query(statement)
+                    .bind(&id)
+                    .execute(owner)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            tracing::info!(plugin = %id, "plugin purged");
+        }
+    }
+
+    platform.stop();
+    database.pool.close().await;
+    Ok(())
 }
 
 pub async fn open() -> Result<Till, String> {

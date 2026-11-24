@@ -12,6 +12,11 @@ use serde_json::json;
 
 pub struct PrintingPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(PrintingPlugin)
+}
+
 impl Plugin for PrintingPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("printing", "Printing", "0.1.0");

@@ -10,6 +10,11 @@ use serde_json::{json, Value};
 
 pub struct CustomersPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(CustomersPlugin)
+}
+
 impl Plugin for CustomersPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("customers", "Customers", "0.1.0");
@@ -24,6 +29,7 @@ impl Plugin for CustomersPlugin {
             href: "/customers".into(),
             permission: Some("customers.read".into()),
             order: 45,
+            children: Vec::new(),
         }];
         manifest
     }

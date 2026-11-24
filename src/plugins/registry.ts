@@ -1,31 +1,53 @@
-import { defineUiPlugin, type UiPlugin, type UiSlotContribution } from '../platform/registry'
+import type { UiNavItem, UiPlugin, UiSlotContribution } from '../platform/registry'
 import { enabledPlugins } from '../platform/enabled.svelte'
-import { posPlugin } from './pos'
-import { catalogPlugin } from './catalog'
-import { inventoryPlugin } from './inventory'
-import { cashPlugin } from './cash'
-import { reportsPlugin } from './reports'
-import { printingPlugin } from './printing'
-import { adminPlugin } from './admin'
-import { customersPlugin } from './customers'
-import { tailorPlugin } from './tailor'
-import { installmentsPlugin } from './installments'
-import { mobilePlugin } from './mobile'
 
-/** Static UI plugin registry — mirrors Rust static linking. */
-export const uiPlugins: UiPlugin[] = [
-  posPlugin,
-  catalogPlugin,
-  inventoryPlugin,
-  cashPlugin,
-  reportsPlugin,
-  printingPlugin,
-  adminPlugin,
-  customersPlugin,
-  tailorPlugin,
-  installmentsPlugin,
-  mobilePlugin,
-].map(defineUiPlugin)
+/**
+ * UI plugins are discovered from the filesystem, mirroring the generated Rust composition root.
+ * A plugin is one directory: `src/plugins/<id>/index.ts` exports exactly one UI plugin.
+ */
+const modules = import.meta.glob<Record<string, unknown>>('./*/index.ts', { eager: true })
+
+function isUiPlugin(value: unknown): value is UiPlugin {
+  const candidate = value as Partial<UiPlugin> | null
+  return (
+    !!candidate &&
+    typeof candidate.id === 'string' &&
+    Array.isArray(candidate.nav) &&
+    Array.isArray(candidate.settingsPages) &&
+    Array.isArray(candidate.reportPages) &&
+    Array.isArray(candidate.pages)
+  )
+}
+
+function discover(): UiPlugin[] {
+  return Object.entries(modules)
+    .map(([path, exports]) => {
+      const found = Object.values(exports).filter(isUiPlugin)
+      if (found.length !== 1) {
+        throw new Error(`${path} must export exactly one UI plugin (found ${found.length})`)
+      }
+      return found[0]
+    })
+    .sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** Discovered UI plugin registry — mirrors Rust static linking. */
+export const uiPlugins: UiPlugin[] = discover()
+
+if (import.meta.env.DEV) {
+  const claims = new Map<string, string>()
+  const claim = (href: string, owner: string) => {
+    const existing = claims.get(href)
+    if (existing && existing !== owner) {
+      console.error(`[plugins] ${href} is claimed by both ${existing} and ${owner}`)
+    }
+    claims.set(href, owner)
+  }
+  for (const plugin of uiPlugins) {
+    for (const href of navHrefs(plugin.nav)) claim(href, plugin.id)
+    for (const page of [...plugin.settingsPages, ...plugin.reportPages]) claim(page.href, plugin.id)
+  }
+}
 
 function pluginIsOn(plugin: UiPlugin, enabled: Set<string>, compiled: Set<string>) {
   if (!plugin.requiresBackend) return true
@@ -105,11 +127,18 @@ export function staticReportPages() {
   return uiPlugins.flatMap((p) => p.reportPages).sort((a, b) => a.order - b.order)
 }
 
+function navHrefs(items: UiNavItem[]): string[] {
+  return items.flatMap((item) => [
+    ...(item.href ? [item.href] : []),
+    ...navHrefs(item.children ?? []),
+  ])
+}
+
 /** The plugin that owns a screen. Null means the path is not a plugin screen. */
 export function pluginForPath(path: string): string | null {
   for (const plugin of uiPlugins) {
     const hrefs = [
-      ...plugin.nav.map((item) => item.href),
+      ...navHrefs(plugin.nav),
       ...plugin.settingsPages.map((page) => page.href),
       ...plugin.reportPages.map((page) => page.href),
     ]

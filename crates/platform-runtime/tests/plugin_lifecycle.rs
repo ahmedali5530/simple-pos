@@ -280,6 +280,92 @@ async fn disabling_one_tenant_does_not_disable_another() {
 }
 
 #[tokio::test]
+async fn a_plugin_added_to_an_existing_tenant_starts_disabled() {
+    let platform = boot().await;
+    let tenant_id = fresh_tenant(&platform).await;
+
+    // Simulate a later build that compiles one more plugin: drop its row, then install again.
+    // The tenant already has rows, so the newly discovered plugin must come up off.
+    sqlx::query("DELETE FROM tenant_plugins WHERE tenant_id = $1 AND plugin_id = 'probe'")
+        .bind(tenant_id.as_uuid())
+        .execute(platform.migration_pool())
+        .await
+        .unwrap();
+
+    let added = PluginStateStore::install_missing(platform.runtime_pool(), tenant_id, &platform.catalog)
+        .await
+        .unwrap();
+    assert_eq!(added.len(), 1, "only the missing plugin is inserted");
+
+    let (enabled,): (bool,) = sqlx::query_as(
+        "SELECT enabled FROM tenant_plugins WHERE tenant_id = $1 AND plugin_id = 'probe'",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_one(platform.migration_pool())
+    .await
+    .unwrap();
+    assert!(!enabled, "a plugin added later must not go live without consent");
+}
+
+#[tokio::test]
+async fn upgrade_adopts_the_compiled_version_but_refuses_a_downgrade() {
+    let platform = boot().await;
+    let tenant_id = fresh_tenant(&platform).await;
+
+    // Older than the compiled version: adoption moves it forward so the plugin stays enabled.
+    sqlx::query(
+        "UPDATE tenant_plugins SET version = '0.0.9', installed_version = '0.0.9' WHERE tenant_id = $1 AND plugin_id = 'probe'",
+    )
+    .bind(tenant_id.as_uuid())
+    .execute(platform.migration_pool())
+    .await
+    .unwrap();
+
+    let adopted = PluginStateStore::adopt_versions(platform.runtime_pool(), tenant_id, &platform.catalog)
+        .await
+        .unwrap();
+    assert!(
+        adopted
+            .iter()
+            .any(|(plugin, from, to)| plugin == "probe" && from == "0.0.9" && to == "0.1.0"),
+        "an upgrade is adopted: {adopted:?}"
+    );
+    let stored: String = sqlx::query_scalar(
+        "SELECT version FROM tenant_plugins WHERE tenant_id = $1 AND plugin_id = 'probe'",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_one(platform.migration_pool())
+    .await
+    .unwrap();
+    assert_eq!(stored, "0.1.0");
+
+    // Newer than the compiled version: a downgrade is left alone for the skip path to protect.
+    sqlx::query(
+        "UPDATE tenant_plugins SET version = '9.0.0', installed_version = '9.0.0' WHERE tenant_id = $1 AND plugin_id = 'probe'",
+    )
+    .bind(tenant_id.as_uuid())
+    .execute(platform.migration_pool())
+    .await
+    .unwrap();
+
+    let adopted = PluginStateStore::adopt_versions(platform.runtime_pool(), tenant_id, &platform.catalog)
+        .await
+        .unwrap();
+    assert!(
+        adopted.iter().all(|(plugin, _, _)| plugin != "probe"),
+        "a downgrade must not be adopted"
+    );
+    let stored: String = sqlx::query_scalar(
+        "SELECT version FROM tenant_plugins WHERE tenant_id = $1 AND plugin_id = 'probe'",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_one(platform.migration_pool())
+    .await
+    .unwrap();
+    assert_eq!(stored, "9.0.0");
+}
+
+#[tokio::test]
 async fn permission_sync_is_idempotent() {
     let platform = boot().await;
     let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM platform_permissions")

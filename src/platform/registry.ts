@@ -1,9 +1,12 @@
 export interface UiNavItem {
   id: string
   label: string
-  href: string
+  /** Empty or absent when the item is only a group that opens `children`. */
+  href?: string
   permission?: string
   order: number
+  /** Sub-links rendered as a dropdown under this item. */
+  children?: UiNavItem[]
 }
 
 export interface UiSettingsPage {
@@ -93,13 +96,34 @@ export function filterNav(items: UiNavItem[], permissions: string[]): UiNavItem[
   const all = permissions.includes('*')
   return items
     .filter((item) => all || !item.permission || permissions.includes(item.permission))
+    .map((item) => {
+      if (!item.children?.length) return item
+      const children = filterNav(item.children, permissions)
+      return children.length ? { ...item, children } : null
+    })
+    .filter((item): item is UiNavItem => {
+      if (!item) return false
+      return Boolean(item.href) || Boolean(item.children?.length)
+    })
     .sort((a, b) => a.order - b.order)
+}
+
+function mergeItems(api: UiNavItem[], local: UiNavItem[]): UiNavItem[] {
+  const byId = new Map<string, UiNavItem>()
+  for (const item of local) byId.set(item.id, item)
+  for (const item of api) {
+    const existing = byId.get(item.id)
+    const children = mergeItems(item.children ?? [], existing?.children ?? [])
+    byId.set(item.id, {
+      ...existing,
+      ...item,
+      ...(children.length ? { children } : {}),
+    })
+  }
+  return [...byId.values()].sort((a, b) => a.order - b.order)
 }
 
 /** Merge API + static UI nav; API wins on matching ids so frontend-only items (e.g. Plugins) survive. */
 export function mergeNav(api: UiNavItem[], local: UiNavItem[]): UiNavItem[] {
-  const byId = new Map<string, UiNavItem>()
-  for (const item of local) byId.set(item.id, item)
-  for (const item of api) byId.set(item.id, item)
-  return [...byId.values()].sort((a, b) => a.order - b.order)
+  return mergeItems(api, local)
 }

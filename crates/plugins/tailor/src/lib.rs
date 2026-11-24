@@ -8,6 +8,11 @@ mod routes;
 
 pub struct TailorPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(TailorPlugin)
+}
+
 impl Plugin for TailorPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("tailor", "Tailor", "0.1.0");
@@ -20,6 +25,7 @@ impl Plugin for TailorPlugin {
             href: "/tailor".into(),
             permission: Some("tailor.read".into()),
             order: 46,
+            children: Vec::new(),
         }];
         manifest.slot_contributions = vec![SlotDecl {
             name: "pos.line-source".into(),

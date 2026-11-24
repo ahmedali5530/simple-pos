@@ -92,7 +92,14 @@ impl Platform {
         }
         roles::grant_existing(&pools.migration).await?;
         sync_permissions(&pools.migration, &catalog).await?;
-        PluginStateStore::install_missing(&pools.runtime, TenantId::DEFAULT, &catalog).await?;
+        for id in PluginStateStore::install_missing(&pools.runtime, TenantId::DEFAULT, &catalog).await? {
+            tracing::info!(plugin = id.as_str(), "plugin row added for this tenant");
+        }
+        for (plugin, from, to) in
+            PluginStateStore::adopt_versions(&pools.runtime, TenantId::DEFAULT, &catalog).await?
+        {
+            tracing::info!(plugin = %plugin, from = %from, to = %to, "plugin version adopted");
+        }
 
         let enabled = Arc::new(EnabledPlugins::new(pools.runtime.clone(), catalog.clone()));
         let lifecycle = PluginLifecycle::new(pools.runtime.clone(), catalog.clone(), enabled.clone());

@@ -18,6 +18,8 @@
   let shopName = $state('Shop')
   let loadedPath = $state('')
   let loaded = $state<{ default: import('svelte').Component } | null>(null)
+  let openGroup = $state<string | null>(null)
+  let navEl = $state<HTMLElement | null>(null)
   const page = $derived(pageForPath(location.path, enabled, compiled))
   const reports = $derived(reportPagesForEnabled(enabled, compiled))
   const inSettings = $derived(location.path.startsWith('/settings'))
@@ -58,11 +60,39 @@
   }
 
   function active(href: string) {
+    if (!href) return false
     if (location.path === href || location.path.startsWith(`${href}/`)) return true
     const section = href.split('/').filter(Boolean)[0]
     const current = location.path.split('/').filter(Boolean)[0]
     return (section === 'settings' || section === 'reports') && section === current
   }
+
+  function groupActive(item: UiNavItem) {
+    return (item.children ?? []).some(
+      (child) => active(child.href ?? '') || groupActive(child),
+    )
+  }
+
+  function toggleGroup(id: string) {
+    openGroup = openGroup === id ? null : id
+  }
+
+  function closeOnOutside(event: MouseEvent) {
+    if (!openGroup) return
+    const target = event.target as Node | null
+    if (navEl && target && navEl.contains(target)) return
+    openGroup = null
+  }
+
+  function closeOnEscape(event: KeyboardEvent) {
+    if (event.key === 'Escape') openGroup = null
+  }
+
+  // A new page closes whatever dropdown is open.
+  $effect(() => {
+    location.path
+    openGroup = null
+  })
 
   async function leave() {
     try {
@@ -74,6 +104,8 @@
   }
 </script>
 
+<svelte:window onclick={closeOnOutside} onkeydown={closeOnEscape} />
+
 <div class="app">
   <header class="topbar on-dark">
     <div class="brand">
@@ -82,9 +114,39 @@
         <h1>{shopName}</h1>
       </div>
     </div>
-    <nav class="nav" aria-label="Main">
+    <nav class="nav" aria-label="Main" bind:this={navEl}>
       {#each nav as item (item.id)}
-        <a href={item.href} class:active={active(item.href)} onclick={(event) => followLink(event, item.href)}>{item.label}</a>
+        {@const href = item.href ?? ''}
+        {#if item.children?.length}
+          <div class="nav-group" class:open={openGroup === item.id}>
+            <button
+              type="button"
+              class="nav-toggle"
+              class:active={groupActive(item)}
+              aria-haspopup="menu"
+              aria-expanded={openGroup === item.id}
+              onclick={() => toggleGroup(item.id)}
+            >
+              {item.label}
+              <span class="chevron" aria-hidden="true">⌄</span>
+            </button>
+            {#if openGroup === item.id}
+              <div class="nav-menu" role="menu" aria-label={item.label}>
+                {#each item.children as child (child.id)}
+                  {@const childHref = child.href ?? ''}
+                  <a
+                    role="menuitem"
+                    href={childHref || '#'}
+                    class:active={active(childHref)}
+                    onclick={(event) => followLink(event, childHref)}
+                  >{child.label}</a>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else if href}
+          <a href={href} class:active={active(href)} onclick={(event) => followLink(event, href)}>{item.label}</a>
+        {/if}
       {/each}
     </nav>
     <div class="top-actions">

@@ -24,6 +24,11 @@ mod routes;
 
 pub struct PosPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(PosPlugin)
+}
+
 impl Plugin for PosPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("pos", "Point of Sale", "0.1.0");
@@ -54,6 +59,7 @@ impl Plugin for PosPlugin {
             href: "/billing".into(),
             permission: Some("pos.bills.post".into()),
             order: 10,
+            children: Vec::new(),
         }];
         manifest.slots_provided = vec![
             "pos.line-source".into(),

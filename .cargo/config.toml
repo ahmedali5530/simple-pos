@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
 [env]
 # Bundled with the Windows till. Keep this equal to POSTGRES_VERSION in
 # crates/shop-api/src/embedded.rs. PostgreSQL 18 initdb crashes on that PC.

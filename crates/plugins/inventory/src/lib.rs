@@ -22,6 +22,11 @@ pub mod sale;
 
 pub struct InventoryPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(InventoryPlugin)
+}
+
 impl Plugin for InventoryPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("inventory", "Inventory", "0.1.0");
@@ -69,6 +74,7 @@ impl Plugin for InventoryPlugin {
             href: "/stock".into(),
             permission: Some("inventory.write".into()),
             order: 20,
+            children: Vec::new(),
         }];
         manifest
     }

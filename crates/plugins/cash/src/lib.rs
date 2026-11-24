@@ -12,6 +12,11 @@ mod routes;
 
 pub struct CashPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(CashPlugin)
+}
+
 impl Plugin for CashPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("cash", "Cash", "0.1.0");
@@ -39,6 +44,7 @@ impl Plugin for CashPlugin {
             href: "/cash".into(),
             permission: Some("cash.read".into()),
             order: 40,
+            children: Vec::new(),
         }];
         manifest
     }

@@ -21,6 +21,11 @@ pub mod sheets;
 
 pub struct CatalogPlugin;
 
+/// Composition handle consumed by the generated `shop-api` plugin list.
+pub fn plugin() -> std::sync::Arc<dyn Plugin> {
+    std::sync::Arc::new(CatalogPlugin)
+}
+
 impl Plugin for CatalogPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("catalog", "Catalog", "0.1.0");
@@ -71,6 +76,7 @@ impl Plugin for CatalogPlugin {
             href: "/settings/items".into(),
             permission: Some("catalog.write".into()),
             order: 50,
+            children: Vec::new(),
         }];
         manifest.settings_pages = vec![
             SettingsPage {

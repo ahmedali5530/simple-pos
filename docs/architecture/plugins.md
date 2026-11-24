@@ -2,7 +2,51 @@
 
 The engine knows tenants, identity, plugins, events, capabilities, settings, files, and the screen shell. It does not know what a shop sells. A plugin owns one business area: its tables, rules, HTTP routes, and screens.
 
-Plugins are compiled into the binary. Adding one changes the composition root (`shop-api` and `src/plugins/registry.ts`), not the kernel.
+Plugins are compiled into the binary. Adding one is a directory plus one command: the composition root and the UI registry discover it, so no core file needs hand-editing.
+
+## Installing a plugin
+
+```sh
+cargo xtask plugins install ../my-plugin
+npm run app
+```
+
+A package is a crate plus, optionally, a `ui/` directory:
+
+```
+my-plugin/
+  Cargo.toml          # package name: plugin-<id>
+  src/lib.rs          # must expose `pub fn plugin() -> Arc<dyn Plugin>`
+  migrations/         # plugin-owned SQL
+  uninstall.sql       # optional, used by `plugins remove --purge`
+  ui/                 # optional Svelte descriptor + screens, copied to src/plugins/<id>
+```
+
+`install` copies the crate to `crates/plugins/<id>`, adds it to `crates/shop-api/Cargo.toml`, regenerates
+`crates/shop-api/src/compose.rs`, and runs `cargo check -p shop-api`. When the package has a `ui/`
+directory it is copied to `src/plugins/<id>/` and the frontend is rebuilt.
+
+- `crates/plugins/*` and `crates/contracts/*` are workspace glob members, so the crate joins the build
+  automatically.
+- `src/plugins/*/index.ts` is discovered with `import.meta.glob` and must export exactly one UI plugin.
+  Pages and slot components stay lazy, so code splitting is unchanged.
+- `cargo xtask plugins check` fails when `compose.rs` is stale; CI runs it. `cargo xtask plugins list`
+  prints the compiled plugins in dependency order.
+- `cargo xtask plugins new <id> [--ui]` scaffolds a crate that compiles immediately.
+
+A plugin added to a shop that already has plugin rows starts **disabled**; a brand-new till enables
+everything. Turn it on in Settings → Plugins. Migrations still run on boot while a plugin is disabled,
+which is what makes enabling instant.
+
+**Upgrading** — append a migration, bump `PluginManifest::version`, reinstall. Never edit a migration
+that has already run: the runner freezes them and refuses to boot ("Frozen migrations must not change").
+On boot the stored version is adopted forward to the compiled version; a stored version newer than the
+binary is a downgrade and is skipped, so the plugin stays off rather than reading data it may not know.
+
+**Removing** — `cargo xtask plugins remove <id>` stops composing the plugin and moves the crate to
+`crates/plugins-disabled/`. Its tables, `plugin_settings` row and `tenant_plugins` row stay. `--purge`
+runs the plugin's optional `uninstall.sql` and deletes its bookkeeping rows; add `--embedded` when the
+purge should use the desktop till's bundled database.
 
 ## Backend
 

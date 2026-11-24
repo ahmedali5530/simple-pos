@@ -6,18 +6,26 @@ export const mobilePlugin = defineUiPlugin({
   permissions: ['mobile.read', 'mobile.write'],
   nav: [
     {
-      id: 'mobile_devices',
-      label: 'Devices',
-      href: '/mobile/devices',
+      id: 'mobile',
+      label: 'Mobile',
       permission: 'mobile.read',
       order: 48,
-    },
-    {
-      id: 'mobile_warranty',
-      label: 'Warranty',
-      href: '/mobile/warranty',
-      permission: 'mobile.read',
-      order: 49,
+      children: [
+        {
+          id: 'mobile_devices',
+          label: 'Devices',
+          href: '/mobile/devices',
+          permission: 'mobile.read',
+          order: 10,
+        },
+        {
+          id: 'mobile_warranty',
+          label: 'Warranty',
+          href: '/mobile/warranty',
+          permission: 'mobile.read',
+          order: 20,
+        },
+      ],
     },
   ],
   settingsPages: [],

@@ -6,8 +6,17 @@ const OWNER_ROLE: &str = "platform_owner";
 const WORKER_ROLE: &str = "platform_worker";
 
 /// Provision roles from an admin/superuser connection.
+///
+/// Boots against one database can run in parallel (tests, several till processes), and
+/// `ALTER ROLE` / `GRANT` update the same catalog rows. The advisory lock keeps those writes
+/// from colliding with `tuple concurrently updated`.
 pub async fn provision(admin: &PgPool, app_password: &str) -> Result<(), AppError> {
     let password = app_password.replace('\'', "''");
+    let mut tx = admin.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(crate::plugins::BOOT_STATE_LOCK)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(&format!(
         r#"
         DO $$
@@ -26,47 +35,54 @@ pub async fn provision(admin: &PgPool, app_password: &str) -> Result<(), AppErro
         END $$;
         "#
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(&format!(
         "GRANT USAGE ON SCHEMA public TO {APP_ROLE}, {WORKER_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
 
     // One statement per query — sqlx does not run multi-statement strings reliably.
     sqlx::query(&format!(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(&format!(
         "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(&format!(
         "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {APP_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(())
 }
 
 /// Grant the app role access to tables created after the first provision.
 pub async fn grant_existing(admin: &PgPool) -> Result<(), AppError> {
+    let mut tx = admin.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(crate::plugins::BOOT_STATE_LOCK)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(&format!(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(&format!(
         "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}"
     ))
-    .execute(admin)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
