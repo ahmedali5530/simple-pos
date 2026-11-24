@@ -7,5 +7,6 @@ target
 .env
 *.log
 .DS_Store
+review/
 src-tauri/target
 src-tauri/pgwrap.exe
