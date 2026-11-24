@@ -8,5 +8,14 @@ target
 *.log
 .DS_Store
 review/
+# Local AI/agent tooling state
+.commandcode/
+.claude/
+.codex/
+.cursor/
+.aider/
+.continue/
+.gemini/
+.windsurf/
 src-tauri/target
 src-tauri/pgwrap.exe
