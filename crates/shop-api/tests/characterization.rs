@@ -7,27 +7,11 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use shop_api::build_router;
-use plugin_pos::models::ShopConfig;
-use shop_api::connect;
 use tower::ServiceExt;
-
-fn shop() -> ShopConfig {
-    ShopConfig {
-        name: "Test Shop".into(),
-        currency: "PKR".into(),
-        locale: "en-PK".into(),
-        bill_prefix: "BILL".into(),
-        barcode_rules: plugin_pos::models::BarcodeRule::defaults(),
-    }
-    .checked()
-    .expect("shop config")
-}
 
 async fn app() -> axum::Router {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL is required for tests");
-    let pool = connect(&url).await.expect("connect");
-    build_router(pool, shop())
+    shop_api::build_app(&url).await.expect("build app")
 }
 
 async fn json_body(response: axum::response::Response) -> Value {
@@ -90,7 +74,10 @@ async fn ensure_manager(app: &axum::Router) -> String {
             None,
         )
         .await;
-        assert!(status.is_success(), "create first user failed: {status} {body}");
+        assert!(
+            status.is_success(),
+            "create first user failed: {status} {body}"
+        );
     } else {
         // Seed a known manager through SQL when the open bootstrap path is closed.
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
@@ -171,16 +158,13 @@ async fn pos_snapshot_shape() {
         "currency",
         "locale",
         "barcode_rules",
-        "printer",
         "sections",
         "all_sections",
         "categories",
-        "users",
         "last_section_id",
     ] {
         assert!(body.get(key).is_some(), "missing {key}");
     }
-    assert!(body["printer"].get("enabled").is_some());
     assert!(body["sections"].is_array());
     assert!(body["categories"].is_array());
 }
@@ -329,13 +313,13 @@ async fn till_scan_settle_stock_cash_and_reports() {
 #[tokio::test]
 async fn upgrade_from_legacy_migrations() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let pool = connect(&url).await.expect("connect runs frozen migrations 001-016");
-    let version: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read migration version");
+    let pool = shop_api::connect(&url)
+        .await
+        .expect("connect runs frozen migrations 001-016");
+    let version: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("read migration version");
     assert!(
         version >= 16,
         "expected migrations through 016, got {version}"

@@ -9,11 +9,6 @@ use axum::{
     Json, Router,
 };
 use platform_kernel::error::{AppError, ErrorBody};
-use plugin_pos::admin::{login, logout, needs_first_user, open_session, remove_user, save_user};
-use plugin_pos::billing::current_shop;
-use plugin_pos::models::{
-    BarcodeRule, LoginForm, LoginSession, PosSnapshot, PosUser, SavedRecord, ShopConfig, UserForm,
-};
 use sqlx::PgPool;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -30,7 +25,6 @@ struct TillAssets;
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
-    shop: ShopConfig,
     /// Platform gateway and manifests (optional until boot completes).
     platform: Option<std::sync::Arc<PlatformState>>,
 }
@@ -43,40 +37,6 @@ struct PlatformState {
     enabled: std::sync::Arc<platform_runtime::EnabledPlugins>,
     plugin_router: axum::Router,
     _stop: Option<tokio::sync::watch::Sender<bool>>,
-}
-
-#[derive(serde::Deserialize)]
-struct FileConfig {
-    shop: ShopConfig,
-    #[serde(default)]
-    barcode: BarcodeFile,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct BarcodeFile {
-    #[serde(default)]
-    rules: Vec<BarcodeRule>,
-}
-
-fn load_shop_config() -> ShopConfig {
-    let text = ["config.toml", "../../config.toml"]
-        .into_iter()
-        .find(|candidate| std::path::Path::new(candidate).is_file())
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_else(|| include_str!("../../../config.toml").to_string());
-    let file: FileConfig =
-        toml::from_str(&text).unwrap_or_else(|err| panic!("could not parse config.toml: {err}"));
-    let mut shop = file.shop.checked().unwrap_or_else(|err| panic!("{err}"));
-    shop.barcode_rules = if file.barcode.rules.is_empty() {
-        BarcodeRule::defaults()
-    } else {
-        file.barcode
-            .rules
-            .into_iter()
-            .map(|rule| rule.checked().unwrap_or_else(|err| panic!("{err}")))
-            .collect()
-    };
-    shop
 }
 
 pub struct Till {
@@ -108,6 +68,10 @@ pub async fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--list-plugins") {
         print_plugins();
+        return;
+    }
+    if args.iter().any(|arg| arg == "--list-plugins-json") {
+        print_plugins_json();
         return;
     }
     if let Some(mode) = maintenance_mode(&args) {
@@ -156,6 +120,19 @@ pub fn print_plugins() {
     }
 }
 
+fn print_plugins_json() {
+    match platform_kernel::registry::PluginCatalog::build(compose::plugins()) {
+        Ok(catalog) => println!(
+            "{}",
+            serde_json::to_string(&catalog.manifests()).expect("manifest serialization")
+        ),
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 enum Maintenance {
     MigrateOnly,
     PurgePlugin {
@@ -184,7 +161,9 @@ struct MaintenanceDatabase {
     _db: Option<embedded::EmbeddedDb>,
 }
 
-async fn open_maintenance_database(embedded: bool) -> Result<(String, MaintenanceDatabase), String> {
+async fn open_maintenance_database(
+    embedded: bool,
+) -> Result<(String, MaintenanceDatabase), String> {
     #[cfg(feature = "bundle")]
     let db = if embedded {
         Some(embedded::EmbeddedDb::start().await?)
@@ -194,7 +173,9 @@ async fn open_maintenance_database(embedded: bool) -> Result<(String, Maintenanc
     #[cfg(feature = "bundle")]
     let database_url = match &db {
         Some(db) => db.url.clone(),
-        None => std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?,
+        None => {
+            std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_string())?
+        }
     };
     #[cfg(not(feature = "bundle"))]
     let database_url = {
@@ -221,8 +202,8 @@ async fn open_maintenance_database(embedded: bool) -> Result<(String, Maintenanc
     ))
 }
 
-/// Apply migrations or drop one plugin's data, then exit. Runs the real platform boot so
-/// migrations, RLS validation and permission sync behave exactly as they do at startup.
+/// Apply migrations or drop one plugin's data, then exit. Purge intentionally applies only the
+/// core schema and executes cleanup in one transaction; it does not boot business plugins.
 async fn maintenance(mode: Maintenance, embedded: bool) -> Result<(), String> {
     let _ = dotenvy::from_filename(".env");
     let _ = dotenvy::from_filename("../../.env");
@@ -233,28 +214,39 @@ async fn maintenance(mode: Maintenance, embedded: bool) -> Result<(), String> {
         .try_init();
 
     let (database_url, database) = open_maintenance_database(embedded).await?;
-    let platform = platform_runtime::Platform::boot(
-        platform_runtime::BootConfig {
-            database_url,
-            database_admin_url: std::env::var("DATABASE_ADMIN_URL").ok(),
-            app_password: std::env::var("PLATFORM_APP_PASSWORD").ok(),
-        },
-        compose::plugins(),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-
     match mode {
         Maintenance::MigrateOnly => {
+            let platform = platform_runtime::Platform::boot(
+                platform_runtime::BootConfig {
+                    database_url,
+                    database_admin_url: std::env::var("DATABASE_ADMIN_URL").ok(),
+                    app_password: std::env::var("PLATFORM_APP_PASSWORD").ok(),
+                },
+                compose::plugins(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            platform.stop();
             tracing::info!("migrations applied");
         }
         Maintenance::PurgePlugin { id, sql } => {
-            let owner = platform.migration_pool();
+            platform_runtime::migrations::run_owner(
+                &database.pool,
+                "core",
+                platform_runtime::migrations::core::migrations(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let mut tx = database
+                .pool
+                .begin()
+                .await
+                .map_err(|error| error.to_string())?;
             if let Some(path) = sql {
                 let text = std::fs::read_to_string(&path)
                     .map_err(|error| format!("{}: {error}", path.display()))?;
                 sqlx::raw_sql(&text)
-                    .execute(owner)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|error| format!("uninstall.sql failed: {error}"))?;
             }
@@ -266,21 +258,30 @@ async fn maintenance(mode: Maintenance, embedded: bool) -> Result<(), String> {
             ] {
                 sqlx::query(statement)
                     .bind(&id)
-                    .execute(owner)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|error| error.to_string())?;
             }
+            tx.commit().await.map_err(|error| error.to_string())?;
             tracing::info!(plugin = %id, "plugin purged");
         }
     }
-
-    platform.stop();
     database.pool.close().await;
     Ok(())
 }
 
 pub async fn open() -> Result<Till, String> {
     open_with(true).await
+}
+
+/// Build the full application router, including plugin routes, without binding a socket.
+/// Intended for integration tests that exercise the platform-backed HTTP surface.
+pub async fn build_app(database_url: &str) -> Result<Router, String> {
+    let pool = connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+    let platform = boot_platform(database_url).await;
+    Ok(build_router_with_platform(pool, platform))
 }
 
 /// Open the shop database and apply the legacy schema migrations.
@@ -345,9 +346,14 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
             database_target(&database_url)
         )
     })?;
-    let shop = load_shop_config();
     let platform = boot_platform(&database_url).await;
-    let app = serve_till(build_router_with_platform(pool.clone(), shop, platform));
+    #[cfg(feature = "web")]
+    let has_platform = platform.is_some();
+    let app = build_router_with_platform(pool.clone(), platform);
+    #[cfg(feature = "web")]
+    let app = if has_platform { app } else { serve_till(app) };
+    #[cfg(not(feature = "web"))]
+    let app = app;
 
     let addr: SocketAddr = std::env::var("API_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".into())
@@ -422,10 +428,24 @@ async fn boot_platform(database_url: &str) -> Option<std::sync::Arc<PlatformStat
                 catalog,
                 lifecycle,
                 enabled,
+                #[cfg(feature = "web")]
+                    plugin_router: _,
+                #[cfg(not(feature = "web"))]
                 plugin_router,
+                #[cfg(feature = "web")]
+                plugin_routes,
+                #[cfg(not(feature = "web"))]
+                    plugin_routes: _,
                 stop_dispatcher,
                 ..
             } = platform;
+            #[cfg(feature = "web")]
+            let plugin_router = {
+                use axum_frontend::{embed_router_with, SpaOptions};
+                plugin_routes.router_with_fallback(embed_router_with::<TillAssets>(
+                    SpaOptions::new().exclude(["/api"]).immutable(["/assets/"]),
+                ))
+            };
             Some(Arc::new(PlatformState {
                 gateway: Arc::new(tokio::sync::Mutex::new(gateway)),
                 catalog,
@@ -443,30 +463,24 @@ async fn boot_platform(database_url: &str) -> Option<std::sync::Arc<PlatformStat
 }
 
 /// Build the HTTP router for the till API. Used by the server and by characterization tests.
-pub fn build_router(pool: PgPool, shop: ShopConfig) -> Router {
-    build_router_inner(pool, shop, None)
+pub fn build_router(pool: PgPool) -> Router {
+    build_router_inner(pool, None)
 }
 
 fn build_router_with_platform(
     pool: PgPool,
-    shop: ShopConfig,
     platform: Option<std::sync::Arc<PlatformState>>,
 ) -> Router {
-    build_router_inner(pool, shop, platform)
+    build_router_inner(pool, platform)
 }
 
-fn build_router_inner(
-    pool: PgPool,
-    shop: ShopConfig,
-    platform: Option<std::sync::Arc<PlatformState>>,
-) -> Router {
+fn build_router_inner(pool: PgPool, platform: Option<std::sync::Arc<PlatformState>>) -> Router {
     let plugin_router = platform
         .as_ref()
         .map(|platform| platform.plugin_router.clone())
         .unwrap_or_default();
     let state = AppState {
         pool: pool.clone(),
-        shop: shop.clone(),
         platform,
     };
     Router::new()
@@ -475,16 +489,22 @@ fn build_router_inner(
         .route("/api/session", get(get_session))
         .route("/api/v1/identity/login", post(post_identity_login))
         .route("/api/v1/identity/logout", post(post_identity_logout))
-        .route("/api/v1/platform/settings/{plugin_id}", get(get_plugin_settings).put(put_plugin_settings))
+        .route(
+            "/api/v1/platform/settings/{plugin_id}",
+            get(get_plugin_settings).put(put_plugin_settings),
+        )
         .route("/api/v1/platform/shop", put(put_shop_profile))
         .route("/api/bootstrap", get(get_bootstrap))
-        .route("/api/users", post(post_user))
+        .route("/api/users", get(get_users).post(post_user))
         .route("/api/users/{id}", put(put_user).delete(delete_user))
         .route("/api/v1/platform/manifest", get(get_platform_manifest))
         .route("/api/v1/platform/tokens", post(post_platform_token))
         .route("/api/v1/platform/plugins/{id}", put(put_platform_plugin))
         .route("/api/v1/capabilities", get(get_capabilities))
-        .route("/api/v1/capabilities/{id}/invoke", post(post_capability_invoke))
+        .route(
+            "/api/v1/capabilities/{id}/invoke",
+            post(post_capability_invoke),
+        )
         .route("/api/v1/mcp", get(get_mcp_descriptor))
         .merge(plugin_router.with_state(()))
         .layer(from_fn_with_state(state.clone(), require_user))
@@ -505,11 +525,6 @@ fn serve_till(api: Router) -> Router {
     ))
 }
 
-#[cfg(not(feature = "web"))]
-fn serve_till(api: Router) -> Router {
-    api
-}
-
 #[derive(serde::Serialize)]
 struct BootstrapStatus {
     needs_user: bool,
@@ -517,10 +532,20 @@ struct BootstrapStatus {
 }
 
 async fn get_bootstrap(State(state): State<AppState>) -> Result<Json<BootstrapStatus>, ApiError> {
-    let shop = current_shop(&state.pool, &state.shop).await?;
+    let profile = platform_runtime::shop_profile::load(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+    )
+    .await
+    .map_err(lift_platform)?;
     Ok(Json(BootstrapStatus {
-        needs_user: needs_first_user(&state.pool).await?,
-        shop_name: shop.name,
+        needs_user: platform_identity::needs_first_user(
+            &state.pool,
+            platform_kernel::context::TenantId::DEFAULT,
+        )
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?,
+        shop_name: profile.name,
     }))
 }
 
@@ -529,8 +554,8 @@ fn lift_platform(err: platform_kernel::error::AppError) -> AppError {
         platform_kernel::error::AppError::BadRequest(message) => AppError::BadRequest(message),
         platform_kernel::error::AppError::NotFound(message) => AppError::NotFound(message),
         platform_kernel::error::AppError::Unauthorized(message) => AppError::Unauthorized(message),
-        platform_kernel::error::AppError::Forbidden(message) => AppError::Unauthorized(message),
-        platform_kernel::error::AppError::Conflict(message) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::Forbidden(message) => AppError::Forbidden(message),
+        platform_kernel::error::AppError::Conflict(message) => AppError::Conflict(message),
         platform_kernel::error::AppError::Db(error) => AppError::Db(error),
     }
 }
@@ -583,27 +608,24 @@ async fn get_plugin_settings(
     let value = platform_runtime::settings::load(&mut tx, &plugin_id)
         .await
         .map_err(|err| ApiError(lift_platform(err)))?;
-    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
+    tx.commit()
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?;
     Ok(Json(value))
 }
 
 async fn put_shop_profile(
     State(state): State<AppState>,
-    Json(body): Json<plugin_pos::models::ShopProfileForm>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    let mut tx = platform_kernel::context::TenantTx::begin_with(
+    Json(body): Json<platform_runtime::shop_profile::ShopProfileForm>,
+) -> Result<Json<platform_runtime::shop_profile::ShopProfile>, ApiError> {
+    platform_runtime::shop_profile::save(
         &state.pool,
         platform_kernel::context::TenantId::DEFAULT,
-        platform_kernel::context::Actor::system(),
-        false,
+        &body,
     )
     .await
-    .map_err(|err| ApiError(lift_platform(err)))?;
-    let pos = plugin_pos::admin::save_shop_profile(tx.transaction(), &state.shop, &body)
-        .await
-        .map_err(ApiError::from)?;
-    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
-    Ok(Json(pos))
+    .map(Json)
+    .map_err(|err| ApiError(lift_platform(err)))
 }
 
 async fn put_plugin_settings(
@@ -622,21 +644,29 @@ async fn put_plugin_settings(
     platform_runtime::settings::save(&mut tx, &plugin_id, &body)
         .await
         .map_err(|err| ApiError(lift_platform(err)))?;
-    tx.commit().await.map_err(|err| ApiError(lift_platform(err)))?;
+    tx.commit()
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?;
     Ok(Json(body))
 }
 
 async fn post_login(
     State(state): State<AppState>,
-    Json(body): Json<LoginForm>,
+    Json(body): Json<platform_identity::LoginForm>,
 ) -> Result<
     (
         AppendHeaders<[(header::HeaderName, HeaderValue); 1]>,
-        Json<LoginSession>,
+        Json<platform_identity::LoginSession>,
     ),
     ApiError,
 > {
-    let session = login(&state.pool, &body).await?;
+    let session = platform_identity::login(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        &body,
+    )
+    .await
+    .map_err(|err| ApiError(lift_platform(err)))?;
     Ok((
         AppendHeaders([(header::SET_COOKIE, session_cookie(&session.token, false))]),
         Json(session),
@@ -655,7 +685,13 @@ async fn post_logout(
 > {
     let token = session_token(&headers);
     if !token.is_empty() {
-        logout(&state.pool, &token).await?;
+        platform_identity::logout(
+            &state.pool,
+            platform_kernel::context::TenantId::DEFAULT,
+            &token,
+        )
+        .await
+        .map_err(|err| ApiError(lift_platform(err)))?;
     }
     Ok((
         AppendHeaders([(header::SET_COOKIE, session_cookie("", true))]),
@@ -666,12 +702,14 @@ async fn post_logout(
 async fn get_session(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<PosUser>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    Ok(Json(PosUser {
-        id: cashier.id,
-        name: cashier.name,
-        role: cashier.role,
+) -> Result<Json<platform_identity::UserView>, ApiError> {
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await
+        .map_err(lift_platform)?;
+    Ok(Json(platform_identity::UserView {
+        id: user.user_id,
+        name: user.name,
+        role: user.role,
         active: true,
     }))
 }
@@ -713,57 +751,119 @@ fn session_cookie(token: &str, clear: bool) -> HeaderValue {
 async fn require_user(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let method = request.method().clone();
-    let open = (method == Method::POST && (path == "/api/login" || path == "/api/logout"))
+    let open = !path.starts_with("/api")
+        || (method == Method::POST
+            && matches!(
+                path.as_str(),
+                "/api/login" | "/api/logout" | "/api/v1/identity/login" | "/api/v1/identity/logout"
+            ))
         || (method == Method::GET && path == "/api/bootstrap");
     if open {
         return next.run(request).await;
     }
     if method == Method::POST && path == "/api/users" {
-        match needs_first_user(&state.pool).await {
+        match platform_identity::needs_first_user(
+            &state.pool,
+            platform_kernel::context::TenantId::DEFAULT,
+        )
+        .await
+        .map_err(lift_platform)
+        {
             Ok(true) => return next.run(request).await,
             Ok(false) => {}
             Err(error) => return ApiError(error).into_response(),
         }
     }
-    match open_session(&state.pool, &session_token(request.headers())).await {
-        Ok(cashier) => {
-            request.extensions_mut().insert(platform_runtime::http::AuthUser {
-                tenant_id: platform_kernel::context::TenantId::DEFAULT,
-                user_id: cashier.id,
-                name: cashier.name,
-                role: cashier.role,
-                permissions: vec!["*".into()],
-            });
+    match platform_runtime::http::auth::resolve_session(
+        &state.pool,
+        &session_token(request.headers()),
+    )
+    .await
+    {
+        Ok(user) => {
+            if let Some(permission) = required_core_permission(&method, &path) {
+                if !user.actor().has_permission(permission) {
+                    return ApiError(platform_kernel::error::AppError::Forbidden(
+                        "You do not have permission for this action.".into(),
+                    ))
+                    .into_response();
+                }
+            }
+            request.extensions_mut().insert(user);
             next.run(request).await
         }
         Err(error) => ApiError(error).into_response(),
     }
 }
 
+fn required_core_permission(method: &Method, path: &str) -> Option<&'static str> {
+    if path == "/api/users" && *method == Method::POST
+        || path.starts_with("/api/users/") && matches!(*method, Method::PUT | Method::DELETE)
+    {
+        Some("users.write")
+    } else if path == "/api/v1/platform/tokens" && *method == Method::POST {
+        Some("platform.tokens.manage")
+    } else if path.starts_with("/api/v1/platform/plugins/") && *method == Method::PUT {
+        Some("platform.plugins.manage")
+    } else if path == "/api/users" && *method == Method::GET {
+        Some("users.write")
+    } else if (path == "/api/v1/platform/shop" || path.starts_with("/api/v1/platform/settings/"))
+        && matches!(*method, Method::GET | Method::PUT)
+    {
+        Some("settings.write")
+    } else {
+        None
+    }
+}
+
+async fn get_users(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<platform_identity::UserView>>, ApiError> {
+    platform_identity::list_users(&state.pool, platform_kernel::context::TenantId::DEFAULT)
+        .await
+        .map(Json)
+        .map_err(|err| ApiError(lift_platform(err)))
+}
+
 async fn post_user(
     State(state): State<AppState>,
-    Json(body): Json<UserForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        save_user(&state.pool, &state.shop, None, &body).await?,
-    ))
+    Json(body): Json<platform_identity::UserForm>,
+) -> Result<Json<Vec<platform_identity::UserView>>, ApiError> {
+    platform_identity::save_user(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        None,
+        &body,
+    )
+    .await
+    .map_err(lift_platform)?;
+    get_users(State(state)).await
 }
 
 async fn put_user(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    Json(body): Json<UserForm>,
-) -> Result<Json<SavedRecord>, ApiError> {
-    Ok(Json(
-        save_user(&state.pool, &state.shop, Some(id), &body).await?,
-    ))
+    Json(body): Json<platform_identity::UserForm>,
+) -> Result<Json<Vec<platform_identity::UserView>>, ApiError> {
+    platform_identity::save_user(
+        &state.pool,
+        platform_kernel::context::TenantId::DEFAULT,
+        Some(id),
+        &body,
+    )
+    .await
+    .map_err(lift_platform)?;
+    get_users(State(state)).await
 }
 
 async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<Json<PosSnapshot>, ApiError> {
-    Ok(Json(remove_user(&state.pool, &state.shop, id).await?))
+) -> Result<Json<Vec<platform_identity::UserView>>, ApiError> {
+    platform_identity::disable_user(&state.pool, platform_kernel::context::TenantId::DEFAULT, id)
+        .await
+        .map_err(lift_platform)?;
+    get_users(State(state)).await
 }
 
 #[derive(serde::Deserialize)]
@@ -780,13 +880,9 @@ async fn post_platform_token(
     headers: HeaderMap,
     Json(body): Json<TokenForm>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
-    let actor = platform_kernel::context::Actor {
-        user_id: Some(cashier.id),
-        name: cashier.name,
-        role: cashier.role,
-        permissions: vec!["*".into()],
-    };
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await?;
+    let actor = user.actor();
     let (token, id) = platform_identity::create_api_token(
         &state.pool,
         platform_kernel::context::TenantId::DEFAULT,
@@ -801,8 +897,8 @@ async fn post_platform_token(
             platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
             platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
             platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
-            platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
-            platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
+            platform_kernel::error::AppError::Forbidden(m) => AppError::Forbidden(m),
+            platform_kernel::error::AppError::Conflict(m) => AppError::Conflict(m),
             platform_kernel::error::AppError::Db(err) => AppError::Db(err),
         })
     })?;
@@ -827,15 +923,10 @@ async fn put_platform_plugin(
         )
             .into_response());
     };
-    let cashier = open_session(&state.pool, &session_token(&headers))
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
         .await
         .map_err(|err| ApiError(err).into_response())?;
-    let actor = platform_kernel::context::Actor {
-        user_id: Some(cashier.id),
-        name: cashier.name,
-        role: cashier.role,
-        permissions: vec!["*".into()],
-    };
+    let actor = user.actor();
     platform_runtime::admin::set_plugin_enabled(
         &platform.lifecycle,
         platform_kernel::context::TenantId::DEFAULT,
@@ -845,7 +936,8 @@ async fn put_platform_plugin(
     )
     .await
     .map_err(|err| {
-        let status = StatusCode::from_u16(err.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(err.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (status, Json(serde_json::json!({"error": err.to_string()}))).into_response()
     })?;
     Ok(StatusCode::NO_CONTENT)
@@ -855,15 +947,18 @@ async fn get_mcp_descriptor(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await?;
     let Some(platform) = &state.platform else {
         return Ok(Json(serde_json::json!({ "tools": [] })));
     };
     let gateway = platform.gateway.lock().await;
-    let tools: Vec<_> = gateway
-        .registry
-        .list()
-        .into_iter()
+    let enabled = platform
+        .enabled
+        .ids(user.tenant_id)
+        .await
+        .map_err(platform_to_api)?;
+    let tools: Vec<_> = gateway.list_for_enabled(&user, true, &enabled).into_iter()
         .map(|cap| {
             serde_json::json!({
                 "name": cap.id,
@@ -874,8 +969,7 @@ async fn get_mcp_descriptor(
                     "destructiveHint": matches!(cap.effect, platform_kernel::capability::CapabilityEffect::Destructive),
                 }
             })
-        })
-        .collect();
+        }).collect();
     Ok(Json(serde_json::json!({
         "name": "chaska-platform",
         "version": "0.1.0",
@@ -891,19 +985,27 @@ async fn get_platform_manifest(
         return Ok(Json(serde_json::json!({
             "tenant_id": "00000000-0000-4000-8000-000000000001",
             "plugins": [],
-            "permissions": ["*"]
+            "permissions": []
         })));
     };
-    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await?;
     let tenant_id = platform_kernel::context::TenantId::DEFAULT;
-    let enabled = platform.enabled.ids(tenant_id).await.map_err(platform_to_api)?;
+    let enabled = platform
+        .enabled
+        .ids(tenant_id)
+        .await
+        .map_err(platform_to_api)?;
     let manifests = platform.catalog.manifests();
     let active: Vec<_> = manifests
         .iter()
         .filter(|manifest| enabled.contains(&manifest.id))
         .cloned()
         .collect::<Vec<_>>();
-    let nav: Vec<_> = active.iter().flat_map(|manifest| manifest.nav.clone()).collect();
+    let nav: Vec<_> = active
+        .iter()
+        .flat_map(|manifest| manifest.nav.clone())
+        .collect();
     let settings_pages: Vec<_> = active
         .iter()
         .flat_map(|manifest| manifest.settings_pages.clone())
@@ -929,7 +1031,7 @@ async fn get_platform_manifest(
         "tenant_id": tenant_id.to_string(),
         "plugins": active,
         "available": available,
-        "permissions": ["*"],
+        "permissions": user.permissions,
         "nav": nav,
         "settings_pages": settings_pages,
         "report_pages": report_pages,
@@ -942,27 +1044,58 @@ fn platform_to_api(err: platform_kernel::error::AppError) -> ApiError {
         platform_kernel::error::AppError::BadRequest(_) => AppError::BadRequest(message),
         platform_kernel::error::AppError::NotFound(_) => AppError::NotFound(message),
         platform_kernel::error::AppError::Unauthorized(_) => AppError::Unauthorized(message),
-        platform_kernel::error::AppError::Forbidden(_) => AppError::BadRequest(message),
-        platform_kernel::error::AppError::Conflict(_) => AppError::BadRequest(message),
+        platform_kernel::error::AppError::Forbidden(_) => AppError::Forbidden(message),
+        platform_kernel::error::AppError::Conflict(_) => AppError::Conflict(message),
         platform_kernel::error::AppError::Db(error) => AppError::Db(error),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_core_permission;
+    use axum::http::Method;
+
+    #[test]
+    fn core_admin_routes_require_declared_permissions() {
+        assert_eq!(
+            required_core_permission(&Method::GET, "/api/users"),
+            Some("users.write")
+        );
+        assert_eq!(
+            required_core_permission(&Method::POST, "/api/users"),
+            Some("users.write")
+        );
+        assert_eq!(
+            required_core_permission(&Method::DELETE, "/api/users/7"),
+            Some("users.write")
+        );
+        assert_eq!(
+            required_core_permission(&Method::GET, "/api/bootstrap"),
+            None
+        );
+        assert_eq!(
+            required_core_permission(&Method::POST, "/api/v1/platform/tokens"),
+            Some("platform.tokens.manage")
+        );
+    }
 }
 
 async fn get_capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = open_session(&state.pool, &session_token(&headers)).await?;
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await?;
     let Some(platform) = &state.platform else {
         return Ok(Json(serde_json::json!({ "capabilities": [] })));
     };
     let gateway = platform.gateway.lock().await;
-    let caps: Vec<_> = gateway
-        .registry
-        .list()
-        .into_iter()
-        .filter(|c| matches!(c.effect, platform_kernel::capability::CapabilityEffect::Read))
-        .collect();
+    let enabled = platform
+        .enabled
+        .ids(user.tenant_id)
+        .await
+        .map_err(platform_to_api)?;
+    let caps = gateway.list_for_enabled(&user, false, &enabled);
     Ok(Json(serde_json::json!({ "capabilities": caps })))
 }
 
@@ -982,31 +1115,38 @@ async fn post_capability_invoke(
     Path(id): Path<String>,
     Json(body): Json<InvokeBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+    let user = platform_runtime::http::auth::resolve_session(&state.pool, &session_token(&headers))
+        .await?;
     let Some(platform) = &state.platform else {
         return Err(AppError::NotFound("Platform is not available.".into()).into());
     };
-    let user = platform_runtime::http::auth::AuthUser {
-        tenant_id: platform_kernel::context::TenantId::DEFAULT,
-        user_id: cashier.id,
-        name: cashier.name,
-        role: cashier.role,
-        permissions: vec!["*".into()],
-    };
+    let allow_destructive = user.actor().has_permission("platform.admin");
+    let enabled = platform
+        .enabled
+        .ids(user.tenant_id)
+        .await
+        .map_err(platform_to_api)?;
+    let gateway = platform.gateway.lock().await;
+    if !gateway
+        .registry
+        .owner(&id)
+        .is_some_and(|owner| enabled.contains(owner))
+    {
+        return Err(AppError::NotFound("Unknown capability.".into()).into());
+    }
     let mut input = body.input;
     if let Some(confirm) = body.confirm {
         if let Some(obj) = input.as_object_mut() {
             obj.insert("confirm".into(), serde_json::json!(confirm));
         }
     }
-    let gateway = platform.gateway.lock().await;
     let output = gateway
         .invoke(
             &user,
             &id,
             input,
             body.idempotency_key.as_deref(),
-            true,
+            allow_destructive,
         )
         .await
         .map_err(|e| {
@@ -1014,8 +1154,8 @@ async fn post_capability_invoke(
                 platform_kernel::error::AppError::BadRequest(m) => AppError::BadRequest(m),
                 platform_kernel::error::AppError::NotFound(m) => AppError::NotFound(m),
                 platform_kernel::error::AppError::Unauthorized(m) => AppError::Unauthorized(m),
-                platform_kernel::error::AppError::Forbidden(m) => AppError::BadRequest(m),
-                platform_kernel::error::AppError::Conflict(m) => AppError::BadRequest(m),
+                platform_kernel::error::AppError::Forbidden(m) => AppError::Forbidden(m),
+                platform_kernel::error::AppError::Conflict(m) => AppError::Conflict(m),
                 platform_kernel::error::AppError::Db(err) => AppError::Db(err),
             })
         })?;
@@ -1035,7 +1175,8 @@ impl axum::response::IntoResponse for ApiError {
         let status = match &self.0 {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
-            AppError::Unauthorized(_) | AppError::Forbidden(_) => StatusCode::UNAUTHORIZED,
+            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };

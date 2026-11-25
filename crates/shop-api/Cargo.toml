@@ -10,16 +10,15 @@ axum-frontend = { version = "0.2", optional = true }
 platform-kernel = { path = "../platform-kernel" }
 platform-runtime = { path = "../platform-runtime" }
 platform-identity = { path = "../platform-identity" }
-plugin-catalog = { path = "../plugins/catalog" }
-plugin-inventory = { path = "../plugins/inventory" }
-plugin-pos = { path = "../plugins/pos" }
-plugin-cash = { path = "../plugins/cash" }
-plugin-printing = { path = "../plugins/printing" }
-plugin-reports = { path = "../plugins/reports" }
-plugin-customers = { path = "../plugins/customers" }
-plugin-tailor = { path = "../plugins/tailor" }
-plugin-installments = { path = "../plugins/installments" }
-plugin-mobile = { path = "../plugins/mobile" }
+plugin-core = { path = "../plugins/core", optional = true }
+plugin-catalog = { path = "../plugins/catalog", optional = true }
+plugin-inventory = { path = "../plugins/inventory", optional = true }
+plugin-pos = { path = "../plugins/pos", optional = true }
+plugin-cash = { path = "../plugins/cash", optional = true }
+plugin-printing = { path = "../plugins/printing", optional = true }
+plugin-reports = { path = "../plugins/reports", optional = true }
+plugin-tailor = { path = "../plugins/tailor", optional = true }
+plugin-mobile = { path = "../plugins/mobile", optional = true }
 dotenvy = "0.15"
 getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
@@ -27,7 +26,6 @@ rust-embed = { version = "8", optional = true }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
@@ -35,6 +33,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde"] }
 
 [features]
+# Compile-time plugin selection. The default deployment includes the current whole plugin set.
+default = ["plugins-all"]
+plugins-all = ["plugin-core", "plugin-catalog", "plugin-inventory", "plugin-pos", "plugin-cash", "plugin-printing", "plugin-reports", "plugin-tailor", "plugin-mobile"]
+plugin-core = ["dep:plugin-core"]
+plugin-catalog = ["dep:plugin-catalog"]
+# Inventory/POS/cash/reports/mobile stay compile-standalone; pair providers at deploy time.
+plugin-inventory = ["dep:plugin-inventory"]
+plugin-pos = ["dep:plugin-pos"]
+plugin-cash = ["dep:plugin-cash"]
+plugin-printing = ["dep:plugin-printing"]
+plugin-reports = ["dep:plugin-reports"]
+plugin-tailor = ["dep:plugin-tailor"]
+plugin-mobile = ["dep:plugin-mobile"]
 # Pages and API in one process, using DATABASE_URL. The web image uses this.
 web = ["dep:axum-frontend", "dep:rust-embed"]
 # Desktop till: the web files plus a private Postgres. Do not use this on a VPS.

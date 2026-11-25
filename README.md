@@ -36,8 +36,10 @@ An item belongs to one section and one category. Stock value and profit use the 
 ## Platform plugins
 
 The till is evolving into a business-neutral core with statically linked Rust plugins
-(`catalog`, `inventory`, `pos`, `cash`, `printing`, `reports`). Core enforces tenancy
-with Postgres row-level security, permissions, and plugin lifecycle.
+(`catalog`, `inventory`, `pos`, `cash`, `printing`, `reports`, `tailor`, `mobile`). Core enforces
+tenancy with Postgres row-level security, permissions, and
+plugin lifecycle. A new tenant enables only plugins whose manifest sets `default_enabled`; the rest
+are opt-in from Settings → Plugins.
 
 Useful endpoints:
 
@@ -51,6 +53,13 @@ Legacy `/api/*` routes remain for the existing Svelte UI.
 
 Set `DATABASE_ADMIN_URL` for migrations when the runtime connects as `platform_app`.
 See `.env.example`.
+
+The default `shop-api` build composes all currently included plugins. To build the platform shell
+without business plugins, run `cargo run -p shop-api --no-default-features --features web`.
+Select a feature such as `plugin-catalog` or `plugin-pos` to compile a smaller deployment. POS is
+standalone; enable `plugin-catalog` and `plugin-inventory` (or another provider of those contracts)
+alongside it when the till needs items and stock. Plugin features are listed in
+`crates/shop-api/Cargo.toml`.
 
 ## License
 

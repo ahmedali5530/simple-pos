@@ -56,6 +56,9 @@ jobs:
       - name: Composition is generated
         run: cargo xtask plugins check
 
+      - name: Prepare test database
+        run: cargo run -q -p shop-api -- --migrate-only
+
       - name: Cargo test
         run: cargo test --workspace --all-features
 

@@ -6,18 +6,27 @@ use std::sync::Arc;
 use platform_kernel::plugin::Plugin;
 
 pub fn plugins() -> Vec<Arc<dyn Plugin>> {
-    vec![
-        plugin_cash::plugin(),
-        plugin_catalog::plugin(),
-        plugin_customers::plugin(),
-        plugin_installments::plugin(),
-        plugin_inventory::plugin(),
-        plugin_mobile::plugin(),
-        plugin_pos::plugin(),
-        plugin_printing::plugin(),
-        plugin_reports::plugin(),
-        plugin_tailor::plugin(),
-    ]
+    #[allow(unused_mut)]
+    let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
+    #[cfg(feature = "plugin-core")]
+    plugins.push(plugin_core::plugin());
+    #[cfg(feature = "plugin-cash")]
+    plugins.push(plugin_cash::plugin());
+    #[cfg(feature = "plugin-catalog")]
+    plugins.push(plugin_catalog::plugin());
+    #[cfg(feature = "plugin-inventory")]
+    plugins.push(plugin_inventory::plugin());
+    #[cfg(feature = "plugin-mobile")]
+    plugins.push(plugin_mobile::plugin());
+    #[cfg(feature = "plugin-pos")]
+    plugins.push(plugin_pos::plugin());
+    #[cfg(feature = "plugin-printing")]
+    plugins.push(plugin_printing::plugin());
+    #[cfg(feature = "plugin-reports")]
+    plugins.push(plugin_reports::plugin());
+    #[cfg(feature = "plugin-tailor")]
+    plugins.push(plugin_tailor::plugin());
+    plugins
 }
 
 #[cfg(test)]
@@ -28,7 +37,6 @@ mod tests {
     fn every_compiled_plugin_has_a_valid_manifest() {
         let catalog = platform_kernel::registry::PluginCatalog::build(plugins())
             .expect("compiled plugin set must form a valid catalog");
-        assert!(!catalog.topo_order().is_empty());
         for manifest in catalog.manifests() {
             manifest.validate().expect("manifest validates");
         }

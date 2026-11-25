@@ -94,6 +94,7 @@ fn compose_path() -> PathBuf {
 struct PluginCrate {
     id: String,
     ident: String,
+    feature: String,
 }
 
 fn plugin_crates() -> Result<Vec<PluginCrate>> {
@@ -106,6 +107,7 @@ fn plugin_crates() -> Result<Vec<PluginCrate>> {
                 plugins.push(PluginCrate {
                     id: id.to_string(),
                     ident: name.replace('-', "_"),
+                    feature: name.to_string(),
                 });
             }
         }
@@ -120,17 +122,19 @@ fn render(plugins: &[PluginCrate]) -> String {
     out.push_str("// Source of truth: the `plugin-*` entries in crates/shop-api/Cargo.toml.\n\n");
     out.push_str("use std::sync::Arc;\n\n");
     out.push_str("use platform_kernel::plugin::Plugin;\n\n");
-    out.push_str("pub fn plugins() -> Vec<Arc<dyn Plugin>> {\n    vec![\n");
+    out.push_str("pub fn plugins() -> Vec<Arc<dyn Plugin>> {\n    #[allow(unused_mut)]\n    let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();\n");
     for plugin in plugins {
-        out.push_str(&format!("        {}::plugin(),\n", plugin.ident));
+        out.push_str(&format!(
+            "    #[cfg(feature = \"{}\")]\n    plugins.push({}::plugin());\n",
+            plugin.feature, plugin.ident
+        ));
     }
-    out.push_str("    ]\n}\n\n");
+    out.push_str("    plugins\n}\n\n");
     out.push_str(
         "#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    \
          fn every_compiled_plugin_has_a_valid_manifest() {\n        \
          let catalog = platform_kernel::registry::PluginCatalog::build(plugins())\n            \
          .expect(\"compiled plugin set must form a valid catalog\");\n        \
-         assert!(!catalog.topo_order().is_empty());\n        \
          for manifest in catalog.manifests() {\n            \
          manifest.validate().expect(\"manifest validates\");\n        }\n    }\n}\n",
     );
@@ -139,9 +143,6 @@ fn render(plugins: &[PluginCrate]) -> String {
 
 fn sync() -> Result<()> {
     let plugins = plugin_crates()?;
-    if plugins.is_empty() {
-        bail!("shop-api has no `plugin-*` dependencies to compose");
-    }
     let rendered = render(&plugins);
     let path = compose_path();
     if fs::read_to_string(&path).ok().as_deref() == Some(rendered.as_str()) {
@@ -167,7 +168,95 @@ fn check() -> Result<()> {
             plugins.len()
         );
     }
-    println!("compose.rs is in sync ({} plugins)", plugins.len());
+    let manifests = compiled_manifests()?;
+    for plugin in &plugins {
+        let dir = root().join("crates/plugins").join(&plugin.id);
+        let text = fs::read_to_string(dir.join("src/lib.rs"))
+            .with_context(|| format!("wired plugin {} has no src/lib.rs", plugin.id))?;
+        if !text.contains(&format!("PluginManifest::v1(\"{}\"", plugin.id)) {
+            bail!(
+                "plugin-{} Rust manifest id does not match its crate name",
+                plugin.id
+            );
+        }
+        validate_manifest_dependencies(plugin, &manifests)?;
+    }
+    for entry in fs::read_dir(root().join("crates/plugins"))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !plugins.iter().any(|plugin| plugin.id == id) {
+            bail!("crates/plugins/{id} is neither wired nor explicitly disabled");
+        }
+    }
+    let manifest_path = root().join("target/plugin-manifests.json");
+    fs::create_dir_all(manifest_path.parent().expect("target directory"))?;
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifests)?)?;
+    run(
+        "node",
+        &[
+            "scripts/check-plugin-ui.mjs",
+            manifest_path.to_str().expect("target path is UTF-8"),
+        ],
+        &root(),
+    )?;
+    println!("Composition is valid ({} plugins)", plugins.len());
+    Ok(())
+}
+
+fn compiled_manifests() -> Result<Vec<serde_json::Value>> {
+    let output = Command::new("cargo")
+        .args(["run", "-q", "-p", "shop-api", "--", "--list-plugins-json"])
+        .current_dir(root())
+        .output()
+        .context("reading compiled plugin manifests")?;
+    if !output.status.success() {
+        bail!("could not build the plugin catalog to validate dependencies");
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn validate_manifest_dependencies(
+    plugin: &PluginCrate,
+    manifests: &[serde_json::Value],
+) -> Result<()> {
+    let manifest = manifests
+        .iter()
+        .find(|manifest| manifest["id"] == plugin.id)
+        .ok_or_else(|| {
+            anyhow!(
+                "plugin {} is missing from the compiled manifest catalog",
+                plugin.id
+            )
+        })?;
+    let mut declared = std::collections::BTreeSet::new();
+    for field in ["requires", "optional"] {
+        if let Some(dependencies) = manifest[field].as_array() {
+            for dependency in dependencies {
+                if let Some(id) = dependency["id"].as_str() {
+                    declared.insert(id.to_string());
+                }
+            }
+        }
+    }
+    let manifest_path = root()
+        .join("crates/plugins")
+        .join(&plugin.id)
+        .join("Cargo.toml");
+    let source: DocumentMut = fs::read_to_string(&manifest_path)?.parse()?;
+    let mut cargo = std::collections::BTreeSet::new();
+    if let Some(deps) = source.get("dependencies").and_then(Item::as_table_like) {
+        for (name, _) in deps.iter() {
+            if let Some(id) = name.strip_prefix("plugin-") {
+                cargo.insert(id.to_string());
+            }
+        }
+    }
+    if let Some(missing) = cargo.difference(&declared).next() {
+        bail!("plugin-{} directly depends on plugin-{missing} in Cargo.toml but does not declare it in requires or optional", plugin.id);
+    }
     Ok(())
 }
 
@@ -222,25 +311,41 @@ fn install(args: &[String]) -> Result<()> {
         if !force {
             bail!("crates/plugins/{id} already exists; pass --force to replace it");
         }
-        fs::remove_dir_all(&destination)?;
     }
-    copy_dir(&source, &destination)?;
-
     let ui_source = source.join("ui");
     let ui_destination = root().join("src/plugins").join(id);
-    if ui_source.is_dir() {
-        if ui_destination.exists() {
-            fs::remove_dir_all(&ui_destination)?;
-        }
-        copy_dir(&ui_source, &ui_destination)?;
+    if ui_source.is_dir() && ui_destination.exists() && !force {
+        bail!("src/plugins/{id} already exists; pass --force to replace it");
     }
-
-    add_dependency(id)?;
-    sync()?;
-    run("cargo", &["check", "-p", "shop-api"], &root())?;
-    if ui_destination.is_dir() {
-        run(npm(), &["run", "build"], &root())?;
-    }
+    with_workspace_transaction(
+        vec![
+            destination.clone(),
+            ui_destination.clone(),
+            shop_api_manifest(),
+            compose_path(),
+            root().join("Cargo.lock"),
+            root().join("dist"),
+        ],
+        || {
+            if destination.exists() {
+                fs::remove_dir_all(&destination)?;
+            }
+            copy_dir(&source, &destination)?;
+            if ui_source.is_dir() {
+                if ui_destination.exists() {
+                    fs::remove_dir_all(&ui_destination)?;
+                }
+                copy_dir(&ui_source, &ui_destination)?;
+            }
+            add_dependency(id)?;
+            sync()?;
+            if ui_destination.is_dir() {
+                run(npm(), &["run", "build"], &root())?;
+            }
+            check()?;
+            Ok(())
+        },
+    )?;
 
     println!();
     println!("Plugin `{id}` is wired into the till.");
@@ -273,59 +378,82 @@ fn remove(args: &[String]) -> Result<()> {
         bail!("plugin `{id}` is not in crates/plugins or crates/plugins-disabled");
     }
 
-    remove_dependency(&id)?;
-    sync()?;
-
-    if !keep_source {
-        fs::create_dir_all(root().join("crates/plugins-disabled"))?;
-        if crate_dir.is_dir() {
-            if disabled_dir.exists() {
-                fs::remove_dir_all(&disabled_dir)?;
+    let ui = root().join("src/plugins").join(&id);
+    let ui_existed = ui.exists();
+    with_workspace_transaction(
+        vec![
+            crate_dir.clone(),
+            disabled_dir.clone(),
+            ui.clone(),
+            shop_api_manifest(),
+            compose_path(),
+            root().join("Cargo.lock"),
+            root().join("dist"),
+            root().join("crates/plugins-disabled"),
+        ],
+        || {
+            remove_dependency(&id)?;
+            sync()?;
+            fs::create_dir_all(root().join("crates/plugins-disabled"))?;
+            if crate_dir.is_dir() {
+                if disabled_dir.exists() {
+                    bail!("crates/plugins-disabled/{id} already exists; refusing to replace it");
+                }
+                fs::rename(&crate_dir, &disabled_dir)
+                    .with_context(|| format!("moving crates/plugins/{id} out of the workspace"))?;
             }
-            fs::rename(&crate_dir, &disabled_dir)
-                .with_context(|| format!("moving crates/plugins/{id} out of the workspace"))?;
-        }
-        let ui = root().join("src/plugins").join(&id);
-        if ui.exists() {
-            fs::remove_dir_all(&ui)?;
-        }
-    }
-
-    run("cargo", &["check", "-p", "shop-api"], &root())?;
+            if !keep_source && ui.exists() {
+                fs::remove_dir_all(&ui)?;
+            }
+            check()?;
+            // Rebuild even when the UI directory was removed, otherwise the
+            // bundled production frontend keeps the deleted plugin's chunks.
+            if ui_existed {
+                run(npm(), &["run", "build"], &root())?;
+            }
+            if purge {
+                let sql = disabled_dir.join("uninstall.sql");
+                let sql = if sql.is_file() {
+                    Some(sql)
+                } else {
+                    crate_dir
+                        .join("uninstall.sql")
+                        .is_file()
+                        .then(|| crate_dir.join("uninstall.sql"))
+                };
+                purge_plugin(&id, embedded, sql.as_deref())?;
+            }
+            Ok(())
+        },
+    )?;
 
     if purge {
-        let mut command: Vec<String> = vec![
-            "run".into(),
-            "-q".into(),
-            "-p".into(),
-            "shop-api".into(),
-            "--".into(),
-            "--purge-plugin".into(),
-            id.clone(),
-        ];
-        if embedded {
-            command.push("--embedded".into());
-        }
-        let sql = disabled_dir.join("uninstall.sql");
-        let sql = if sql.is_file() {
-            Some(sql)
-        } else {
-            crate_dir
-                .join("uninstall.sql")
-                .is_file()
-                .then(|| crate_dir.join("uninstall.sql"))
-        };
-        if let Some(sql) = sql {
-            command.push("--sql".into());
-            command.push(sql.to_string_lossy().into_owned());
-        }
-        let borrowed: Vec<&str> = command.iter().map(String::as_str).collect();
-        run("cargo", &borrowed, &root())?;
         println!("Purged `{id}`: tables dropped by uninstall.sql, bookkeeping rows deleted.");
     } else {
         println!("Removed `{id}`. Its tables and settings are untouched.");
     }
     Ok(())
+}
+
+fn purge_plugin(id: &str, embedded: bool, sql: Option<&Path>) -> Result<()> {
+    let mut command: Vec<String> = vec![
+        "run".into(),
+        "-q".into(),
+        "-p".into(),
+        "shop-api".into(),
+        "--".into(),
+        "--purge-plugin".into(),
+        id.into(),
+    ];
+    if embedded {
+        command.push("--embedded".into());
+    }
+    if let Some(sql) = sql {
+        command.push("--sql".into());
+        command.push(sql.to_string_lossy().into_owned());
+    }
+    let borrowed: Vec<&str> = command.iter().map(String::as_str).collect();
+    run("cargo", &borrowed, &root())
 }
 
 fn list() -> Result<()> {
@@ -453,6 +581,7 @@ fn add_dependency(id: &str) -> Result<()> {
     }
     let mut inline = toml_edit::InlineTable::new();
     inline.insert("path", Value::from(format!("../plugins/{id}")));
+    inline.insert("optional", Value::from(true));
     if let Some(table) = doc
         .get_mut("dependencies")
         .and_then(Item::as_table_like_mut)
@@ -460,6 +589,20 @@ fn add_dependency(id: &str) -> Result<()> {
         table.insert(&key, Item::Value(Value::InlineTable(inline)));
     } else {
         bail!("crates/shop-api/Cargo.toml has no [dependencies] table");
+    }
+    let features = doc
+        .get_mut("features")
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| anyhow!("crates/shop-api/Cargo.toml has no [features] table"))?;
+    let mut feature_deps = toml_edit::Array::new();
+    feature_deps.push(Value::from(format!("dep:{key}")));
+    features.insert(&key, Item::Value(Value::Array(feature_deps)));
+    let all = features
+        .get_mut("plugins-all")
+        .and_then(Item::as_array_mut)
+        .ok_or_else(|| anyhow!("[features].plugins-all must be an array"))?;
+    if !all.iter().any(|value| value.as_str() == Some(&key)) {
+        all.push(Value::from(key.clone()));
     }
     fs::write(&path, doc.to_string())?;
     println!("Added {key} to crates/shop-api/Cargo.toml");
@@ -477,6 +620,16 @@ fn remove_dependency(id: &str) -> Result<()> {
         .and_then(|table| table.remove(&key))
         .is_some();
     if removed {
+        if let Some(features) = doc.get_mut("features").and_then(Item::as_table_like_mut) {
+            features.remove(&key);
+            if let Some(all) = features.get_mut("plugins-all").and_then(Item::as_array_mut) {
+                for index in (0..all.len()).rev() {
+                    if all.get(index).and_then(Value::as_str) == Some(&key) {
+                        all.remove(index);
+                    }
+                }
+            }
+        }
         fs::write(&path, doc.to_string())?;
         println!("Removed {key} from crates/shop-api/Cargo.toml");
     }
@@ -508,12 +661,189 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
         let from = entry.path();
         let to = destination.join(name.as_ref());
         if entry.file_type()?.is_dir() {
+            if matches!(name.as_ref(), "target" | ".git" | "node_modules") {
+                continue;
+            }
             copy_dir(&from, &to)?;
         } else {
             fs::copy(&from, &to).with_context(|| format!("copying {}", from.display()))?;
         }
     }
     Ok(())
+}
+
+/// Snapshot the workspace paths an operation edits and restore them if validation fails.
+fn with_workspace_transaction<T>(
+    paths: Vec<PathBuf>,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let backup_root = std::env::temp_dir().join(format!(
+        "chaska-xtask-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&backup_root)?;
+    let mut snapshots = Vec::new();
+    for (index, path) in paths.into_iter().enumerate() {
+        let backup = backup_root.join(index.to_string());
+        let existed = path.exists();
+        if existed {
+            if let Err(error) = copy_tree(&path, &backup) {
+                let _ = fs::remove_dir_all(&backup_root);
+                return Err(error);
+            }
+        }
+        snapshots.push((path, backup, existed));
+    }
+
+    match operation() {
+        Ok(value) => {
+            let _ = fs::remove_dir_all(&backup_root);
+            Ok(value)
+        }
+        Err(error) => {
+            let mut restore_error = None;
+            for (path, backup, existed) in snapshots.iter().rev() {
+                let result = (|| -> Result<()> {
+                    if path.is_dir() {
+                        fs::remove_dir_all(path)?;
+                    } else if path.exists() {
+                        fs::remove_file(path)?;
+                    }
+                    if *existed {
+                        copy_tree(backup, path)?;
+                    }
+                    Ok(())
+                })();
+                if let Err(err) = result {
+                    restore_error = Some(err);
+                    break;
+                }
+            }
+            let _ = fs::remove_dir_all(&backup_root);
+            if let Some(restore_error) = restore_error {
+                Err(error.context(format!("workspace rollback also failed: {restore_error:#}")))
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+    if source.is_dir() {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if matches!(
+                name.to_string_lossy().as_ref(),
+                "target" | ".git" | "node_modules"
+            ) {
+                continue;
+            }
+            copy_tree(&entry.path(), &destination.join(name))?;
+        }
+    } else {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(source, destination)
+            .with_context(|| format!("backing up {}", source.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod transaction_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "chaska-xtask-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn restores_replaced_and_deleted_paths_after_failure() {
+        let root = temp_path();
+        let replaced = root.join("plugin");
+        let deleted = root.join("ui");
+        let created = root.join("new-plugin");
+        fs::create_dir_all(&replaced).unwrap();
+        fs::create_dir_all(&deleted).unwrap();
+        fs::write(replaced.join("Cargo.toml"), "original plugin").unwrap();
+        fs::write(deleted.join("main.ts"), "original ui").unwrap();
+
+        let result: Result<()> = with_workspace_transaction(
+            vec![replaced.clone(), deleted.clone(), created.clone()],
+            || {
+                fs::remove_dir_all(&replaced)?;
+                fs::create_dir_all(&replaced)?;
+                fs::write(replaced.join("Cargo.toml"), "replacement plugin")?;
+                fs::remove_dir_all(&deleted)?;
+                fs::create_dir_all(&created)?;
+                Err(anyhow!("validation failed"))
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(replaced.join("Cargo.toml")).unwrap(),
+            "original plugin"
+        );
+        assert_eq!(
+            fs::read_to_string(deleted.join("main.ts")).unwrap(),
+            "original ui"
+        );
+        assert!(!created.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keeps_changes_after_success() {
+        let root = temp_path();
+        let path = root.join("plugin");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("Cargo.toml"), "original").unwrap();
+
+        with_workspace_transaction(vec![path.clone()], || {
+            fs::write(path.join("Cargo.toml"), "committed")?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(path.join("Cargo.toml")).unwrap(),
+            "committed"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removes_a_new_parent_directory_after_failure() {
+        let root = temp_path();
+        let parent = root.join("plugins-disabled");
+        let nested = parent.join("sample");
+        let result: Result<()> = with_workspace_transaction(vec![parent.clone()], || {
+            fs::create_dir_all(&nested)?;
+            fs::write(nested.join("src.rs"), "partial")?;
+            Err(anyhow!("validation failed"))
+        });
+
+        assert!(result.is_err());
+        assert!(!parent.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
