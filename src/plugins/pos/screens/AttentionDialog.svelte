@@ -16,7 +16,6 @@
     aria-modal="true"
     aria-labelledby="attention-title"
     tabindex="-1"
-    onclick={(event) => event.stopPropagation()}
   >
     <p class="kicker" id="attention-title">{tone === 'error' ? 'Error' : 'Warning'}</p>
     <p>{message}</p>

@@ -39,7 +39,10 @@ pub fn codes_match(stored: &str, embedded: &str) -> bool {
     stored == embedded || (!left.is_empty() && left == right)
 }
 
-pub fn embedded_sale(unit_rate: i32, code: &EmbeddedCode) -> Result<(i32, Option<i32>, String), String> {
+pub fn embedded_sale(
+    unit_rate: i32,
+    code: &EmbeddedCode,
+) -> Result<(i32, Option<i32>, String), String> {
     match code.mode.as_str() {
         "price" => {
             let rate = div_round(code.value as i64, code.scale)?;
@@ -61,7 +64,11 @@ pub fn embedded_sale(unit_rate: i32, code: &EmbeddedCode) -> Result<(i32, Option
             if amount < 1 {
                 return Err("That weight price is below 1.".into());
             }
-            Ok((amount, Some(code.value), format_scaled(code.value, code.scale)))
+            Ok((
+                amount,
+                Some(code.value),
+                format_scaled(code.value, code.scale),
+            ))
         }
         _ => Err("Unknown barcode rule.".into()),
     }
@@ -88,7 +95,12 @@ pub struct PromptQuote {
     pub label: String,
 }
 
-pub fn prompt_sale(prompt: &str, base_rate: i32, scale: i32, raw: &str) -> Result<PromptQuote, String> {
+pub fn prompt_sale(
+    prompt: &str,
+    base_rate: i32,
+    scale: i32,
+    raw: &str,
+) -> Result<PromptQuote, String> {
     if base_rate < 1 {
         return Err("Set a base rate above 0.".into());
     }
@@ -117,8 +129,10 @@ fn quote_quantity(base_rate: i32, scale: i32, raw: &str) -> Result<PromptQuote, 
     let taken = (scale as i64)
         .checked_mul(milli)
         .ok_or_else(|| "That quantity takes too much stock.".to_string())?;
-    let rate = div_round(priced, 1000).map_err(|_| "That quantity price is too large.".to_string())?;
-    let units = div_round(taken, 1000).map_err(|_| "That quantity takes too much stock.".to_string())?;
+    let rate =
+        div_round(priced, 1000).map_err(|_| "That quantity price is too large.".to_string())?;
+    let units =
+        div_round(taken, 1000).map_err(|_| "That quantity takes too much stock.".to_string())?;
     if rate < 1 || units < 1 {
         return Err("That quantity is too small to sell.".into());
     }
@@ -134,7 +148,8 @@ fn quote_price(base_rate: i32, scale: i32, raw: &str) -> Result<PromptQuote, Str
     let taken = (price as i64)
         .checked_mul(scale as i64)
         .ok_or_else(|| "That price takes too much stock.".to_string())?;
-    let units = div_round(taken, base_rate).map_err(|_| "That price takes too much stock.".to_string())?;
+    let units =
+        div_round(taken, base_rate).map_err(|_| "That price takes too much stock.".to_string())?;
     if units < 1 {
         return Err("That price is below one unit of stock.".into());
     }
@@ -185,7 +200,9 @@ fn parse_price(raw: &str) -> Result<i32, String> {
     if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("Enter a whole price.".into());
     }
-    let price: i32 = raw.parse().map_err(|_| "That price is too large.".to_string())?;
+    let price: i32 = raw
+        .parse()
+        .map_err(|_| "That price is too large.".to_string())?;
     if price < 1 {
         return Err("Enter a price above 0.".into());
     }

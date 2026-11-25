@@ -416,8 +416,7 @@
       attention = { tone: 'warning', message: 'Sign in before posting the bill.' }
       return
     }
-    const printer = snapshot.printer
-    const printThis = pluginEnabled('printing') && printer.enabled && !skipPrint
+    const printThis = pluginEnabled('printing') && !skipPrint
     postingId = sectionId
     attention = null
     try {

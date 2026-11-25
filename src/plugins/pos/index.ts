@@ -2,7 +2,7 @@ import { defineUiPlugin } from '../../platform/registry'
 
 export const posPlugin = defineUiPlugin({
   id: 'pos',
-  permissions: ['pos.read', 'pos.bills.post'],
+  permissions: ['pos.read', 'pos.bills.post', 'settings.write'],
   nav: [
     {
       id: 'billing',
