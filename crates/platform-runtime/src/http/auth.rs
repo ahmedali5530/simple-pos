@@ -82,8 +82,7 @@ pub async fn resolve_session(pool: &PgPool, token: &str) -> Result<AuthUser, App
     )
     .bind(user_id)
     .fetch_all(tx.conn())
-    .await
-    .unwrap_or_default();
+    .await?;
     tx.commit().await?;
 
     let Some((id, name, role, active)) = user else {
@@ -92,12 +91,6 @@ pub async fn resolve_session(pool: &PgPool, token: &str) -> Result<AuthUser, App
     if !active {
         return Err(AppError::Unauthorized("That account is turned off.".into()));
     }
-    let permissions = if permissions.is_empty() {
-        // Compatibility before role rows exist: grant all.
-        vec!["*".into()]
-    } else {
-        permissions
-    };
     Ok(AuthUser {
         tenant_id,
         user_id: id,

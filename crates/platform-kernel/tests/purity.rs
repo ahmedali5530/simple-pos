@@ -100,7 +100,7 @@ fn engine_crates_do_not_depend_on_business_code() {
     ] {
         let text = fs::read_to_string(root.join(rel)).expect(rel);
         let deps = text.split("[dev-dependencies]").next().unwrap_or(&text);
-        for banned in ["shop-core", "plugin-", "catalog-contract", "inventory-contract", "sales-contract", "printing-contract"] {
+        for banned in ["shop-core", "plugin-", "catalog-contract", "inventory-contract", "sales-contract"] {
             assert!(
                 !deps.contains(banned),
                 "{rel} depends on {banned}"

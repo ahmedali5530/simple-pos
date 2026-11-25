@@ -10,25 +10,58 @@ use crate::plugin::Plugin;
 /// while plugins register themselves.
 pub struct Registrar {
     providers: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    provider_owners: HashMap<TypeId, crate::manifest::PluginId>,
+    current_owner: Option<crate::manifest::PluginId>,
     pub event_handlers: Vec<Arc<dyn EventHandler>>,
     pub capabilities: Vec<(Capability, Arc<dyn CapabilityHandler>)>,
-    pub deletion_vetoes: Vec<Arc<dyn DeletionVeto>>,
-    pub printables: Vec<Arc<dyn Printable>>,
+    pub capability_owners: Vec<Option<crate::manifest::PluginId>>,
+}
+
+#[derive(Clone, Default)]
+pub struct ContractRegistry {
+    providers: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    owners: HashMap<TypeId, crate::manifest::PluginId>,
+}
+
+impl ContractRegistry {
+    pub fn get<T: Any + Send + Sync>(&self, enabled: &std::collections::HashSet<crate::manifest::PluginId>) -> Option<Arc<T>> {
+        let key = TypeId::of::<T>();
+        if self.owners.get(&key).is_some_and(|owner| !enabled.contains(owner)) {
+            return None;
+        }
+        self.providers.get(&key)?.clone().downcast::<T>().ok()
+    }
 }
 
 impl Registrar {
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
+            provider_owners: HashMap::new(),
+            current_owner: None,
             event_handlers: Vec::new(),
             capabilities: Vec::new(),
-            deletion_vetoes: Vec::new(),
-            printables: Vec::new(),
+            capability_owners: Vec::new(),
         }
     }
 
     pub fn provide<T: Any + Send + Sync>(&mut self, value: Arc<T>) {
-        self.providers.insert(TypeId::of::<T>(), value);
+        let key = TypeId::of::<T>();
+        self.providers.insert(key, value);
+        if let Some(owner) = self.current_owner.clone() {
+            self.provider_owners.insert(key, owner);
+        }
+    }
+
+    pub fn begin_plugin(&mut self, owner: crate::manifest::PluginId) {
+        self.current_owner = Some(owner);
+    }
+
+    pub fn contracts(&self) -> ContractRegistry {
+        ContractRegistry {
+            providers: self.providers.clone(),
+            owners: self.provider_owners.clone(),
+        }
     }
 
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
@@ -42,44 +75,16 @@ impl Registrar {
     }
 
     pub fn capability(&mut self, spec: Capability, handler: Arc<dyn CapabilityHandler>) {
+        self.capability_owners.push(self.current_owner.clone());
         self.capabilities.push((spec, handler));
     }
 
-    pub fn deletion_veto(&mut self, veto: Arc<dyn DeletionVeto>) {
-        self.deletion_vetoes.push(veto);
-    }
-
-    pub fn printable(&mut self, printable: Arc<dyn Printable>) {
-        self.printables.push(printable);
-    }
 }
 
 impl Default for Registrar {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Extension point: refuse a delete when another plugin still references the row.
-#[async_trait::async_trait]
-pub trait DeletionVeto: Send + Sync {
-    async fn check(
-        &self,
-        tx: &mut crate::context::TenantTx<'_>,
-        entity: &str,
-        id: i32,
-    ) -> Result<Option<String>, crate::error::AppError>;
-}
-
-/// Extension point: a document that printing can render.
-#[async_trait::async_trait]
-pub trait Printable: Send + Sync {
-    fn kind(&self) -> &str;
-    async fn render(
-        &self,
-        tx: &mut crate::context::TenantTx<'_>,
-        args: serde_json::Value,
-    ) -> Result<Vec<u8>, crate::error::AppError>;
 }
 
 /// Helper used when a plugin is optional and missing.

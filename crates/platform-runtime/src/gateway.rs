@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityRegistry};
 use platform_kernel::context::{Actor, TenantId, TenantTx};
 use platform_kernel::error::AppError;
@@ -5,15 +7,16 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::http::auth::AuthUser;
+use crate::plugins::EnabledPlugins;
 
 pub struct CapabilityGateway {
     pub registry: CapabilityRegistry,
     pool: PgPool,
+    enabled: Arc<EnabledPlugins>,
 }
-
 impl CapabilityGateway {
-    pub fn new(pool: PgPool, registry: CapabilityRegistry) -> Self {
-        Self { pool, registry }
+    pub fn new(pool: PgPool, registry: CapabilityRegistry, enabled: Arc<EnabledPlugins>) -> Self {
+        Self { pool, registry, enabled }
     }
 
     pub fn list_for(&self, user: &AuthUser, write_allowed: bool) -> Vec<&Capability> {
@@ -25,6 +28,18 @@ impl CapabilityGateway {
                 write_allowed
                     || matches!(cap.effect, CapabilityEffect::Read)
             })
+            .collect()
+    }
+
+    pub fn list_for_enabled(
+        &self,
+        user: &AuthUser,
+        write_allowed: bool,
+        enabled: &std::collections::HashSet<platform_kernel::manifest::PluginId>,
+    ) -> Vec<&Capability> {
+        self.list_for(user, write_allowed)
+            .into_iter()
+            .filter(|cap| self.registry.owner(&cap.id).is_none_or(|owner| enabled.contains(owner)))
             .collect()
     }
 
@@ -40,6 +55,12 @@ impl CapabilityGateway {
             .registry
             .get(capability_id)
             .ok_or_else(|| AppError::NotFound(format!("Unknown capability `{capability_id}`.")))?;
+
+        if let Some(owner) = self.registry.owner(capability_id) {
+            if !self.enabled.is_enabled(user.tenant_id, owner).await? {
+                return Err(AppError::NotFound(format!("Unknown capability `{capability_id}`.")));
+            }
+        }
 
         if !user.actor().has_permission(&spec.permission) {
             return Err(AppError::Forbidden(

@@ -10,6 +10,7 @@ use axum::Router;
 use sqlx::PgPool;
 
 use crate::context::{Actor, TenantId, TenantTx};
+use crate::contract::ContractRegistry;
 use crate::error::AppError;
 use crate::manifest::PluginId;
 
@@ -22,14 +23,24 @@ pub struct TenantDbSource {
     pool: PgPool,
     pub tenant_id: TenantId,
     pub actor: Actor,
+    pub contracts: ContractRegistry,
+    pub enabled_plugins: HashSet<PluginId>,
 }
 
 impl TenantDbSource {
-    pub fn new(pool: PgPool, tenant_id: TenantId, actor: Actor) -> Self {
+    pub fn new(
+        pool: PgPool,
+        tenant_id: TenantId,
+        actor: Actor,
+        contracts: ContractRegistry,
+        enabled_plugins: HashSet<PluginId>,
+    ) -> Self {
         Self {
             pool,
             tenant_id,
             actor,
+            contracts,
+            enabled_plugins,
         }
     }
 }
@@ -39,6 +50,10 @@ pub struct TenantDb(TenantDbSource);
 impl TenantDb {
     pub fn actor(&self) -> &Actor {
         &self.0.actor
+    }
+
+    pub fn provider<T: Send + Sync + 'static>(&self) -> Option<std::sync::Arc<T>> {
+        self.0.contracts.get::<T>(&self.0.enabled_plugins)
     }
 
     pub async fn begin(&self, read_only: bool) -> Result<TenantTx<'_>, AppError> {

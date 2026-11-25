@@ -15,7 +15,9 @@ pub fn kernel_api_version() -> Version {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum ManifestError {
-    #[error("plugin id `{0}` is invalid; use 2–32 characters of [a-z0-9_], starting with a letter")]
+    #[error(
+        "plugin id `{0}` is invalid; use 2–32 characters of [a-z0-9_], starting with a letter"
+    )]
     InvalidId(String),
     #[error("unsupported manifest version {0}")]
     UnsupportedVersion(u32),
@@ -27,8 +29,17 @@ pub enum ManifestError {
     },
     #[error("plugin `{plugin}` cannot declare permission `{permission}`")]
     ForeignPermission { plugin: String, permission: String },
+    #[error("plugin `{plugin}` capability `{capability}` has an invalid id or undeclared permission `{permission}`")]
+    InvalidCapability {
+        plugin: String,
+        capability: String,
+        permission: String,
+    },
     #[error("plugin `{plugin}` {direction} consent needs a title and a body")]
-    EmptyConsent { plugin: String, direction: &'static str },
+    EmptyConsent {
+        plugin: String,
+        direction: &'static str,
+    },
 }
 
 /// Copy the operator must accept before a plugin is switched.
@@ -127,9 +138,14 @@ pub struct NavItem {
 pub struct SettingsPage {
     pub id: String,
     pub label: String,
+    /// Empty when this entry is only a group that opens its `children`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub href: String,
     pub permission: Option<String>,
     pub order: i32,
+    /// Nested settings links under this group (e.g. Catalog → Items).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<SettingsPage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +181,7 @@ pub struct SlotDecl {
 const SHARED_PERMISSIONS: &[&str] = &["users.write", "settings.write"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PluginManifest {
     pub manifest_version: u32,
     pub id: PluginId,
@@ -187,6 +204,9 @@ pub struct PluginManifest {
     pub events_consumed: Vec<String>,
     #[serde(default)]
     pub settings_schema: Option<Value>,
+    /// Whether a brand-new tenant should start with this plugin enabled.
+    #[serde(default)]
+    pub default_enabled: bool,
     #[serde(default)]
     pub nav: Vec<NavItem>,
     #[serde(default)]
@@ -211,7 +231,8 @@ impl PluginManifest {
             manifest_version: 1,
             id: PluginId::must(id),
             name: name.into(),
-            version: Version::parse(version).unwrap_or_else(|err| panic!("plugin version `{version}`: {err}")),
+            version: Version::parse(version)
+                .unwrap_or_else(|err| panic!("plugin version `{version}`: {err}")),
             kernel_api: VersionReq::parse("^1.0").expect("kernel api range"),
             description: String::new(),
             requires: Vec::new(),
@@ -221,6 +242,7 @@ impl PluginManifest {
             events_emitted: Vec::new(),
             events_consumed: Vec::new(),
             settings_schema: None,
+            default_enabled: false,
             nav: Vec::new(),
             settings_pages: Vec::new(),
             report_pages: Vec::new(),
@@ -254,7 +276,26 @@ impl PluginManifest {
                 permission: name.to_string(),
             });
         }
-        for (direction, consent) in [("enable", &self.consents.enable), ("disable", &self.consents.disable)] {
+        let declared: std::collections::HashSet<_> =
+            self.permissions.iter().map(|p| p.as_str()).collect();
+        let mut capability_ids = std::collections::HashSet::new();
+        let prefix = format!("{}.", self.id.as_str());
+        for capability in &self.capabilities {
+            if !capability.id.starts_with(&prefix)
+                || !capability_ids.insert(capability.id.as_str())
+                || !declared.contains(capability.permission.as_str())
+            {
+                return Err(ManifestError::InvalidCapability {
+                    plugin: self.id.to_string(),
+                    capability: capability.id.clone(),
+                    permission: capability.permission.clone(),
+                });
+            }
+        }
+        for (direction, consent) in [
+            ("enable", &self.consents.enable),
+            ("disable", &self.consents.disable),
+        ] {
             if let Some(consent) = consent {
                 if consent.title.trim().is_empty() || consent.body.trim().is_empty() {
                     return Err(ManifestError::EmptyConsent {
@@ -341,7 +382,10 @@ mod tests {
 
         let round_trip = serde_json::to_value(&entry).unwrap();
         assert_eq!(round_trip["children"].as_array().unwrap().len(), 2);
-        assert!(round_trip.get("href").is_none(), "an empty group href is omitted");
+        assert!(
+            round_trip.get("href").is_none(),
+            "an empty group href is omitted"
+        );
     }
 
     #[test]
@@ -375,7 +419,10 @@ mod tests {
         });
         assert!(matches!(
             manifest.validate(),
-            Err(ManifestError::EmptyConsent { direction: "enable", .. })
+            Err(ManifestError::EmptyConsent {
+                direction: "enable",
+                ..
+            })
         ));
     }
 }

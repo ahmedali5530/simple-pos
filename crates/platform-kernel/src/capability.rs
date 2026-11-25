@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::context::TenantTx;
 use crate::error::AppError;
+use crate::manifest::PluginId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +47,7 @@ pub trait CapabilityHandler: Send + Sync {
 pub struct CapabilityRegistry {
     handlers: HashMap<String, Arc<dyn CapabilityHandler>>,
     specs: HashMap<String, Capability>,
+    owners: HashMap<String, PluginId>,
 }
 
 impl CapabilityRegistry {
@@ -56,6 +58,15 @@ impl CapabilityRegistry {
     pub fn register(&mut self, spec: Capability, handler: Arc<dyn CapabilityHandler>) {
         self.handlers.insert(spec.id.clone(), handler);
         self.specs.insert(spec.id.clone(), spec);
+    }
+
+    pub fn register_owned(&mut self, owner: PluginId, spec: Capability, handler: Arc<dyn CapabilityHandler>) {
+        self.owners.insert(spec.id.clone(), owner);
+        self.register(spec, handler);
+    }
+
+    pub fn owner(&self, id: &str) -> Option<&PluginId> {
+        self.owners.get(id)
     }
 
     pub fn get(&self, id: &str) -> Option<(&Capability, Arc<dyn CapabilityHandler>)> {

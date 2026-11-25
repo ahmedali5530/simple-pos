@@ -13,11 +13,19 @@ pub enum RegistryError {
     InvalidManifest(#[from] ManifestError),
     #[error("plugin `{0}` is compiled in more than once")]
     DuplicateId(PluginId),
+    #[error("{kind} `{value}` is claimed by both `{first}` and `{second}`")]
+    DuplicateClaim {
+        kind: &'static str,
+        value: String,
+        first: String,
+        second: String,
+    },
     #[error("plugin `{plugin}` requires `{dependency}`, which is not compiled in")]
-    MissingDependency { plugin: PluginId, dependency: PluginId },
-    #[error(
-        "plugin `{plugin}` requires `{dependency}` {required}, but {actual} is compiled in"
-    )]
+    MissingDependency {
+        plugin: PluginId,
+        dependency: PluginId,
+    },
+    #[error("plugin `{plugin}` requires `{dependency}` {required}, but {actual} is compiled in")]
     IncompatibleDependency {
         plugin: PluginId,
         dependency: PluginId,
@@ -31,19 +39,24 @@ pub enum RegistryError {
     #[error("cannot enable `{plugin}` because required plugins are disabled: {missing}")]
     DependencyDisabled { plugin: PluginId, missing: String },
     #[error("cannot disable `{plugin}` while {dependents} still require it")]
-    HasEnabledDependents { plugin: PluginId, dependents: String },
+    HasEnabledDependents {
+        plugin: PluginId,
+        dependents: String,
+    },
 }
 
 fn join_ids(ids: &[PluginId]) -> String {
-    ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl From<RegistryError> for AppError {
     fn from(value: RegistryError) -> Self {
         match &value {
-            RegistryError::DependencyDisabled { .. } | RegistryError::HasEnabledDependents { .. } => {
-                AppError::Conflict(value.to_string())
-            }
+            RegistryError::DependencyDisabled { .. }
+            | RegistryError::HasEnabledDependents { .. } => AppError::Conflict(value.to_string()),
             _ => AppError::BadRequest(value.to_string()),
         }
     }
@@ -86,11 +99,17 @@ impl PluginCatalog {
             manifests.insert(id, manifest);
         }
 
+        validate_claims(&manifests.values().cloned().collect::<Vec<_>>())?;
+
         let mut edges: HashMap<PluginId, Vec<PluginId>> = HashMap::new();
         for manifest in manifests.values() {
             for dependency in manifest.requires.iter().chain(manifest.optional.iter()) {
                 let Some(target) = manifests.get(&dependency.id) else {
-                    if manifest.requires.iter().any(|required| required.id == dependency.id) {
+                    if manifest
+                        .requires
+                        .iter()
+                        .any(|required| required.id == dependency.id)
+                    {
                         return Err(RegistryError::MissingDependency {
                             plugin: manifest.id.clone(),
                             dependency: dependency.id.clone(),
@@ -109,7 +128,11 @@ impl PluginCatalog {
             }
             edges.insert(
                 manifest.id.clone(),
-                manifest.requires.iter().map(|dependency| dependency.id.clone()).collect(),
+                manifest
+                    .requires
+                    .iter()
+                    .map(|dependency| dependency.id.clone())
+                    .collect(),
             );
         }
 
@@ -118,7 +141,10 @@ impl PluginCatalog {
         let mut dependents: HashMap<PluginId, Vec<PluginId>> = HashMap::new();
         for (plugin, deps) in &edges {
             for dep in deps {
-                dependents.entry(dep.clone()).or_default().push(plugin.clone());
+                dependents
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(plugin.clone());
             }
         }
         for list in dependents.values_mut() {
@@ -163,6 +189,59 @@ impl PluginCatalog {
             .filter_map(|id| self.plugins.get(id).cloned())
             .collect()
     }
+}
+
+fn validate_claims(manifests: &[PluginManifest]) -> Result<(), RegistryError> {
+    let mut claims: HashMap<(&'static str, String), String> = HashMap::new();
+    let mut claim =
+        |kind: &'static str, value: &str, owner: &PluginId| -> Result<(), RegistryError> {
+            if value.is_empty() {
+                return Ok(());
+            }
+            let key = (kind, value.to_string());
+            if let Some(first) = claims.insert(key, owner.to_string()) {
+                return Err(RegistryError::DuplicateClaim {
+                    kind,
+                    value: value.to_string(),
+                    first,
+                    second: owner.to_string(),
+                });
+            }
+            Ok(())
+        };
+    fn nav_claims(
+        entries: &[crate::manifest::NavItem],
+        owner: &PluginId,
+        claim: &mut impl FnMut(&'static str, &str, &PluginId) -> Result<(), RegistryError>,
+    ) -> Result<(), RegistryError> {
+        for entry in entries {
+            claim("navigation id", &entry.id, owner)?;
+            claim("navigation path", &entry.href, owner)?;
+            nav_claims(&entry.children, owner, claim)?;
+        }
+        Ok(())
+    }
+    for manifest in manifests {
+        nav_claims(&manifest.nav, &manifest.id, &mut claim)?;
+        for page in &manifest.settings_pages {
+            claim("settings page id", &page.id, &manifest.id)?;
+            claim("settings path", &page.href, &manifest.id)?;
+        }
+        for page in &manifest.report_pages {
+            claim("report page id", &page.id, &manifest.id)?;
+            claim("report path", &page.href, &manifest.id)?;
+        }
+        for page in &manifest.pages {
+            claim("page path", &page.path, &manifest.id)?;
+        }
+        for slot in &manifest.slots_provided {
+            claim("slot provider", slot, &manifest.id)?;
+        }
+        for capability in &manifest.capabilities {
+            claim("capability id", &capability.id, &manifest.id)?;
+        }
+    }
+    Ok(())
 }
 
 /// Which compiled-in plugins are enabled. Pure: no I/O.
@@ -235,7 +314,10 @@ impl EnabledSet {
     /// Rows whose required dependencies are disabled, or whose stored version is
     /// incompatible with the compiled-in version, are skipped and reported.
     /// Nothing is deleted.
-    pub fn from_persisted(catalog: &PluginCatalog, rows: &[PersistedPlugin]) -> (Self, Vec<PersistedSkip>) {
+    pub fn from_persisted(
+        catalog: &PluginCatalog,
+        rows: &[PersistedPlugin],
+    ) -> (Self, Vec<PersistedSkip>) {
         let mut set = EnabledSet::new();
         let mut skips = Vec::new();
         let known: HashMap<&PluginId, &PersistedPlugin> = rows
@@ -261,7 +343,10 @@ impl EnabledSet {
             if !stored_version_compatible(&row.version, compiled) {
                 skips.push(PersistedSkip {
                     plugin: id.clone(),
-                    reason: format!("stored version {} is incompatible with {compiled}", row.version),
+                    reason: format!(
+                        "stored version {} is incompatible with {compiled}",
+                        row.version
+                    ),
                 });
                 continue;
             }
@@ -285,7 +370,10 @@ fn stored_version_compatible(stored: &str, compiled: &Version) -> bool {
         .unwrap_or(false)
 }
 
-fn topo_order(ids: &[PluginId], edges: &HashMap<PluginId, Vec<PluginId>>) -> Result<Vec<PluginId>, RegistryError> {
+fn topo_order(
+    ids: &[PluginId],
+    edges: &HashMap<PluginId, Vec<PluginId>>,
+) -> Result<Vec<PluginId>, RegistryError> {
     let mut indegree: HashMap<PluginId, usize> = ids.iter().cloned().map(|id| (id, 0)).collect();
     let mut dependents: HashMap<PluginId, Vec<PluginId>> = HashMap::new();
     for id in ids {
@@ -318,7 +406,9 @@ fn topo_order(ids: &[PluginId], edges: &HashMap<PluginId, Vec<PluginId>>) -> Res
         queue.extend(newly_ready);
     }
     if order.len() != ids.len() {
-        return Err(RegistryError::Cycle(join_ids(&find_cycle(ids, edges)).replace(", ", " -> ")));
+        return Err(RegistryError::Cycle(
+            join_ids(&find_cycle(ids, edges)).replace(", ", " -> "),
+        ));
     }
     Ok(order)
 }
@@ -403,7 +493,11 @@ mod tests {
             plugin(manifest("catalog", "0.1.0")),
         ])
         .unwrap();
-        let ids: Vec<_> = catalog.topo_order().iter().map(|id| id.as_str().to_string()).collect();
+        let ids: Vec<_> = catalog
+            .topo_order()
+            .iter()
+            .map(|id| id.as_str().to_string())
+            .collect();
         assert_eq!(ids, vec!["catalog", "inventory", "pos"]);
     }
 
@@ -418,12 +512,21 @@ mod tests {
         let mut inventory = manifest("inventory", "0.1.0");
         inventory.requires = vec![crate::manifest::Dependency::new("catalog", "^0.1")];
         let missing = PluginCatalog::build(vec![plugin(inventory)]);
-        assert!(matches!(missing, Err(RegistryError::MissingDependency { .. })));
+        assert!(matches!(
+            missing,
+            Err(RegistryError::MissingDependency { .. })
+        ));
 
         let mut inventory = manifest("inventory", "0.1.0");
         inventory.requires = vec![crate::manifest::Dependency::new("catalog", "^0.2")];
-        let mismatch = PluginCatalog::build(vec![plugin(manifest("catalog", "0.1.0")), plugin(inventory)]);
-        assert!(matches!(mismatch, Err(RegistryError::IncompatibleDependency { .. })));
+        let mismatch = PluginCatalog::build(vec![
+            plugin(manifest("catalog", "0.1.0")),
+            plugin(inventory),
+        ]);
+        assert!(matches!(
+            mismatch,
+            Err(RegistryError::IncompatibleDependency { .. })
+        ));
 
         let mut left = manifest("left", "0.1.0");
         left.requires = vec![crate::manifest::Dependency::new("right", "^0.1")];
@@ -437,7 +540,11 @@ mod tests {
     fn enable_and_disable_respect_dependencies() {
         let mut inventory = manifest("inventory", "0.1.0");
         inventory.requires = vec![crate::manifest::Dependency::new("catalog", "^0.1")];
-        let catalog = PluginCatalog::build(vec![plugin(manifest("catalog", "0.1.0")), plugin(inventory)]).unwrap();
+        let catalog = PluginCatalog::build(vec![
+            plugin(manifest("catalog", "0.1.0")),
+            plugin(inventory),
+        ])
+        .unwrap();
         let mut set = EnabledSet::new();
         let inventory_id = PluginId::must("inventory");
         let catalog_id = PluginId::must("catalog");
@@ -461,7 +568,11 @@ mod tests {
     fn from_persisted_skips_orphans_and_incompatible_versions() {
         let mut inventory = manifest("inventory", "0.1.0");
         inventory.requires = vec![crate::manifest::Dependency::new("catalog", "^0.1")];
-        let catalog = PluginCatalog::build(vec![plugin(manifest("catalog", "0.1.0")), plugin(inventory)]).unwrap();
+        let catalog = PluginCatalog::build(vec![
+            plugin(manifest("catalog", "0.1.0")),
+            plugin(inventory),
+        ])
+        .unwrap();
         let (set, skips) = EnabledSet::from_persisted(
             &catalog,
             &[
@@ -488,7 +599,11 @@ mod tests {
 
         let mut inventory = manifest("inventory", "0.2.0");
         inventory.requires = vec![crate::manifest::Dependency::new("catalog", "^0.1")];
-        let catalog = PluginCatalog::build(vec![plugin(manifest("catalog", "0.1.0")), plugin(inventory)]).unwrap();
+        let catalog = PluginCatalog::build(vec![
+            plugin(manifest("catalog", "0.1.0")),
+            plugin(inventory),
+        ])
+        .unwrap();
         let (set, skips) = EnabledSet::from_persisted(
             &catalog,
             &[PersistedPlugin {
@@ -498,7 +613,9 @@ mod tests {
             }],
         );
         assert!(!set.contains(&PluginId::must("inventory")));
-        assert!(skips.iter().any(|skip| skip.reason.contains("incompatible")));
+        assert!(skips
+            .iter()
+            .any(|skip| skip.reason.contains("incompatible")));
         let _ = set;
     }
 }

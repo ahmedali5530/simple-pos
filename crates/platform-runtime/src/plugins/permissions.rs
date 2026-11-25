@@ -29,6 +29,20 @@ pub async fn sync(pool: &PgPool, catalog: &PluginCatalog) -> Result<(), AppError
             .await?;
         }
     }
+    // A newly compiled plugin's permissions must reach existing managers without
+    // requiring an unrelated user edit. Cashiers keep the explicit role template.
+    sqlx::query(
+        r#"
+        INSERT INTO role_permissions (tenant_id, role_id, permission)
+        SELECT r.tenant_id, r.id, p.name
+        FROM roles r
+        CROSS JOIN platform_permissions p
+        WHERE r.name = 'manager'
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }

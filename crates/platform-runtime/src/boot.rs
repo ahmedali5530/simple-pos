@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Router;
@@ -14,7 +14,7 @@ use sqlx::PgPool;
 use crate::db::{rls_validator, roles, Pools};
 use crate::events::EventDispatcher;
 use crate::gateway::CapabilityGateway;
-use crate::http::plugin_gate;
+use crate::http::plugin_gate::PluginRouteTable;
 use crate::migrations;
 use crate::plugins::{sync_permissions, EnabledPlugins, PluginLifecycle, PluginStateStore};
 
@@ -37,6 +37,7 @@ pub struct Platform {
     pub lifecycle: PluginLifecycle,
     pub enabled: Arc<EnabledPlugins>,
     pub plugin_router: Router,
+    pub plugin_routes: PluginRouteTable,
     pub stop_dispatcher: Option<tokio::sync::watch::Sender<bool>>,
 }
 
@@ -108,8 +109,9 @@ impl Platform {
         let mut route_mounts = Vec::new();
         let mut handlers = Vec::new();
         for plugin in catalog.plugins_in_order() {
-            plugin.register(&mut registrar);
             let manifest = plugin.manifest();
+            registrar.begin_plugin(manifest.id.clone());
+            plugin.register(&mut registrar);
             let declared: HashSet<String> = manifest
                 .permissions
                 .iter()
@@ -127,11 +129,18 @@ impl Platform {
         }
         handlers.extend(registrar.event_handlers.drain(..));
 
+        validate_registered_capabilities(&catalog, &registrar)?;
+
         let mut capabilities = std::mem::take(&mut registrar.capabilities);
         let capability_registry = {
             let mut registry = platform_kernel::CapabilityRegistry::new();
-            for (spec, handler) in capabilities.drain(..) {
-                registry.register(spec, handler);
+            let owners = std::mem::take(&mut registrar.capability_owners);
+            for ((spec, handler), owner) in capabilities.drain(..).zip(owners) {
+                if let Some(owner) = owner {
+                    registry.register_owned(owner, spec, handler);
+                } else {
+                    registry.register(spec, handler);
+                }
             }
             registry
         };
@@ -139,9 +148,14 @@ impl Platform {
         rls_validator::validate(&pools.migration).await?;
         pools.guard_runtime().await.ok();
 
-        let plugin_router =
-            plugin_gate::PluginRouteTable::router(route_mounts, enabled.clone(), pools.runtime.clone());
-        let gateway = CapabilityGateway::new(pools.runtime.clone(), capability_registry);
+        let plugin_routes = PluginRouteTable::new(
+            route_mounts,
+            enabled.clone(),
+            pools.runtime.clone(),
+            registrar.contracts(),
+        );
+        let plugin_router = plugin_routes.router();
+        let gateway = CapabilityGateway::new(pools.runtime.clone(), capability_registry, enabled.clone());
         let dispatcher = EventDispatcher::new(pools.runtime.clone(), handlers, enabled.clone());
         let stop_dispatcher = Some(dispatcher.spawn());
 
@@ -152,6 +166,7 @@ impl Platform {
             lifecycle,
             enabled,
             plugin_router,
+            plugin_routes,
             stop_dispatcher,
         })
     }
@@ -173,4 +188,34 @@ impl Platform {
             let _ = stop.send(true);
         }
     }
+}
+
+fn validate_registered_capabilities(
+    catalog: &PluginCatalog,
+    registrar: &Registrar,
+) -> Result<(), AppError> {
+    let mut registered: HashMap<_, HashMap<String, (String, platform_kernel::capability::CapabilityEffect)>> = HashMap::new();
+    for (index, (spec, _)) in registrar.capabilities.iter().enumerate() {
+        let Some(owner) = registrar.capability_owners.get(index).and_then(Option::as_ref) else {
+            return Err(AppError::BadRequest(format!("capability `{}` has no plugin owner", spec.id)));
+        };
+        if registered.entry(owner.clone()).or_default()
+            .insert(spec.id.clone(), (spec.permission.clone(), spec.effect)).is_some()
+        {
+            return Err(AppError::BadRequest(format!("capability `{}` is registered more than once", spec.id)));
+        }
+    }
+    for manifest in catalog.manifests() {
+        let actual = registered.remove(&manifest.id).unwrap_or_default();
+        for declared in &manifest.capabilities {
+            match actual.get(&declared.id) {
+                Some((permission, effect)) if permission == &declared.permission && effect == &declared.effect => {}
+                _ => return Err(AppError::BadRequest(format!("plugin `{}` capability `{}` does not match its manifest declaration", manifest.id, declared.id))),
+            }
+        }
+        if let Some(unexpected) = actual.keys().find(|id| !manifest.capabilities.iter().any(|cap| &cap.id == *id)) {
+            return Err(AppError::BadRequest(format!("plugin `{}` registers undeclared capability `{unexpected}`", manifest.id)));
+        }
+    }
+    Ok(())
 }

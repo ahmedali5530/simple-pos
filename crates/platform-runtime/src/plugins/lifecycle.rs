@@ -47,6 +47,11 @@ impl PluginLifecycle {
             .map(|manifest| manifest.version.to_string())
             .ok_or_else(|| AppError::NotFound(format!("Plugin `{id}` is not compiled in.")))?;
 
+        // Core is platform infrastructure and cannot be disabled.
+        if id.as_str() == "core" && !enabled {
+            return Err(AppError::Forbidden("The core plugin cannot be disabled.".into()));
+        }
+
         let mut tx = TenantTx::begin_with(&self.pool, tenant_id, actor.clone(), false).await?;
         let rows = PluginStateStore::load(&mut tx, true).await?;
         let (mut set, _) = EnabledSet::from_persisted(&self.catalog, &rows);

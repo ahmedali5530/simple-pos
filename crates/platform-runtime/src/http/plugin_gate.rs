@@ -18,6 +18,7 @@ use tower::ServiceExt;
 use crate::http::auth::AuthUser;
 use crate::http::errors::ApiError;
 use crate::plugins::EnabledPlugins;
+use platform_kernel::contract::ContractRegistry;
 
 struct PluginMount {
     id: PluginId,
@@ -36,15 +37,26 @@ pub struct PluginRouteTable {
     mounts: Arc<Vec<PluginMount>>,
     enabled: Arc<EnabledPlugins>,
     pool: PgPool,
+    fallback: Option<Router>,
+    contracts: ContractRegistry,
 }
 
 impl PluginRouteTable {
-    pub fn router(
+    pub fn build_router(
         mounts: Vec<(PluginId, Vec<RouteSpec>, Router)>,
         enabled: Arc<EnabledPlugins>,
         pool: PgPool,
     ) -> Router {
-        let table = Self {
+        Self::new(mounts, enabled, pool, ContractRegistry::default()).router()
+    }
+
+    pub fn new(
+        mounts: Vec<(PluginId, Vec<RouteSpec>, Router)>,
+        enabled: Arc<EnabledPlugins>,
+        pool: PgPool,
+        contracts: ContractRegistry,
+    ) -> Self {
+        Self {
             mounts: Arc::new(
                 mounts
                     .into_iter()
@@ -53,12 +65,29 @@ impl PluginRouteTable {
             ),
             enabled,
             pool,
-        };
+            fallback: None,
+            contracts,
+        }
+    }
+
+    pub fn router_with_fallback(&self, fallback: Router) -> Router {
+        let mut table = self.clone();
+        table.fallback = Some(fallback);
         Router::new().fallback_service(table)
+    }
+
+    pub fn router(&self) -> Router {
+        Router::new().fallback_service(self.clone())
     }
 
     async fn dispatch(self, mut request: Request) -> Response {
         let Some(user) = request.extensions().get::<AuthUser>().cloned() else {
+            if let Some(fallback) = &self.fallback {
+                return match fallback.clone().oneshot(request).await {
+                    Ok(response) => response,
+                    Err(err) => match err {},
+                };
+            }
             return ApiError(AppError::Unauthorized("Sign in before continuing.".into())).into_response();
         };
         let enabled = match self.enabled.ids(user.tenant_id).await {
@@ -74,6 +103,12 @@ impl PluginRouteTable {
                     .iter()
                     .any(|spec| spec.method == method && path_matches(&spec.path, &path))
         }) else {
+            if let Some(fallback) = &self.fallback {
+                return match fallback.clone().oneshot(request).await {
+                    Ok(response) => response,
+                    Err(err) => match err {},
+                };
+            }
             return StatusCode::NOT_FOUND.into_response();
         };
         let spec = mount
@@ -88,6 +123,8 @@ impl PluginRouteTable {
             self.pool.clone(),
             user.tenant_id,
             user.actor(),
+            self.contracts.clone(),
+            enabled,
         ));
         match mount.router.clone().oneshot(request).await {
             Ok(response) => response,
@@ -108,5 +145,29 @@ impl Service<Request> for PluginRouteTable {
     fn call(&mut self, request: Request) -> Self::Future {
         let table = self.clone();
         Box::pin(async move { Ok(table.dispatch(request).await) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::get;
+    use platform_kernel::registry::PluginCatalog;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn plugin_fallback_can_be_followed_by_a_shell_fallback() {
+        let pool = PgPool::connect_lazy("postgres://localhost/chaska_test").unwrap();
+        let catalog = Arc::new(PluginCatalog::build(Vec::new()).unwrap());
+        let enabled = Arc::new(EnabledPlugins::new(pool.clone(), catalog));
+        let table = PluginRouteTable::new(Vec::new(), enabled, pool, ContractRegistry::default());
+        let shell = Router::new().route("/", get(|| async { "shell" }));
+        let app = Router::new().route("/api/ping", get(|| async { "api" }))
+            .merge(table.router_with_fallback(shell));
+
+        let response = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

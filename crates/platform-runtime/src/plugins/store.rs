@@ -20,7 +20,11 @@ impl PluginStateStore {
             let Ok(id) = PluginId::parse(&id) else {
                 continue;
             };
-            plugins.push(PersistedPlugin { id, enabled, version });
+            plugins.push(PersistedPlugin {
+                id,
+                enabled,
+                version,
+            });
         }
         Ok(plugins)
     }
@@ -59,9 +63,8 @@ impl PluginStateStore {
 
     /// Insert compiled-in plugins that have no row yet.
     ///
-    /// A tenant with no plugin rows (a fresh till) gets every plugin enabled. A tenant that
-    /// already has rows gets new plugins **disabled**, so code installed later never goes live
-    /// until the operator turns it on. Existing rows, including disabled ones, are untouched.
+    /// A tenant with no plugin rows gets only the explicit baseline enabled. A tenant that
+    /// already has rows gets new plugins disabled. Existing rows are untouched.
     /// Returns the ids that were added.
     pub async fn install_missing(
         pool: &PgPool,
@@ -83,6 +86,15 @@ impl PluginStateStore {
                 .manifest(id)
                 .map(|manifest| manifest.version.to_string())
                 .unwrap_or_else(|| "0.0.0".into());
+            let default_enabled = catalog
+                .manifest(id)
+                .is_some_and(|manifest| manifest.default_enabled);
+            // Core is platform infrastructure: always enabled, even for existing tenants.
+            let enabled = if id.as_str() == "core" {
+                true
+            } else {
+                fresh_tenant && default_enabled
+            };
             let inserted: Option<String> = sqlx::query_scalar(
                 r#"
                 INSERT INTO tenant_plugins (
@@ -95,7 +107,7 @@ impl PluginStateStore {
             )
             .bind(tenant_id.as_uuid())
             .bind(id.as_str())
-            .bind(fresh_tenant)
+            .bind(enabled)
             .bind(&version)
             .fetch_optional(tx.conn())
             .await?;

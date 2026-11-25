@@ -74,6 +74,7 @@ impl EventHandler for ProbeHandler {
 
 fn plugins() -> Vec<Arc<dyn Plugin>> {
     vec![
+        Arc::new(plugin_core::CorePlugin),
         Arc::new(plugin_catalog::CatalogPlugin),
         Arc::new(plugin_inventory::InventoryPlugin),
         Arc::new(plugin_pos::PosPlugin),
@@ -109,6 +110,12 @@ async fn fresh_tenant(platform: &Platform) -> TenantId {
     PluginStateStore::install_missing(platform.runtime_pool(), tenant_id, &platform.catalog)
         .await
         .expect("install plugins");
+    // `probe` is the test-only plugin and is intentionally not a default-enabled plugin.
+    platform
+        .lifecycle
+        .set_enabled(tenant_id, Actor::system(), "probe", true)
+        .await
+        .expect("enable probe");
     tenant_id
 }
 
@@ -142,17 +149,15 @@ async fn disable_keeps_the_row_and_writes_an_audit_entry() {
         .await
         .unwrap();
 
-    // Reports requires inventory, so the leaf has to go first.
-    platform
-        .lifecycle
-        .set_enabled(tenant_id, Actor::system(), "reports", false)
-        .await
-        .unwrap();
-    platform
-        .lifecycle
-        .set_enabled(tenant_id, Actor::system(), "inventory", false)
-        .await
-        .unwrap();
+    // Disable dependents before their dependency: reports and cash require pos,
+    // and pos now requires inventory.
+    for plugin in ["reports", "cash", "pos", "inventory"] {
+        platform
+            .lifecycle
+            .set_enabled(tenant_id, Actor::system(), plugin, false)
+            .await
+            .unwrap_or_else(|error| panic!("disable {plugin}: {error}"));
+    }
 
     let (enabled,): (bool,) = sqlx::query_as(
         "SELECT enabled FROM tenant_plugins WHERE tenant_id = $1 AND plugin_id = 'inventory'",
@@ -305,6 +310,112 @@ async fn a_plugin_added_to_an_existing_tenant_starts_disabled() {
     .await
     .unwrap();
     assert!(!enabled, "a plugin added later must not go live without consent");
+}
+
+#[tokio::test]
+async fn core_is_enabled_for_existing_tenants_and_cannot_be_disabled() {
+    let platform = boot().await;
+    let tenant_id = TenantId(Uuid::new_v4());
+    sqlx::query("SELECT platform_provision_tenant($1, $2, $3)")
+        .bind(tenant_id.as_uuid())
+        .bind(format!("core-{}", &tenant_id.to_string()[..8]))
+        .bind("Core Shop")
+        .execute(platform.migration_pool())
+        .await
+        .expect("provision");
+    sqlx::query(
+        "INSERT INTO tenant_plugins (tenant_id, plugin_id, enabled, version) VALUES ($1, 'core', FALSE, '0.1.0'), ($1, 'probe', FALSE, '0.1.0')",
+    )
+    .bind(tenant_id.as_uuid())
+    .execute(platform.migration_pool())
+    .await
+    .expect("existing plugin rows");
+    sqlx::raw_sql(include_str!("../src/migrations/core/016_enable_core.sql"))
+        .execute(platform.migration_pool())
+        .await
+        .expect("repair core enablement");
+
+    PluginStateStore::install_missing(platform.runtime_pool(), tenant_id, &platform.catalog)
+        .await
+        .expect("install plugins");
+    let enabled = platform.enabled.ids(tenant_id).await.expect("enabled ids");
+    assert!(enabled.iter().any(|id| id.as_str() == "core"));
+    assert!(!enabled.iter().any(|id| id.as_str() == "probe"));
+
+    let error = platform
+        .lifecycle
+        .set_enabled(tenant_id, Actor::system(), "core", false)
+        .await
+        .expect_err("core cannot be disabled");
+    assert!(matches!(error, AppError::Forbidden(_)), "{error}");
+}
+
+#[tokio::test]
+async fn core_settings_work_without_catalog_or_pos() {
+    let platform = boot().await;
+    let tenant_id = fresh_tenant(&platform).await;
+    for plugin in ["reports", "cash", "pos", "inventory", "catalog"] {
+        platform
+            .lifecycle
+            .set_enabled(tenant_id, Actor::system(), plugin, false)
+            .await
+            .unwrap_or_else(|error| panic!("disable {plugin}: {error}"));
+    }
+
+    let mut request = Request::builder()
+        .uri("/api/v1/core/snapshot")
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(AuthUser {
+        tenant_id,
+        user_id: 1,
+        name: "core-settings".into(),
+        role: "manager".into(),
+        permissions: vec!["*".into()],
+    });
+    let response = platform
+        .plugin_router()
+        .oneshot(request)
+        .await
+        .expect("core snapshot");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut request = Request::builder()
+        .method("PUT")
+        .uri("/api/v1/core/settings")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "name": "Independent Shop",
+                "bill_prefix": "CORE",
+                "currency": "PKR",
+                "locale": "en-PK",
+                "barcode_rules": [{ "prefix": "21", "mode": "weight", "scale": 1000 }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(AuthUser {
+        tenant_id,
+        user_id: 1,
+        name: "core-settings".into(),
+        role: "manager".into(),
+        permissions: vec!["*".into()],
+    });
+    let response = platform
+        .plugin_router()
+        .oneshot(request)
+        .await
+        .expect("core settings");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+    let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(saved["shop_name"], "Independent Shop");
+    assert_eq!(saved["bill_prefix"], "CORE");
+    assert_eq!(saved["barcode_rules"][0]["scale"], 1000);
 }
 
 #[tokio::test]
