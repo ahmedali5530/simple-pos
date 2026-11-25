@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { downloadWorkbook, importItemsWorkbook, type CatalogItem } from '../api'
+  import { downloadWorkbook, importItemsWorkbook, removeItem, type CatalogItem } from '../api'
   import ItemPicture from './ItemPicture.svelte'
   import VirtualList from './VirtualList.svelte'
   import { centsToInput, formatCost, formatMoney, moneyToCents } from '../money'
+  import { session } from '../session.svelte'
   import type { Category, PosItem, PosSection, PosSnapshot } from '../types'
 
   interface Props {
@@ -17,9 +18,11 @@
       picture: { file: File | null; remove: boolean },
     ) => Promise<{ item: PosItem; pictureError: string | null }>
     onImported: (pos: PosSnapshot) => void
+    onRemoved: (pos: PosSnapshot) => void
   }
 
-  let { sections, categories, currency, locale, saving, onSave, onImported }: Props = $props()
+  let { sections, categories, currency, locale, saving, onSave, onImported, onRemoved }: Props = $props()
+  const isManager = $derived(session.user?.role === 'manager')
 
   interface DraftOption {
     id: number | null
@@ -49,6 +52,8 @@
   let sheetBusy = $state(false)
   let sheetNote = $state('')
   let sheetError = $state('')
+  let confirmRemove = $state(false)
+  let removing = $state(false)
 
   const shelfProfit = $derived.by(() => {
     const cents = cost.trim() === '' ? 0 : moneyToCents(cost)
@@ -73,12 +78,30 @@
     if (editing === loaded) return
     loaded = editing
     formError = ''
+    confirmRemove = false
     if (editing === 'new') {
       fill(null)
       return
     }
     fill(selected?.item ?? null)
   })
+
+  async function remove() {
+    if (editing === 'new' || editing == null) return
+    removing = true
+    formError = ''
+    try {
+      onRemoved(await removeItem(editing))
+      loaded = null
+      editing = null
+      confirmRemove = false
+    } catch (error) {
+      formError = error instanceof Error ? error.message : 'Could not remove the item.'
+      confirmRemove = false
+    } finally {
+      removing = false
+    }
+  }
 
   async function exportWorkbook() {
     sheetError = ''
@@ -326,7 +349,7 @@
               {picturePreview ? 'Change picture' : 'Add picture'}
               <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onchange={choosePicture} />
             </label>
-            {#if picturePreview}
+            {#if picturePreview && isManager}
               <button type="button" class="picture-remove" onclick={clearPicture}>Remove picture</button>
             {/if}
           </div>
@@ -430,7 +453,15 @@
       {/if}
       {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
-        <button type="button" class="save" disabled={saving} onclick={save}>
+        {#if isManager && editing !== 'new'}
+          {#if confirmRemove}
+            <button type="button" class="link" disabled={saving || removing} onclick={remove}>Remove item</button>
+            <button type="button" class="ghost light" disabled={saving || removing} onclick={() => (confirmRemove = false)}>Cancel</button>
+          {:else}
+            <button type="button" class="link" disabled={saving || removing} onclick={() => (confirmRemove = true)}>Remove</button>
+          {/if}
+        {/if}
+        <button type="button" class="save" disabled={saving || removing} onclick={save}>
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>

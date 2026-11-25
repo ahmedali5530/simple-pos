@@ -10,18 +10,19 @@ use axum::{
     Json, Router,
 };
 use shop_core::{
-    adjust_stock, cash_desk, clear_item_image, export_categories, export_items, export_movements,
-    import_categories, import_items, import_movements, item_image_ext, load_pos, load_reports,
-    login, logout, needs_first_user, open_session, open_shift, post_bill, print_cash_shift,
-    print_product_mix, print_saved_bill, print_test, recent_movements, remove_category, remove_section,
-    remove_user, reorder_categories, reorder_sections, save_category, save_item, save_section,
-    save_settings, save_shift, save_user, set_item_image, set_item_prompt, set_pos_focus,
-    set_pos_sections, stock_summary, AppError, CashDesk, CategoryForm, CategoryImport, ErrorBody,
-    ItemForm, ItemImport, ItemPromptRequest, LoginForm, LoginSession, MovementImport, OpenShift,
-    OrderForm, PgPool, PosFocus, PosSnapshot, PosUser, PostBillRequest, PostedBill, PrintOutcome,
-    PrintRequest, Reports, SavedItem, SavedRecord, SectionForm, SetFocusRequest,
-    SetSectionsRequest, SettingsForm, ShiftForm, ShopConfig, StockBalance, StockMove,
-    StockMovement, StockPage, TestPrintRequest, UserForm,
+    adjust_stock, cash_desk, clear_item_image, ensure_manager, export_cash_expenses_template,
+    export_categories, export_items, export_movements, import_categories, import_items,
+    import_movements, item_image_ext, load_pos, load_reports, login, logout, needs_first_user,
+    open_session, open_shift, parse_cash_expenses_workbook, post_bill, print_cash_shift,
+    print_product_mix, print_saved_bill, print_test, recent_movements, remove_category, remove_item,
+    remove_section, remove_user, reorder_categories, reorder_sections, save_category, save_item,
+    save_section, save_settings, save_shift, save_user, set_item_image, set_item_prompt,
+    set_pos_focus, set_pos_sections, stock_summary, void_bill, AppError, CashDesk,
+    CategoryForm, CategoryImport, ErrorBody, ItemForm, ItemImport, ItemPromptRequest, LoginForm,
+    LoginSession, MovementImport, OpenShift, OrderForm, PgPool, PosFocus, PosSnapshot, PosUser,
+    PostBillRequest, PostedBill, PrintOutcome, PrintRequest, Reports, SavedItem, SavedRecord,
+    SectionForm, SetFocusRequest, SetSectionsRequest, SettingsForm, ShiftForm, ShopConfig,
+    StockBalance, StockMove, StockMovement, StockPage, TestPrintRequest, UserForm,
 };
 use tower_http::cors::{Any, CorsLayer};
 
@@ -170,6 +171,7 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
             .route("/api/pos/focus", put(put_focus))
             .route("/api/pos/sections", put(put_sections))
             .route("/api/bills", axum::routing::post(post_bill_route))
+            .route("/api/bills/{id}", axum::routing::delete(delete_bill))
             .route("/api/print", post(post_print))
             .route("/api/print/test", post(post_print_test))
             .route("/api/print/mix", post(post_print_mix))
@@ -178,6 +180,11 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
             .route("/api/cash/open", post(post_cash_open))
             .route("/api/cash/draft", post(post_cash_draft))
             .route("/api/cash/close", post(post_cash_close))
+            .route("/api/cash/expenses/export", get(get_cash_expenses_export))
+            .route(
+                "/api/cash/expenses/import",
+                post(post_cash_expenses_import).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+            )
             .route("/api/login", post(post_login))
             .route("/api/logout", post(post_logout))
             .route("/api/session", get(get_session))
@@ -217,7 +224,7 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
                 "/api/items/import",
                 post(post_items_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
             )
-            .route("/api/items/{id}", put(put_item))
+            .route("/api/items/{id}", put(put_item).delete(delete_item))
             .route("/api/items/{id}/prompt", put(put_item_prompt))
             .route(
                 "/api/items/{id}/image",
@@ -470,8 +477,10 @@ async fn put_section(
 
 async fn delete_section(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
     Ok(Json(remove_section(&state.pool, &state.shop, id).await?))
 }
 
@@ -505,8 +514,10 @@ async fn put_category(
 
 async fn delete_category(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
     Ok(Json(remove_category(&state.pool, &state.shop, id).await?))
 }
 
@@ -540,8 +551,10 @@ async fn put_user(
 
 async fn delete_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<PosSnapshot>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
     Ok(Json(remove_user(&state.pool, &state.shop, id).await?))
 }
 
@@ -599,11 +612,14 @@ async fn get_categories_export(State(state): State<AppState>) -> Result<Response
 
 async fn post_categories_import(
     State(state): State<AppState>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<Json<CategoryImport>, ApiError> {
+    let cashier = open_session(&state.pool, &session_token(&headers)).await?;
+    let allow_remove = cashier.role == "manager";
     let bytes = workbook_bytes(multipart).await?;
     Ok(Json(
-        import_categories(&state.pool, &state.shop, &bytes).await?,
+        import_categories(&state.pool, &state.shop, &bytes, allow_remove).await?,
     ))
 }
 
@@ -855,14 +871,54 @@ async fn post_item_image(
 
 async fn delete_item_image(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<SavedItem>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
     let previous = item_image_ext(&state.pool, id).await?;
     let saved = clear_item_image(&state.pool, &state.shop, id).await?;
     if let Some(ext) = previous.as_deref() {
         remove_image_file(id, ext);
     }
     Ok(Json(saved))
+}
+
+async fn delete_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i32>,
+) -> Result<Json<PosSnapshot>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
+    Ok(Json(remove_item(&state.pool, &state.shop, id).await?))
+}
+
+async fn delete_bill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_manager(&state.pool, &headers).await?;
+    void_bill(&state.pool, id).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn get_cash_expenses_export() -> Result<Response, ApiError> {
+    let bytes = export_cash_expenses_template()?;
+    Ok(workbook_response("cash-expenses.xlsx", bytes))
+}
+
+async fn post_cash_expenses_import(
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let bytes = workbook_bytes(multipart).await?;
+    let expenses = parse_cash_expenses_workbook(&bytes)?;
+    Ok(Json(serde_json::json!({ "expenses": expenses })))
+}
+
+async fn require_manager(pool: &PgPool, headers: &HeaderMap) -> Result<(), ApiError> {
+    let cashier = open_session(pool, &session_token(headers)).await?;
+    ensure_manager(&cashier.role)?;
+    Ok(())
 }
 
 async fn post_print(
@@ -980,6 +1036,7 @@ impl axum::response::IntoResponse for ApiError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(ErrorBody {

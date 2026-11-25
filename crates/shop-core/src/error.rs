@@ -6,6 +6,7 @@ pub enum AppError {
     BadRequest(String),
     NotFound(String),
     Unauthorized(String),
+    Forbidden(String),
 }
 
 impl From<sqlx::Error> for AppError {
@@ -20,7 +21,8 @@ impl std::fmt::Display for AppError {
             AppError::Db(err) => write!(f, "{err}"),
             AppError::BadRequest(message)
             | AppError::NotFound(message)
-            | AppError::Unauthorized(message) => write!(f, "{message}"),
+            | AppError::Unauthorized(message)
+            | AppError::Forbidden(message) => write!(f, "{message}"),
         }
     }
 }

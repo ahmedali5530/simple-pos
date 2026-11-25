@@ -73,6 +73,7 @@
         {saving}
         {onSave}
         onImported={onChange}
+        onRemoved={onChange}
       />
     {:else if page === 'sections'}
       <SectionCatalog sections={snapshot.all_sections} counts={sectionCounts} {onChange} />

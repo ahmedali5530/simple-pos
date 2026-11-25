@@ -639,10 +639,133 @@ pub async fn export_categories(pool: &PgPool) -> Result<Vec<u8>, AppError> {
     workbook.save_to_buffer().sheet()
 }
 
+const EXPENSE_CATEGORIES: [&str; 7] = [
+    "Supplies",
+    "Wages",
+    "Food",
+    "Transport",
+    "Utilities",
+    "Maintenance",
+    "Other",
+];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CashExpenseRow {
+    pub description: String,
+    pub category: String,
+    pub amount: i64,
+}
+
+/// Blank template for bulk cash-closing expenses.
+pub fn export_cash_expenses_template() -> Result<Vec<u8>, AppError> {
+    let mut workbook = Workbook::new();
+    let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
+    let wrap = Format::new().set_text_wrap();
+    let sheet = workbook.add_worksheet();
+    sheet.set_name("Expenses").sheet()?;
+    for (col, name) in ["description", "category", "amount"].iter().enumerate() {
+        sheet
+            .write_string_with_format(0, col as u16, *name, &header)
+            .sheet()?;
+    }
+    sheet
+        .write_string(1, 0, "Tea for staff")
+        .sheet()?;
+    sheet.write_string(1, 1, "Food").sheet()?;
+    sheet.write_number(1, 2, 250.0).sheet()?;
+    sheet.set_freeze_panes(1, 0).sheet()?;
+    set_widths(sheet, &[36.0, 16.0, 12.0])?;
+
+    let guide = workbook.add_worksheet();
+    guide.set_name("Guide").sheet()?;
+    let mut lines = vec![
+        "One row per expense. Description and category are required; amount is a whole number.".into(),
+        "Import adds these lines to the open cash draft. Save draft or close the day afterwards.".into(),
+        format!("Categories: {}.", EXPENSE_CATEGORIES.join(", ")),
+        "Keep at most 40 expense lines on a shift.".into(),
+    ];
+    for (index, line) in lines.drain(..).enumerate() {
+        guide
+            .write_string_with_format(index as u32, 0, &line, &wrap)
+            .sheet()?;
+    }
+    guide.set_column_width(0, 110).sheet()?;
+    workbook.save_to_buffer().sheet()
+}
+
+pub fn parse_cash_expenses_workbook(bytes: &[u8]) -> Result<Vec<CashExpenseRow>, AppError> {
+    let mut book = open_book(bytes)?;
+    let Some(range) = named_range(&mut book, "Expenses")? else {
+        return Err(AppError::BadRequest(
+            "The workbook needs an Expenses sheet. Export a fresh template to get the columns."
+                .into(),
+        ));
+    };
+    let rows = read_rows(&range);
+    if rows.is_empty() {
+        return Err(AppError::BadRequest("The Expenses sheet is empty.".into()));
+    }
+    let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
+    let description_col = column(&header, &["description", "desc", "detail"])
+        .ok_or_else(|| AppError::BadRequest("Add a description column.".into()))?;
+    let category_col = column(&header, &["category", "type"])
+        .ok_or_else(|| AppError::BadRequest("Add a category column.".into()))?;
+    let amount_col = column(&header, &["amount", "rupees", "total"])
+        .ok_or_else(|| AppError::BadRequest("Add an amount column.".into()))?;
+
+    let mut expenses = Vec::new();
+    let mut errors = Vec::new();
+    for (row_no, row) in rows.iter().skip(1) {
+        let description = cell_text(row, Some(description_col)).trim().to_string();
+        let category = cell_text(row, Some(category_col)).trim().to_string();
+        let amount_text = cell_text(row, Some(amount_col)).trim().to_string();
+        if description.is_empty() && category.is_empty() && amount_text.is_empty() {
+            continue;
+        }
+        let label = format!("Expenses row {row_no}");
+        if description.is_empty() {
+            errors.push(format!("{label}: enter a description."));
+            continue;
+        }
+        if description.chars().count() > 80 {
+            errors.push(format!("{label}: description is too long."));
+            continue;
+        }
+        if !EXPENSE_CATEGORIES.iter().any(|entry| *entry == category) {
+            errors.push(format!("{label}: choose a listed category."));
+            continue;
+        }
+        let Ok(amount) = amount_text.parse::<i64>() else {
+            errors.push(format!("{label}: amount is a whole number."));
+            continue;
+        };
+        if !(0..=1_000_000_000).contains(&amount) {
+            errors.push(format!("{label}: amount is a whole number."));
+            continue;
+        }
+        expenses.push(CashExpenseRow {
+            description,
+            category,
+            amount,
+        });
+    }
+    if !errors.is_empty() {
+        return Err(sheet_errors(errors));
+    }
+    if expenses.is_empty() {
+        return Err(AppError::BadRequest("No expense rows to import.".into()));
+    }
+    if expenses.len() > 40 {
+        return Err(AppError::BadRequest("Keep the expenses to 40 lines.".into()));
+    }
+    Ok(expenses)
+}
+
 pub async fn import_categories(
     pool: &PgPool,
     shop: &ShopConfig,
     bytes: &[u8],
+    allow_remove: bool,
 ) -> Result<CategoryImport, AppError> {
     let mut book = open_book(bytes)?;
     let Some(range) = named_range(&mut book, "Categories")? else {
@@ -665,6 +788,11 @@ pub async fn import_categories(
     let mut drafts = parse_categories(&header, &rows, &mut errors);
     if errors.is_empty() {
         bind_categories(&mut drafts, &existing, &mut errors);
+    }
+    if !allow_remove && drafts.iter().any(|draft| draft.remove) {
+        return Err(AppError::Forbidden(
+            "Only a manager can remove categories from the workbook.".into(),
+        ));
     }
     if !errors.is_empty() {
         return Err(sheet_errors(errors));

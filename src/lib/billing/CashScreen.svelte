@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { closeCashShift, loadCashDesk, openCashShift, saveCashDraft } from '../api'
+  import { closeCashShift, downloadWorkbook, importCashExpensesWorkbook, loadCashDesk, openCashShift, saveCashDraft } from '../api'
   import { formatMoney } from '../money'
   import { printCashShift } from '../print'
   import type { CashDesk, CashShift } from '../types'
@@ -36,6 +36,9 @@
   let taken = $state('')
   let manual = $state('')
   let hydratedId = $state<number | null>(null)
+  let sheetBusy = $state(false)
+  let sheetNote = $state('')
+  let sheetError = $state('')
 
   onMount(() => {
     refresh()
@@ -191,6 +194,45 @@
       printingId = null
     }
   }
+
+  async function exportExpenses() {
+    sheetError = ''
+    sheetNote = ''
+    sheetBusy = true
+    try {
+      await downloadWorkbook('/api/cash/expenses/export', 'cash-expenses.xlsx')
+      sheetNote = 'The expense template downloaded.'
+    } catch (reason) {
+      sheetError = reason instanceof Error ? reason.message : 'The workbook did not download.'
+    } finally {
+      sheetBusy = false
+    }
+  }
+
+  async function importExpenses(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    sheetError = ''
+    sheetNote = ''
+    sheetBusy = true
+    try {
+      const result = await importCashExpensesWorkbook(file)
+      const filled = lines.filter((line) => line.description.trim() || line.amount.trim())
+      const imported = result.expenses.map((expense) => ({
+        description: expense.description,
+        category: expenseCategories.includes(expense.category) ? expense.category : 'Other',
+        amount: String(expense.amount),
+      }))
+      lines = [...filled, ...imported, blankExpense()]
+      sheetNote = `Added ${imported.length} expense ${imported.length === 1 ? 'line' : 'lines'} from the workbook.`
+    } catch (reason) {
+      sheetError = reason instanceof Error ? reason.message : 'The workbook was not imported.'
+    } finally {
+      sheetBusy = false
+    }
+  }
 </script>
 
 <div class="stock-board cash-board">
@@ -222,6 +264,15 @@
         <span>{money(desk.open.sales)}</span>
       </p>
       <p class="stock-label">Expenses</p>
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        <button type="button" class="inline-flex h-[46px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900" disabled={sheetBusy || saving} onclick={exportExpenses}>Export template</button>
+        <label class="mt-0 inline-flex h-[46px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-extrabold leading-none whitespace-nowrap text-slate-900">
+          Import Excel
+          <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={sheetBusy || saving} onchange={importExpenses} />
+        </label>
+      </div>
+      {#if sheetNote}<p class="mt-2 text-[12px] font-bold text-emerald-700">{sheetNote}</p>{/if}
+      {#if sheetError}<p class="field-error">{sheetError}</p>{/if}
       {#each lines as line, index (index)}
         <div class="mt-2 rounded-xl border border-slate-200 p-3">
           <label class="mt-0">
@@ -283,29 +334,93 @@
     <div class="summary-head">
       <div>
         <h2>Closed shifts</h2>
-        <p class="hint">Each closing keeps the count that was saved</p>
+        <p class="hint">Every figure from the closing slip</p>
       </div>
     </div>
-    <div class="stock-table-wrap">
+    <div class="stock-table-wrap shift-cards">
       {#if desk && desk.history.length === 0}
         <p class="hint">No shift has been closed yet.</p>
       {:else if desk}
         {#each desk.history as shift (shift.id)}
-          <article class="ledger-row">
-            <div>
-              <strong>{shift.closed_at}</strong>
-              <p>{shift.closed_by ?? shift.opened_by}</p>
-              <div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] font-bold text-slate-600">
-                <span>Sales {money(shift.sales)}</span>
-                <span>Expenses {money(shift.expenses ?? 0)}</span>
-                <span>Manual {money(shift.manual_count ?? 0)}</span>
-                <span>Left {money(shift.cash_left ?? 0)}</span>
-                <span class={shift.difference === 0 ? 'text-emerald-700' : 'text-rose-700'}>Difference {money(shift.difference ?? 0)}</span>
+          <article class="shift-card">
+            <header class="shift-card-head">
+              <div>
+                <strong>{shift.closed_at ?? 'Closed'}</strong>
+                <p>
+                  Opened {shift.opened_at} by {shift.opened_by}
+                  {#if shift.closed_by}
+                    · Closed by {shift.closed_by}
+                  {/if}
+                </p>
+              </div>
+              <div class="shift-card-actions">
+                <span class="shift-diff {shift.difference === 0 ? 'ok' : 'off'}">
+                  {shift.difference === 0 ? 'Balanced' : `Diff ${money(shift.difference ?? 0)}`}
+                </span>
+                <button
+                  type="button"
+                  class="inline-flex h-9 shrink-0 items-center rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-900"
+                  disabled={printingId === shift.id}
+                  onclick={() => printShift(shift.id)}
+                >
+                  {printingId === shift.id ? 'Printing…' : 'Print'}
+                </button>
+              </div>
+            </header>
+
+            <div class="shift-metrics">
+              <div>
+                <span>Previous till</span>
+                <strong>{money(shift.opening_cash)}</strong>
+              </div>
+              <div>
+                <span>Petty cash</span>
+                <strong>{money(shift.petty_cash)}</strong>
+              </div>
+              <div>
+                <span>Cash sales</span>
+                <strong>{money(shift.sales)}</strong>
+              </div>
+              <div>
+                <span>Expenses</span>
+                <strong>{money(shift.expenses ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Cash taken out</span>
+                <strong>{money(shift.cash_taken ?? 0)}</strong>
+              </div>
+              <div>
+                <span>System count</span>
+                <strong>{money(shift.system_count ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Manual count</span>
+                <strong>{money(shift.manual_count ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Cash left</span>
+                <strong>{money(shift.cash_left ?? 0)}</strong>
               </div>
             </div>
-            <button type="button" class="inline-flex h-9 shrink-0 items-center rounded-lg border border-slate-300 bg-white px-2 text-xs font-extrabold text-slate-900" disabled={printingId === shift.id} onclick={() => printShift(shift.id)}>
-              {printingId === shift.id ? 'Printing…' : 'Print'}
-            </button>
+
+            {#if shift.lines.length}
+              <div class="shift-expenses">
+                <p class="shift-expenses-label">Expense lines</p>
+                <ul>
+                  {#each shift.lines as line, index (`${shift.id}-${index}`)}
+                    <li>
+                      <div>
+                        <strong>{line.description}</strong>
+                        <span>{line.category}</span>
+                      </div>
+                      <em>{money(line.amount)}</em>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {:else}
+              <p class="shift-expenses-empty">No expenses recorded on this shift.</p>
+            {/if}
           </article>
         {/each}
       {/if}

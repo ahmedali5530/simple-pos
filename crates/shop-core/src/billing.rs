@@ -994,3 +994,63 @@ pub async fn post_bill(
         pos,
     })
 }
+
+/// Manager void: delete a posted bill and put stock back.
+pub async fn void_bill(pool: &PgPool, id: i32) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    let bill = sqlx::query_as::<_, (String,)>("SELECT bill_no FROM bills WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some((bill_no,)) = bill else {
+        return Err(AppError::NotFound("That bill is no longer on record.".into()));
+    };
+    let lines = sqlx::query_as::<_, (i32, i32, i32)>(
+        "SELECT item_id, qty, units FROM bill_lines WHERE bill_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut restore: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    for (item_id, qty, units) in lines {
+        let stock_units = qty.checked_mul(units).ok_or_else(|| {
+            AppError::BadRequest("That bill takes too much stock to reverse.".into())
+        })?;
+        let entry = restore.entry(item_id).or_insert(0);
+        *entry = entry.checked_add(stock_units).ok_or_else(|| {
+            AppError::BadRequest("That bill takes too much stock to reverse.".into())
+        })?;
+    }
+
+    sqlx::query("UPDATE stock_movements SET bill_id = NULL WHERE bill_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    for (item_id, stock_units) in &restore {
+        sqlx::query("UPDATE items SET stock = stock + $1 WHERE id = $2")
+            .bind(stock_units)
+            .bind(item_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO stock_movements (item_id, qty, reason, bill_id)
+            VALUES ($1, $2, $3, NULL)
+            "#,
+        )
+        .bind(item_id)
+        .bind(stock_units)
+        .bind(format!("Void bill {bill_no}"))
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query("DELETE FROM bills WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}

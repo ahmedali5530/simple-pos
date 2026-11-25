@@ -11,12 +11,13 @@ mod sheets;
 pub use billing::{
     clear_item_image, connect, current_shop, item_image_ext, load_pos, post_bill, save_item, set_item_image,
     set_item_prompt,
-    set_pos_focus, set_pos_sections,
+    set_pos_focus, set_pos_sections, void_bill,
 };
 pub use sqlx::PgPool;
 pub use error::{AppError, ErrorBody};
 pub use sheets::{
-    export_categories, export_items, export_movements, import_categories, import_items, import_movements,
+    export_cash_expenses_template, export_categories, export_items, export_movements,
+    import_categories, import_items, import_movements, parse_cash_expenses_workbook, CashExpenseRow,
     CategoryImport, ItemImport, MovementImport,
 };
 pub use ledger::{
@@ -25,9 +26,9 @@ pub use ledger::{
 };
 pub use cash::{cash_desk, load_shift, open_shift, save_shift, CashDesk, CashExpense, CashShift, OpenShift, ShiftForm};
 pub use admin::{
-    login, logout, needs_first_user, open_session, remove_category, remove_section, remove_user,
-    reorder_categories,
-    reorder_sections, save_category, save_section, save_settings, save_user,
+    ensure_manager, login, logout, needs_first_user, open_session, remove_category, remove_item,
+    remove_section, remove_user, reorder_categories, reorder_sections, save_category, save_section,
+    save_settings, save_user,
 };
 pub use print::{
     print_cash_shift, print_product_mix, print_saved_bill, print_test, PrintOutcome, PrintRequest,

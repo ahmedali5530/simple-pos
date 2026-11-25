@@ -140,6 +140,15 @@ pub async fn save_section(
     })
 }
 
+pub fn ensure_manager(role: &str) -> Result<(), AppError> {
+    if role != "manager" {
+        return Err(AppError::Forbidden(
+            "Only a manager can remove this.".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn remove_section(
     pool: &PgPool,
     shop: &ShopConfig,
@@ -293,6 +302,46 @@ pub async fn remove_category(
         .bind(id)
         .execute(pool)
         .await?;
+    load_pos(pool, shop).await
+}
+
+pub async fn remove_item(
+    pool: &PgPool,
+    shop: &ShopConfig,
+    id: i32,
+) -> Result<PosSnapshot, AppError> {
+    let active = sqlx::query_scalar::<_, bool>("SELECT active FROM items WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(active) = active else {
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
+    };
+    if !active {
+        return Err(AppError::BadRequest("That item is already removed.".into()));
+    }
+    let bill_lines = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bill_lines WHERE item_id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+    let movements =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stock_movements WHERE item_id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    if bill_lines > 0 || movements > 0 {
+        sqlx::query("UPDATE items SET active = FALSE WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM items WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
     load_pos(pool, shop).await
 }
 

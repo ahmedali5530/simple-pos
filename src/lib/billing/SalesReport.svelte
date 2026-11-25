@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { loadReports } from '../api'
+  import { loadReports, removeBill } from '../api'
   import { formatCost, formatMoney } from '../money'
   import type { ReportSpan } from '../range'
+  import { session } from '../session.svelte'
   import type { Reports } from '../types'
   import ReportRange from './ReportRange.svelte'
   import VirtualTable from './VirtualTable.svelte'
@@ -18,6 +19,11 @@
   let headId = $state('all')
   let query = $state('')
   let openBill = $state<number | null>(null)
+  let confirmVoid = $state<number | null>(null)
+  let voiding = $state<number | null>(null)
+  let lastSpan = $state<Extract<ReportSpan, { kind: 'ready' }> | null>(null)
+  const isManager = $derived(session.user?.role === 'manager')
+  const billColumns = $derived(isManager ? 8 : 7)
 
   function money(amount: number) {
     return formatMoney(amount, currency, locale)
@@ -57,11 +63,29 @@
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
     error = ''
+    lastSpan = span
     try {
       report = await loadReports(span.from, span.to)
     } catch (reason) {
       report = null
       error = reason instanceof Error ? reason.message : 'The report did not open.'
+    }
+  }
+
+  async function voidPosted(id: number) {
+    if (!isManager) return
+    voiding = id
+    error = ''
+    try {
+      await removeBill(id)
+      confirmVoid = null
+      if (openBill === id) openBill = null
+      if (lastSpan) await reload(lastSpan)
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : 'That bill could not be voided.'
+      confirmVoid = null
+    } finally {
+      voiding = null
     }
   }
 </script>
@@ -135,7 +159,7 @@
         </label>
       </div>
       <input class="mb-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search bills" bind:value={query} />
-      <VirtualTable class="report-scroll" tableClass="bill-log" items={bills} estimate={58} columns={7} reset="{headId}:{query}" key={(bill) => bill.id}>
+      <VirtualTable class="report-scroll" tableClass="bill-log" items={bills} estimate={58} columns={billColumns} reset="{headId}:{query}:{isManager}" key={(bill) => bill.id}>
         {#snippet header()}
           <tr>
             <th>Bill #</th>
@@ -145,6 +169,7 @@
             <th>Total</th>
             <th>Profit</th>
             <th>Receipt</th>
+            {#if isManager}<th>Void</th>{/if}
           </tr>
         {/snippet}
         {#snippet row(bill)}
@@ -169,10 +194,28 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6c4.5 0 8 3.2 9.2 6-1.2 2.8-4.7 6-9.2 6S4 14.8 2.8 12C4 9.2 7.5 6 12 6zm0 2.2A3.8 3.8 0 1 0 12 15.8 3.8 3.8 0 0 0 12 8.2zm0 1.6a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4z" /></svg>
               </button>
             </td>
+            {#if isManager}
+              <td>
+                {#if confirmVoid === bill.id}
+                  <button type="button" class="link" disabled={voiding === bill.id} onclick={() => voidPosted(bill.id)}>
+                    {voiding === bill.id ? 'Voiding…' : 'Confirm void'}
+                  </button>
+                  <button type="button" class="ghost light" disabled={voiding === bill.id} onclick={() => (confirmVoid = null)}>Cancel</button>
+                {:else}
+                  <button
+                    type="button"
+                    class="link"
+                    disabled={voiding != null}
+                    title="Removes this bill and puts stock back."
+                    onclick={() => (confirmVoid = bill.id)}
+                  >Void</button>
+                {/if}
+              </td>
+            {/if}
           </tr>
           {#if openBill === bill.id}
             <tr class="receipt-lines">
-              <td colspan="7">
+              <td colspan={billColumns}>
                 {#each bill.lines as line, index (`${bill.id}-${index}`)}
                   <span>{line.name} ×{line.qty}</span>
                   <strong>{money(line.amount)}</strong>

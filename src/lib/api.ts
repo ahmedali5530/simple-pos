@@ -130,6 +130,14 @@ export function removeCategory(id: number): Promise<PosSnapshot> {
   return request(`/api/categories/${id}`, { method: 'DELETE' })
 }
 
+export function removeItem(id: number): Promise<PosSnapshot> {
+  return request(`/api/items/${id}`, { method: 'DELETE' })
+}
+
+export function removeBill(id: number): Promise<{ ok: boolean }> {
+  return request(`/api/bills/${id}`, { method: 'DELETE' })
+}
+
 export function orderCategories(ids: number[]): Promise<PosSnapshot> {
   return request('/api/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) })
 }
@@ -282,6 +290,16 @@ export function saveCashDraft(body: CashShiftBody): Promise<CashDesk> {
 
 export function closeCashShift(body: CashShiftBody): Promise<CashDesk> {
   return request('/api/cash/close', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export interface CashExpenseImport {
+  expenses: { description: string; category: string; amount: number }[]
+}
+
+export function importCashExpensesWorkbook(file: File): Promise<CashExpenseImport> {
+  const body = new FormData()
+  body.append('file', file)
+  return request('/api/cash/expenses/import', { method: 'POST', body })
 }
 
 export function login(name: string, password: string): Promise<PosUser & { token: string }> {

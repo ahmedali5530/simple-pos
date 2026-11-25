@@ -829,6 +829,159 @@ td {
 .cash-board {
   grid-template-columns: minmax(max(390px, 40%), 2fr) minmax(0, 3fr);
 }
+.shift-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+.shift-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #fff;
+  padding: 14px 16px 16px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+.shift-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.shift-card-head strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.shift-card-head p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.shift-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.shift-diff {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.shift-diff.ok {
+  background: #dcfce7;
+  color: #15803d;
+}
+.shift-diff.off {
+  background: #ffe4e6;
+  color: #be123c;
+}
+.shift-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+.shift-metrics > div {
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.shift-metrics span {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+.shift-metrics strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  word-break: break-word;
+}
+.shift-expenses {
+  margin-top: 14px;
+  border-top: 1px solid #eef2f6;
+  padding-top: 12px;
+}
+.shift-expenses-label {
+  margin: 0 0 8px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.shift-expenses ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shift-expenses li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+.shift-expenses li strong {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+.shift-expenses li span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+}
+.shift-expenses li em {
+  font-style: normal;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.shift-expenses-empty {
+  margin: 12px 0 0;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+}
+@media (max-width: 1100px) {
+  .shift-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .shift-card-head {
+    flex-direction: column;
+  }
+  .shift-card-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
 .stock-form,
 .stock-summary {
   min-width: 0;

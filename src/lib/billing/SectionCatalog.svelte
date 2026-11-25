@@ -1,5 +1,6 @@
 <script lang="ts">
   import { orderSections, removeSection, saveSection } from '../api'
+  import { session } from '../session.svelte'
   import type { PosSnapshot, SectionChoice, SectionKind } from '../types'
 
   interface Props {
@@ -9,6 +10,7 @@
   }
 
   let { sections, counts, onChange }: Props = $props()
+  const isManager = $derived(session.user?.role === 'manager')
 
   let editing = $state<number | 'new' | null>(null)
   let loaded = $state<number | 'new' | null>(null)
@@ -143,7 +145,7 @@
       </label>
       {#if formError}<p class="field-error">{formError}</p>{/if}
       <div class="sheet-actions">
-        {#if editing !== 'new'}
+        {#if isManager && editing !== 'new'}
           {#if confirmRemove}
             <button type="button" class="link" disabled={saving} onclick={remove}>Remove section</button>
             <button type="button" class="ghost light" disabled={saving} onclick={() => (confirmRemove = false)}>Cancel</button>
