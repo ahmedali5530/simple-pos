@@ -19,11 +19,30 @@
   let loadedPath = $state('')
   let loaded = $state<{ default: import('svelte').Component } | null>(null)
   let openGroup = $state<string | null>(null)
+  let openSettingsGroup = $state<string | null>(null)
   let navEl = $state<HTMLElement | null>(null)
   const page = $derived(pageForPath(location.path, enabled, compiled))
   const reports = $derived(reportPagesForEnabled(enabled, compiled))
   const inSettings = $derived(location.path.startsWith('/settings'))
   const inReports = $derived(location.path.startsWith('/reports'))
+
+  function settingsGroupActive(entry: UiSettingsPage) {
+    return (entry.children ?? []).some((child) => child.href === location.path)
+  }
+
+  function toggleSettingsGroup(id: string) {
+    openSettingsGroup = openSettingsGroup === id ? null : id
+  }
+
+  // Keep the group that owns the current settings page open.
+  $effect(() => {
+    if (!inSettings) {
+      openSettingsGroup = null
+      return
+    }
+    const active = settingsPages.find((entry) => settingsGroupActive(entry))
+    if (active) openSettingsGroup = active.id
+  })
 
   $effect(() => {
     const current = page
@@ -128,7 +147,7 @@
               onclick={() => toggleGroup(item.id)}
             >
               {item.label}
-              <span class="chevron" aria-hidden="true">⌄</span>
+              <span class="chevron" aria-hidden="true"></span>
             </button>
             {#if openGroup === item.id}
               <div class="nav-menu" role="menu" aria-label={item.label}>
@@ -162,8 +181,39 @@
   {#if inSettings}
     <div class="settings">
       <nav class="settings-nav" aria-label="Settings">
-        {#each settingsPages as entry (entry.href)}
-          <a href={entry.href} class:active={location.path === entry.href} onclick={(event) => followLink(event, entry.href)}>{entry.label}</a>
+        {#each settingsPages as entry (entry.id)}
+          {#if entry.children?.length}
+            {@const open = openSettingsGroup === entry.id}
+            <div class="settings-group" class:open>
+              <button
+                type="button"
+                class="settings-toggle"
+                class:active={settingsGroupActive(entry)}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                onclick={() => toggleSettingsGroup(entry.id)}
+              >
+                {entry.label}
+                <span class="chevron" aria-hidden="true"></span>
+              </button>
+              {#if open}
+                <div class="settings-menu" role="menu" aria-label={entry.label}>
+                  {#each entry.children as child (child.id)}
+                    {#if child.href}
+                      <a
+                        role="menuitem"
+                        href={child.href}
+                        class:active={location.path === child.href}
+                        onclick={(event) => followLink(event, child.href!)}
+                      >{child.label}</a>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {:else if entry.href}
+            <a href={entry.href} class:active={location.path === entry.href} onclick={(event) => followLink(event, entry.href!)}>{entry.label}</a>
+          {/if}
         {/each}
       </nav>
       <div class="settings-body">

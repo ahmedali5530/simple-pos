@@ -4,7 +4,7 @@
   import { session } from './session.svelte'
   import { request } from './http'
   import { filterNav, type PlatformManifest, type UiNavItem, type UiSettingsPage } from './registry'
-  import { navForEnabled, settingsForEnabled } from '../plugins/registry'
+  import { firstSettingsHref, navForEnabled, settingsForEnabled } from '../plugins/registry'
   import { prepareItemOptions, resetItemOptions } from './itemOptions'
   import {
     markPluginsReady,
@@ -39,11 +39,12 @@
       if (item.id === 'settings') return settingsPages.length > 0
       return true
     })
-    if (!items.some((item) => item.id === 'settings') && settingsPages.length > 0) {
+    const settingsHome = firstSettingsHref(settingsPages)
+    if (!items.some((item) => item.id === 'settings') && settingsHome) {
       items.push({
         id: 'settings',
         label: 'Settings',
-        href: settingsPages[0].href,
+        href: settingsHome,
         order: 50,
       })
     }
@@ -55,8 +56,9 @@
       history.replaceState(null, '', '/login')
       location.path = '/login'
     } else if (session.user && location.path === '/login') {
-      history.replaceState(null, '', '/billing')
-      location.path = '/billing'
+      const first = nav.length ? nav[0].href : '/settings/system'
+      history.replaceState(null, '', first)
+      location.path = first
     }
   })
 
@@ -85,7 +87,7 @@
 {#if session.user}
   <Shell {nav} {settingsPages} {enabled} {compiled} />
 {:else}
-  <LoginScreen />
+  <LoginScreen {nav} />
 {/if}
 
 {#if manifest}

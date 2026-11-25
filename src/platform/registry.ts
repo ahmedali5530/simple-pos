@@ -12,9 +12,11 @@ export interface UiNavItem {
 export interface UiSettingsPage {
   id: string
   label: string
-  href: string
+  /** Empty or absent when the row is only a group that opens `children`. */
+  href?: string
   permission?: string
   order: number
+  children?: UiSettingsPage[]
 }
 
 export interface UiReportPage {

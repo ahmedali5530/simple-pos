@@ -1,4 +1,4 @@
-import type { UiNavItem, UiPlugin, UiSlotContribution } from '../platform/registry'
+import type { UiNavItem, UiPlugin, UiSettingsPage, UiSlotContribution } from '../platform/registry'
 import { enabledPlugins } from '../platform/enabled.svelte'
 
 /**
@@ -34,7 +34,7 @@ function discover(): UiPlugin[] {
 /** Discovered UI plugin registry — mirrors Rust static linking. */
 export const uiPlugins: UiPlugin[] = discover()
 
-if (import.meta.env.DEV) {
+  if (import.meta.env.DEV) {
   const claims = new Map<string, string>()
   const claim = (href: string, owner: string) => {
     const existing = claims.get(href)
@@ -45,7 +45,10 @@ if (import.meta.env.DEV) {
   }
   for (const plugin of uiPlugins) {
     for (const href of navHrefs(plugin.nav)) claim(href, plugin.id)
-    for (const page of [...plugin.settingsPages, ...plugin.reportPages]) claim(page.href, plugin.id)
+    for (const href of settingsHrefs(plugin.settingsPages)) claim(href, plugin.id)
+    for (const page of plugin.reportPages) {
+      if (page.href) claim(page.href, plugin.id)
+    }
   }
 }
 
@@ -95,6 +98,16 @@ export function settingsForEnabled(enabled: Set<string>, compiled: Set<string>) 
     .sort((a, b) => a.order - b.order)
 }
 
+/** First navigable settings href (walks into groups). */
+export function firstSettingsHref(pages: UiSettingsPage[]): string | null {
+  for (const page of pages) {
+    if (page.href) return page.href
+    const nested = firstSettingsHref(page.children ?? [])
+    if (nested) return nested
+  }
+  return null
+}
+
 export function staticManifestNav() {
   return uiPlugins.flatMap((p) => p.nav).sort((a, b) => a.order - b.order)
 }
@@ -134,13 +147,20 @@ function navHrefs(items: UiNavItem[]): string[] {
   ])
 }
 
+function settingsHrefs(items: UiSettingsPage[]): string[] {
+  return items.flatMap((item) => [
+    ...(item.href ? [item.href] : []),
+    ...settingsHrefs(item.children ?? []),
+  ])
+}
+
 /** The plugin that owns a screen. Null means the path is not a plugin screen. */
 export function pluginForPath(path: string): string | null {
   for (const plugin of uiPlugins) {
     const hrefs = [
       ...navHrefs(plugin.nav),
-      ...plugin.settingsPages.map((page) => page.href),
-      ...plugin.reportPages.map((page) => page.href),
+      ...settingsHrefs(plugin.settingsPages),
+      ...plugin.reportPages.map((page) => page.href).filter(Boolean),
     ]
     if (hrefs.some((href) => path === href || path.startsWith(`${href}/`))) return plugin.id
     if (plugin.reportPages.length > 0 && (path === '/reports' || path.startsWith('/reports/'))) return plugin.id

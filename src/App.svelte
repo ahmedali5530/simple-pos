@@ -3,5 +3,5 @@
   import AppShell from './platform/AppShell.svelte'
 </script>
 
-<Toaster position="top-center" richColors closeButton />
+<Toaster position="top-right" richColors closeButton />
 <AppShell />
