@@ -1,34 +1,22 @@
 <script lang="ts">
-  import { savePrinter } from '../../../lib/api'
-  import type { PosSnapshot } from '../../../lib/types'
+  import { onMount } from 'svelte'
+  import { loadPrinterSettings, savePrinter } from '../../../lib/api'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Select, Switch } from '../../../lib/ui'
-
-  interface Props {
-    snapshot: PosSnapshot
-    onChange: (pos: PosSnapshot) => void
-  }
-
-  let { snapshot, onChange }: Props = $props()
 
   let printEnabled = $state(false)
   let printerKind = $state('network')
   let printerTarget = $state('')
   let printerPort = $state('9100')
-  let loaded = $state('')
   let saving = $state(false)
 
-  const key = $derived(
-    `${snapshot.printer.enabled}|${snapshot.printer.kind}|${snapshot.printer.target}|${snapshot.printer.port}`,
-  )
-
-  $effect(() => {
-    if (loaded === key) return
-    loaded = key
-    printEnabled = snapshot.printer.enabled
-    printerKind = snapshot.printer.kind
-    printerTarget = snapshot.printer.target
-    printerPort = String(snapshot.printer.port)
+  onMount(() => {
+    loadPrinterSettings().then((settings) => {
+      printEnabled = settings.enabled
+      printerKind = settings.kind
+      printerTarget = settings.target
+      printerPort = String(settings.port)
+    }).catch((error: unknown) => toastError(error, 'Could not load printer settings.'))
   })
 
   async function save() {
@@ -46,14 +34,16 @@
     }
     saving = true
     try {
-      onChange(
-        await savePrinter({
+      const settings = await savePrinter({
           print_enabled: printEnabled,
           printer_kind: printerKind,
           printer_target: printerTarget.trim(),
           printer_port: Number(printerPort),
-        }),
-      )
+      })
+      printEnabled = settings.enabled
+      printerKind = settings.kind
+      printerTarget = settings.target
+      printerPort = String(settings.port)
       toastSaved('Printer saved.')
     } catch (error) {
       toastError(error, 'Could not save the printer.')

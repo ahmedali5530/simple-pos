@@ -2,7 +2,7 @@ import { defineUiPlugin } from '../../platform/registry'
 
 export const printingPlugin = defineUiPlugin({
   id: 'printing',
-  permissions: ['printing.use'],
+  permissions: ['printing.use', 'settings.write'],
   nav: [],
   settingsPages: [
     { id: 'printing', label: 'Printing', href: '/settings/printing', permission: 'settings.write', order: 55 },
