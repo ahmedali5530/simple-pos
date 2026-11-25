@@ -6,6 +6,7 @@ use rust_xlsxwriter::{Color, Format, Workbook};
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
 
+use inventory_contract::{MovementExportRow, MovementImportDraft};
 use platform_kernel::error::AppError;
 
 const MAX_ROWS: usize = 5000;
@@ -16,11 +17,6 @@ pub struct ItemImport {
     pub updated: i64,
     pub options: i64,
     pub counted: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MovementImport {
-    pub applied: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,7 +31,6 @@ pub struct CategoryImport {
 struct LoadedItem {
     id: i32,
     barcode: Option<String>,
-    name: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -86,14 +81,6 @@ struct OptionDraft {
     remove: bool,
 }
 
-struct MoveDraft {
-    row: u32,
-    item_id: i32,
-    item_name: String,
-    qty: i32,
-    note: String,
-}
-
 struct CategoryDraft {
     row: u32,
     id: Option<i32>,
@@ -106,10 +93,12 @@ pub async fn export_items(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>,
         r#"
         SELECT
             i.id, i.barcode, i.name, s.short_name AS section, c.name AS category,
-            i.rate, i.avg_cost, i.prompt, i.base_rate, i.scale, i.stock
+            i.rate, COALESCE(b.avg_cost, 0) AS avg_cost, i.prompt, i.base_rate, i.scale,
+            COALESCE(b.stock, 0) AS stock
         FROM items i
         JOIN sections s ON s.id = i.section_id
         JOIN categories c ON c.id = i.category_id
+        LEFT JOIN inventory_balances b ON b.item_id = i.id
         WHERE i.active
         ORDER BY s.pos_order, i.sort_order, i.id
         "#,
@@ -132,22 +121,43 @@ pub async fn export_items(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>,
     .await?;
 
     let mut workbook = Workbook::new();
-    let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
+    let header = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0xE2E8F0));
     let text = Format::new().set_num_format("@");
     let wrap = Format::new().set_text_wrap();
 
     let items_sheet = workbook.add_worksheet();
     items_sheet.set_name("Items").sheet()?;
     let item_headers = [
-        "id", "barcode", "name", "section", "category", "rate", "cost", "prompt", "base_rate", "scale", "stock", "counted",
+        "id",
+        "barcode",
+        "name",
+        "section",
+        "category",
+        "rate",
+        "cost",
+        "prompt",
+        "base_rate",
+        "scale",
+        "stock",
+        "counted",
     ];
     for (col, name) in item_headers.iter().enumerate() {
-        items_sheet.write_string_with_format(0, col as u16, *name, &header).sheet()?;
+        items_sheet
+            .write_string_with_format(0, col as u16, *name, &header)
+            .sheet()?;
     }
     for (index, item) in items.iter().enumerate() {
         let row = (index + 1) as u32;
         items_sheet.write_number(row, 0, item.id as f64).sheet()?;
-        write_text(items_sheet, row, 1, item.barcode.as_deref().unwrap_or(""), &text)?;
+        write_text(
+            items_sheet,
+            row,
+            1,
+            item.barcode.as_deref().unwrap_or(""),
+            &text,
+        )?;
         items_sheet.write_string(row, 2, &item.name).sheet()?;
         items_sheet.write_string(row, 3, &item.section).sheet()?;
         items_sheet.write_string(row, 4, &item.category).sheet()?;
@@ -157,33 +167,77 @@ pub async fn export_items(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>,
         if let Some(base) = item.base_rate {
             items_sheet.write_number(row, 8, base as f64).sheet()?;
         }
-        items_sheet.write_number(row, 9, item.scale as f64).sheet()?;
-        items_sheet.write_number(row, 10, item.stock as f64).sheet()?;
+        items_sheet
+            .write_number(row, 9, item.scale as f64)
+            .sheet()?;
+        items_sheet
+            .write_number(row, 10, item.stock as f64)
+            .sheet()?;
     }
     items_sheet.set_freeze_panes(1, 0).sheet()?;
-    set_widths(items_sheet, &[10.0, 16.0, 28.0, 18.0, 16.0, 10.0, 12.0, 12.0, 12.0, 10.0, 10.0, 12.0])?;
+    set_widths(
+        items_sheet,
+        &[
+            10.0, 16.0, 28.0, 18.0, 16.0, 10.0, 12.0, 12.0, 12.0, 10.0, 10.0, 12.0,
+        ],
+    )?;
 
     let options_sheet = workbook.add_worksheet();
     options_sheet.set_name("Options").sheet()?;
     let option_headers = [
-        "item_id", "item_barcode", "item_name", "option_id", "name", "barcode", "rate", "units", "remove",
+        "item_id",
+        "item_barcode",
+        "item_name",
+        "option_id",
+        "name",
+        "barcode",
+        "rate",
+        "units",
+        "remove",
     ];
     for (col, name) in option_headers.iter().enumerate() {
-        options_sheet.write_string_with_format(0, col as u16, *name, &header).sheet()?;
+        options_sheet
+            .write_string_with_format(0, col as u16, *name, &header)
+            .sheet()?;
     }
     for (index, option) in options.iter().enumerate() {
         let row = (index + 1) as u32;
-        options_sheet.write_number(row, 0, option.item_id as f64).sheet()?;
-        write_text(options_sheet, row, 1, option.item_barcode.as_deref().unwrap_or(""), &text)?;
-        options_sheet.write_string(row, 2, &option.item_name).sheet()?;
-        options_sheet.write_number(row, 3, option.option_id as f64).sheet()?;
+        options_sheet
+            .write_number(row, 0, option.item_id as f64)
+            .sheet()?;
+        write_text(
+            options_sheet,
+            row,
+            1,
+            option.item_barcode.as_deref().unwrap_or(""),
+            &text,
+        )?;
+        options_sheet
+            .write_string(row, 2, &option.item_name)
+            .sheet()?;
+        options_sheet
+            .write_number(row, 3, option.option_id as f64)
+            .sheet()?;
         options_sheet.write_string(row, 4, &option.name).sheet()?;
-        write_text(options_sheet, row, 5, option.barcode.as_deref().unwrap_or(""), &text)?;
-        options_sheet.write_number(row, 6, option.rate as f64).sheet()?;
-        options_sheet.write_number(row, 7, option.units as f64).sheet()?;
+        write_text(
+            options_sheet,
+            row,
+            5,
+            option.barcode.as_deref().unwrap_or(""),
+            &text,
+        )?;
+        options_sheet
+            .write_number(row, 6, option.rate as f64)
+            .sheet()?;
+        options_sheet
+            .write_number(row, 7, option.units as f64)
+            .sheet()?;
     }
     options_sheet.set_freeze_panes(1, 0).sheet()?;
-    set_widths(options_sheet, &[10.0, 16.0, 28.0, 12.0, 16.0, 16.0, 10.0, 10.0, 12.0])?;
+    set_widths(
+        options_sheet,
+        &[10.0, 16.0, 28.0, 12.0, 16.0, 16.0, 10.0, 10.0, 12.0],
+    )?;
 
     let guide = workbook.add_worksheet();
     guide.set_name("Guide").sheet()?;
@@ -201,44 +255,38 @@ pub async fn export_items(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>,
         "Pictures are not part of this workbook.",
     ];
     for (index, line) in lines.iter().enumerate() {
-        guide.write_string_with_format(index as u32, 0, *line, &wrap).sheet()?;
+        guide
+            .write_string_with_format(index as u32, 0, *line, &wrap)
+            .sheet()?;
     }
     guide.set_column_width(0, 110).sheet()?;
     workbook.save_to_buffer().sheet()
 }
 
-pub async fn export_movements(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>, AppError> {
-    let rows = sqlx::query_as::<_, MovementSheetRow>(
-        r#"
-        SELECT
-            m.id,
-            to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS time_utc,
-            i.barcode,
-            i.name AS item,
-            s.short_name AS section,
-            m.qty,
-            m.reason,
-            b.bill_no
-        FROM stock_movements m
-        JOIN items i ON i.id = m.item_id
-        JOIN sections s ON s.id = i.section_id
-        LEFT JOIN bills b ON b.id = m.bill_id
-        ORDER BY m.created_at DESC, m.id DESC
-        LIMIT 5000
-        "#,
-    )
-    .fetch_all(&mut **tx)
-    .await?;
-
+pub fn export_movements(rows: &[MovementExportRow]) -> Result<Vec<u8>, AppError> {
     let mut workbook = Workbook::new();
-    let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
+    let header = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0xE2E8F0));
     let text = Format::new().set_num_format("@");
     let wrap = Format::new().set_text_wrap();
     let sheet = workbook.add_worksheet();
     sheet.set_name("Movements").sheet()?;
-    let headers = ["id", "time_utc", "barcode", "item", "section", "qty", "direction", "note", "bill"];
+    let headers = [
+        "id",
+        "time_utc",
+        "barcode",
+        "item",
+        "section",
+        "qty",
+        "direction",
+        "note",
+        "bill",
+    ];
     for (col, name) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, col as u16, *name, &header).sheet()?;
+        sheet
+            .write_string_with_format(0, col as u16, *name, &header)
+            .sheet()?;
     }
     for (index, row) in rows.iter().enumerate() {
         let line = (index + 1) as u32;
@@ -248,31 +296,39 @@ pub async fn export_movements(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<
         sheet.write_string(line, 3, &row.item).sheet()?;
         sheet.write_string(line, 4, &row.section).sheet()?;
         sheet.write_number(line, 5, row.qty.abs() as f64).sheet()?;
-        sheet.write_string(line, 6, if row.qty < 0 { "out" } else { "in" }).sheet()?;
+        sheet
+            .write_string(line, 6, if row.qty < 0 { "out" } else { "in" })
+            .sheet()?;
         sheet.write_string(line, 7, &row.reason).sheet()?;
         write_text(sheet, line, 8, row.bill_no.as_deref().unwrap_or(""), &text)?;
     }
     sheet.set_freeze_panes(1, 0).sheet()?;
-    set_widths(sheet, &[10.0, 18.0, 16.0, 28.0, 18.0, 10.0, 12.0, 36.0, 14.0])?;
+    set_widths(
+        sheet,
+        &[10.0, 18.0, 16.0, 28.0, 18.0, 10.0, 12.0, 36.0, 14.0],
+    )?;
 
     let guide = workbook.add_worksheet();
     guide.set_name("Guide").sheet()?;
     let lines = [
-        "Rows with an id are history. Import skips them, so uploading this file again does not repeat old movements.",
-        "Add a row with a blank id, the item barcode, a qty, and a note.",
-        "Put in or out in direction and a positive qty. A blank direction uses a positive qty as stock in and a negative qty as stock out.",
-        "You can use the item name instead of a barcode when that name belongs to one item.",
-        "A variant barcode counts against its item. The whole file is saved together.",
-        "This sheet shows the latest 5000 movements.",
+        "Export only. Re-importing a movement workbook is not supported.",
+        "The bill column is the POS bill number for sales movements.",
     ];
     for (index, line) in lines.iter().enumerate() {
-        guide.write_string_with_format(index as u32, 0, *line, &wrap).sheet()?;
+        guide
+            .write_string_with_format(index as u32, 0, *line, &wrap)
+            .sheet()?;
     }
     guide.set_column_width(0, 110).sheet()?;
     workbook.save_to_buffer().sheet()
 }
 
-pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> Result<ItemImport, AppError> {
+pub async fn import_items(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    workbook: Option<&inventory_contract::InventoryWorkbookProvider>,
+    ledger: Option<&inventory_contract::StockLedgerProvider>,
+    bytes: &[u8],
+) -> Result<ItemImport, AppError> {
     let mut book = open_book(bytes)?;
     let Some(items_range) = named_range(&mut book, "Items")? else {
         return Err(AppError::BadRequest(
@@ -282,24 +338,28 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
     let option_range = named_range(&mut book, "Options")?;
     let mut errors = Vec::new();
     let item_rows = read_rows(&items_range);
-    let option_rows = option_range.as_ref().map(|range| read_rows(range)).unwrap_or_default();
+    let option_rows = option_range
+        .as_ref()
+        .map(|range| read_rows(range))
+        .unwrap_or_default();
     if item_rows.len() > MAX_ROWS || option_rows.len() > MAX_ROWS {
-        return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
+        return Err(AppError::BadRequest(
+            "A sheet can hold up to 5000 rows.".into(),
+        ));
     }
 
     let sections = sqlx::query_as::<_, SectionRef>(
         "SELECT id, name, short_name FROM sections ORDER BY pos_order, id",
     )
-    .fetch_all(&mut **tx)
+    .fetch_all(tx.conn())
     .await?;
-    let categories = sqlx::query_as::<_, CategoryRef>("SELECT id, name FROM categories ORDER BY sort_order, id")
-        .fetch_all(&mut **tx)
+    let categories =
+        sqlx::query_as::<_, CategoryRef>("SELECT id, name FROM categories ORDER BY sort_order, id")
+            .fetch_all(tx.conn())
+            .await?;
+    let existing = sqlx::query_as::<_, LoadedItem>("SELECT id, barcode FROM items WHERE active")
+        .fetch_all(tx.conn())
         .await?;
-    let existing = sqlx::query_as::<_, LoadedItem>(
-        "SELECT id, barcode, name FROM items WHERE active",
-    )
-    .fetch_all(&mut **tx)
-    .await?;
     let variants = sqlx::query_as::<_, LoadedVariant>(
         r#"
         SELECT v.id, v.item_id, v.barcode
@@ -308,12 +368,29 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
         WHERE i.active
         "#,
     )
-    .fetch_all(&mut **tx)
+    .fetch_all(tx.conn())
     .await?;
 
-    let item_header = header_map(item_rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
-    let drafts = parse_items(&item_header, &item_rows, &sections, &categories, &existing, &mut errors);
-    let option_header = header_map(option_rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
+    let item_header = header_map(
+        item_rows
+            .first()
+            .map(|(_, row)| row.as_slice())
+            .unwrap_or(&[]),
+    );
+    let drafts = parse_items(
+        &item_header,
+        &item_rows,
+        &sections,
+        &categories,
+        &existing,
+        &mut errors,
+    );
+    let option_header = header_map(
+        option_rows
+            .first()
+            .map(|(_, row)| row.as_slice())
+            .unwrap_or(&[]),
+    );
     let option_drafts = if option_rows.is_empty() {
         Vec::new()
     } else {
@@ -337,8 +414,8 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
                 r#"
                 UPDATE items
                 SET section_id = $1, category_id = $2, name = $3, rate = $4,
-                    prompt = $5, base_rate = $6, scale = $7, avg_cost = COALESCE($8, avg_cost), barcode = NULL
-                WHERE id = $9 AND active
+                    prompt = $5, base_rate = $6, scale = $7, barcode = NULL
+                WHERE id = $8 AND active
                 "#,
             )
             .bind(draft.section_id)
@@ -348,9 +425,8 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             .bind(&draft.prompt)
             .bind(draft.base_rate)
             .bind(draft.scale)
-            .bind(draft.cost)
             .bind(id)
-            .execute(&mut **tx)
+            .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
             id_of_row.insert(draft.row, id);
@@ -360,14 +436,14 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
                 "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM items WHERE section_id = $1",
             )
             .bind(draft.section_id)
-            .fetch_one(&mut **tx)
+            .fetch_one(tx.conn())
             .await?;
             let id = sqlx::query_scalar::<_, i32>(
                 r#"
                 INSERT INTO items (
-                    section_id, category_id, barcode, name, rate, stock, prompt, base_rate, scale, avg_cost, sort_order
+                    section_id, category_id, barcode, name, rate, prompt, base_rate, scale, sort_order
                 )
-                VALUES ($1, $2, NULL, $3, $4, 0, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
                 RETURNING id
                 "#,
             )
@@ -378,9 +454,8 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             .bind(&draft.prompt)
             .bind(draft.base_rate)
             .bind(draft.scale)
-            .bind(draft.cost.unwrap_or(0))
             .bind(sort_order)
-            .fetch_one(&mut **tx)
+            .fetch_one(tx.conn())
             .await
             .map_err(catalog_error)?;
             id_of_row.insert(draft.row, id);
@@ -395,7 +470,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
         sqlx::query("UPDATE items SET barcode = $1 WHERE id = $2")
             .bind(&draft.barcode)
             .bind(id)
-            .execute(&mut **tx)
+            .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
     }
@@ -407,7 +482,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             let deleted = sqlx::query("DELETE FROM item_variants WHERE id = $1 AND item_id = $2")
                 .bind(draft.option_id)
                 .bind(item_id)
-                .execute(&mut **tx)
+                .execute(tx.conn())
                 .await?;
             if deleted.rows_affected() == 0 {
                 return Err(AppError::BadRequest(format!(
@@ -422,7 +497,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             sqlx::query("UPDATE item_variants SET barcode = NULL WHERE id = $1 AND item_id = $2")
                 .bind(option_id)
                 .bind(item_id)
-                .execute(&mut **tx)
+                .execute(tx.conn())
                 .await?;
             let changed = sqlx::query(
                 r#"
@@ -437,7 +512,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             .bind(&draft.barcode)
             .bind(option_id)
             .bind(item_id)
-            .execute(&mut **tx)
+            .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
             if changed.rows_affected() == 0 {
@@ -451,7 +526,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
                 "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM item_variants WHERE item_id = $1",
             )
             .bind(item_id)
-            .fetch_one(&mut **tx)
+            .fetch_one(tx.conn())
             .await?;
             sqlx::query(
                 r#"
@@ -465,11 +540,22 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             .bind(draft.units)
             .bind(&draft.barcode)
             .bind(sort_order)
-            .execute(&mut **tx)
+            .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
         }
         options_saved += 1;
+    }
+
+    if let Some(ledger) = ledger {
+        for draft in &drafts {
+            let id = id_of_row[&draft.row];
+            ledger.0.ensure_balance(tx, id, draft.cost).await?;
+        }
+    } else if drafts.iter().any(|draft| draft.cost.is_some()) {
+        return Err(AppError::BadRequest(
+            "Inventory must be enabled to import average cost.".into(),
+        ));
     }
 
     let mut counted = 0_i64;
@@ -481,10 +567,16 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
             draft.counted.or(draft.opening)
         };
         let Some(target) = target else { continue };
-        let on_hand = sqlx::query_scalar::<_, i32>("SELECT stock FROM items WHERE id = $1 FOR UPDATE")
-            .bind(id)
-            .fetch_one(&mut **tx)
-            .await?;
+        let ledger = ledger.ok_or_else(|| {
+            AppError::BadRequest("Inventory must be enabled to import stock counts.".into())
+        })?;
+        ledger.0.ensure_balance(tx, id, None).await?;
+        let on_hand = sqlx::query_scalar::<_, i32>(
+            "SELECT stock FROM inventory_balances WHERE item_id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await?;
         let delta = target - on_hand;
         if delta == 0 {
             continue;
@@ -494,7 +586,10 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
         } else {
             "Opening stock"
         };
-        apply_delta(tx, id, delta, note).await?;
+        let workbook = workbook.ok_or_else(|| {
+            AppError::BadRequest("Inventory must be enabled to import stock counts.".into())
+        })?;
+        workbook.0.apply_stock_delta(tx, id, delta, note).await?;
         counted += 1;
     }
     Ok(ItemImport {
@@ -505,10 +600,7 @@ pub async fn import_items(tx: &mut Transaction<'_, Postgres>, bytes: &[u8]) -> R
     })
 }
 
-pub async fn import_movements(
-    tx: &mut Transaction<'_, Postgres>,
-    bytes: &[u8],
-) -> Result<MovementImport, AppError> {
+pub fn parse_movement_workbook(bytes: &[u8]) -> Result<Vec<MovementImportDraft>, AppError> {
     let mut book = open_book(bytes)?;
     let Some(range) = named_range(&mut book, "Movements")? else {
         return Err(AppError::BadRequest(
@@ -517,71 +609,17 @@ pub async fn import_movements(
     };
     let rows = read_rows(&range);
     if rows.len() > MAX_ROWS {
-        return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
+        return Err(AppError::BadRequest(
+            "A sheet can hold up to 5000 rows.".into(),
+        ));
     }
     let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
-    let items = sqlx::query_as::<_, LoadedItem>(
-        "SELECT id, barcode, name FROM items WHERE active",
-    )
-    .fetch_all(&mut **tx)
-    .await?;
-    let variant_owners = sqlx::query_as::<_, (Option<String>, i32)>(
-        r#"
-        SELECT v.barcode, v.item_id
-        FROM item_variants v
-        JOIN items i ON i.id = v.item_id
-        WHERE i.active AND v.barcode IS NOT NULL
-        "#,
-    )
-    .fetch_all(&mut **tx)
-    .await?;
     let mut errors = Vec::new();
-    let drafts = parse_movements(&header, &rows, &items, &variant_owners, &mut errors);
+    let drafts = parse_movements(&header, &rows, &mut errors);
     if !errors.is_empty() {
         return Err(sheet_errors(errors));
     }
-    let mut on_hand: HashMap<i32, i32> = HashMap::new();
-    let mut ids: Vec<i32> = drafts.iter().map(|draft| draft.item_id).collect();
-    ids.sort_unstable();
-    ids.dedup();
-    if !ids.is_empty() {
-        let locked = sqlx::query_as::<_, (i32, i32)>(
-            "SELECT id, stock FROM items WHERE id = ANY($1) AND active ORDER BY id FOR UPDATE",
-        )
-        .bind(&ids)
-        .fetch_all(&mut **tx)
-        .await?;
-        if locked.len() != ids.len() {
-            return Err(AppError::BadRequest(
-                "One of those items is no longer in the catalog.".into(),
-            ));
-        }
-        on_hand.extend(locked);
-    }
-    for draft in &drafts {
-        let stock = on_hand.get_mut(&draft.item_id).expect("locked");
-        let next = i64::from(*stock) + i64::from(draft.qty);
-        if next < 0 {
-            return Err(AppError::BadRequest(format!(
-                "Movements row {}: only {stock} of {} are on hand.",
-                draft.row, draft.item_name
-            )));
-        }
-        if next > i64::from(i32::MAX) {
-            return Err(AppError::BadRequest(format!(
-                "Movements row {}: that quantity is too large.",
-                draft.row
-            )));
-        }
-        *stock = next as i32;
-    }
-    for draft in &drafts {
-        apply_delta(tx, draft.item_id, draft.qty, &draft.note).await?;
-    }
-    let applied = drafts.len() as i64;
-    Ok(MovementImport {
-        applied,
-    })
+    Ok(drafts)
 }
 
 pub async fn export_categories(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<u8>, AppError> {
@@ -592,12 +630,16 @@ pub async fn export_categories(tx: &mut Transaction<'_, Postgres>) -> Result<Vec
     .await?;
 
     let mut workbook = Workbook::new();
-    let header = Format::new().set_bold().set_background_color(Color::RGB(0xE2E8F0));
+    let header = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0xE2E8F0));
     let wrap = Format::new().set_text_wrap();
     let sheet = workbook.add_worksheet();
     sheet.set_name("Categories").sheet()?;
     for (col, name) in ["id", "name", "remove"].iter().enumerate() {
-        sheet.write_string_with_format(0, col as u16, *name, &header).sheet()?;
+        sheet
+            .write_string_with_format(0, col as u16, *name, &header)
+            .sheet()?;
     }
     for (index, row) in rows.iter().enumerate() {
         let line = (index + 1) as u32;
@@ -617,7 +659,9 @@ pub async fn export_categories(tx: &mut Transaction<'_, Postgres>) -> Result<Vec
         "Names are unique, ignoring letter case, and can be up to 40 characters.",
     ];
     for (index, line) in lines.iter().enumerate() {
-        guide.write_string_with_format(index as u32, 0, *line, &wrap).sheet()?;
+        guide
+            .write_string_with_format(index as u32, 0, *line, &wrap)
+            .sheet()?;
     }
     guide.set_column_width(0, 110).sheet()?;
     workbook.save_to_buffer().sheet()
@@ -635,7 +679,9 @@ pub async fn import_categories(
     };
     let rows = read_rows(&range);
     if rows.len() > MAX_ROWS {
-        return Err(AppError::BadRequest("A sheet can hold up to 5000 rows.".into()));
+        return Err(AppError::BadRequest(
+            "A sheet can hold up to 5000 rows.".into(),
+        ));
     }
     let header = header_map(rows.first().map(|(_, row)| row.as_slice()).unwrap_or(&[]));
     let mut existing = sqlx::query_as::<_, CategorySheetRow>(
@@ -675,9 +721,17 @@ pub async fn import_categories(
         })
         .count() as i64;
     let removed = drafts.iter().filter(|draft| draft.remove).count() as i64;
-    let mut next_order: Vec<i32> = drafts.iter().filter(|draft| !draft.remove).filter_map(|draft| draft.id).collect();
+    let mut next_order: Vec<i32> = drafts
+        .iter()
+        .filter(|draft| !draft.remove)
+        .filter_map(|draft| draft.id)
+        .collect();
     let listed: HashSet<i32> = next_order.iter().copied().collect();
-    let removed_ids: HashSet<i32> = drafts.iter().filter(|draft| draft.remove).filter_map(|draft| draft.id).collect();
+    let removed_ids: HashSet<i32> = drafts
+        .iter()
+        .filter(|draft| draft.remove)
+        .filter_map(|draft| draft.id)
+        .collect();
     for category in &existing {
         if !listed.contains(&category.id) && !removed_ids.contains(&category.id) {
             next_order.push(category.id);
@@ -699,10 +753,11 @@ pub async fn import_categories(
             .map_err(category_sheet_error)?;
     }
     for draft in drafts.iter().filter(|draft| draft.remove) {
-        let items = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM items WHERE category_id = $1")
-            .bind(draft.id)
-            .fetch_one(&mut **tx)
-            .await?;
+        let items =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM items WHERE category_id = $1")
+                .bind(draft.id)
+                .fetch_one(&mut **tx)
+                .await?;
         if items > 0 {
             return Err(AppError::BadRequest(format!(
                 "Categories row {}: move this category's items before removing it.",
@@ -738,7 +793,11 @@ pub async fn import_categories(
             .await
             .map_err(category_sheet_error)?;
     }
-    let mut ordered: Vec<i32> = drafts.iter().filter(|draft| !draft.remove).filter_map(|draft| draft.id).collect();
+    let mut ordered: Vec<i32> = drafts
+        .iter()
+        .filter(|draft| !draft.remove)
+        .filter_map(|draft| draft.id)
+        .collect();
     let listed: HashSet<i32> = ordered.iter().copied().collect();
     for category in &existing {
         if !listed.contains(&category.id) && !removed_ids.contains(&category.id) {
@@ -758,40 +817,6 @@ pub async fn import_categories(
         removed,
         reordered,
     })
-}
-
-async fn apply_delta(
-    tx: &mut Transaction<'_, Postgres>,
-    item_id: i32,
-    delta: i32,
-    note: &str,
-) -> Result<(), AppError> {
-    let inbound = delta > 0;
-    let reason = movement_reason(inbound, note);
-    sqlx::query("UPDATE items SET stock = stock + $1 WHERE id = $2")
-        .bind(delta)
-        .bind(item_id)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("INSERT INTO stock_movements (item_id, qty, reason) VALUES ($1, $2, $3)")
-        .bind(item_id)
-        .bind(delta)
-        .bind(reason)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
-fn movement_reason(inbound: bool, note: &str) -> String {
-    let label = if inbound { "Received" } else { "Removed" };
-    let note = note.trim();
-    if note.is_empty() || note.eq_ignore_ascii_case(label) {
-        label.to_string()
-    } else if note.starts_with(&format!("{label} · ")) {
-        note.to_string()
-    } else {
-        format!("{label} · {note}")
-    }
 }
 
 fn parse_items(
@@ -906,7 +931,9 @@ fn parse_items(
         let (base_rate, scale) = if prompt == "none" {
             (None, 1)
         } else if base_rate.unwrap_or(0) < 1 || scale < 1 {
-            errors.push(format!("{label}: set a base rate above 0 and a scale of at least 1."));
+            errors.push(format!(
+                "{label}: set a base rate above 0 and a scale of at least 1."
+            ));
             continue;
         } else {
             (base_rate, scale)
@@ -925,7 +952,9 @@ fn parse_items(
                 continue;
             }
         };
-        if counted.is_some_and(|value| value < 0) || (id.is_none() && opening.is_some_and(|value| value < 0)) {
+        if counted.is_some_and(|value| value < 0)
+            || (id.is_none() && opening.is_some_and(|value| value < 0))
+        {
             errors.push(format!("{label}: stock cannot be negative."));
             continue;
         }
@@ -934,7 +963,10 @@ fn parse_items(
             continue;
         }
         let barcode = clean_code(&barcode);
-        if barcode.as_ref().is_some_and(|code| code.chars().count() > 64) {
+        if barcode
+            .as_ref()
+            .is_some_and(|code| code.chars().count() > 64)
+        {
             errors.push(format!("{label}: keep the barcode to 64 characters."));
             continue;
         }
@@ -988,7 +1020,11 @@ fn parse_options(
         let name = cell_text(row, name_col);
         let barcode = cell_text(row, barcode_col);
         let remove = is_yes(&cell_text(row, remove_col));
-        if item_id_text.is_empty() && item_barcode.is_none() && option_text.is_empty() && name.is_empty() {
+        if item_id_text.is_empty()
+            && item_barcode.is_none()
+            && option_text.is_empty()
+            && name.is_empty()
+        {
             continue;
         }
         let label = format!("Options row {excel_row}");
@@ -1036,7 +1072,10 @@ fn parse_options(
                 }
             };
             let barcode = clean_code(&barcode);
-            if barcode.as_ref().is_some_and(|code| code.chars().count() > 64) {
+            if barcode
+                .as_ref()
+                .is_some_and(|code| code.chars().count() > 64)
+            {
                 errors.push(format!("{label}: keep the barcode to 64 characters."));
                 continue;
             }
@@ -1109,7 +1148,11 @@ fn parse_categories(
     drafts
 }
 
-fn bind_categories(drafts: &mut [CategoryDraft], existing: &[CategorySheetRow], errors: &mut Vec<String>) {
+fn bind_categories(
+    drafts: &mut [CategoryDraft],
+    existing: &[CategorySheetRow],
+    errors: &mut Vec<String>,
+) {
     let mut seen_ids: HashMap<i32, u32> = HashMap::new();
     for draft in drafts.iter() {
         if errors.len() >= 20 {
@@ -1124,7 +1167,9 @@ fn bind_categories(drafts: &mut [CategoryDraft], existing: &[CategorySheetRow], 
         if draft.remove {
             if let Some(category) = existing.iter().find(|category| category.id == id) {
                 if !draft.name.is_empty() && !category.name.eq_ignore_ascii_case(&draft.name) {
-                    errors.push(format!("{label}: that name does not belong to this category."));
+                    errors.push(format!(
+                        "{label}: that name does not belong to this category."
+                    ));
                     continue;
                 }
             }
@@ -1209,10 +1254,8 @@ fn bind_categories(drafts: &mut [CategoryDraft], existing: &[CategorySheetRow], 
 fn parse_movements(
     header: &HashMap<String, usize>,
     rows: &[(u32, Vec<Data>)],
-    items: &[LoadedItem],
-    variant_owners: &[(Option<String>, i32)],
     errors: &mut Vec<String>,
-) -> Vec<MoveDraft> {
+) -> Vec<MovementImportDraft> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -1277,54 +1320,15 @@ fn parse_movements(
             errors.push(format!("{label}: keep the note to 80 characters."));
             continue;
         }
-        let Some((item_id, name)) = find_movement_item(barcode.as_deref(), &item_name, items, variant_owners) else {
-            errors.push(format!("{label}: that item is not in the catalog."));
-            continue;
-        };
-        drafts.push(MoveDraft {
+        drafts.push(MovementImportDraft {
             row: *excel_row,
-            item_id,
-            item_name: name,
+            barcode,
+            item_name,
             qty: signed,
             note,
         });
     }
     drafts
-}
-
-fn find_movement_item(
-    barcode: Option<&str>,
-    item_name: &str,
-    items: &[LoadedItem],
-    variant_owners: &[(Option<String>, i32)],
-) -> Option<(i32, String)> {
-    if let Some(code) = barcode {
-        if let Some(item) = items.iter().find(|item| item.barcode.as_deref() == Some(code)) {
-            return Some((item.id, item.name.clone()));
-        }
-        if let Some((_, item_id)) = variant_owners.iter().find(|(owned, _)| owned.as_deref() == Some(code)) {
-            let name = items
-                .iter()
-                .find(|item| item.id == *item_id)
-                .map(|item| item.name.clone())
-                .unwrap_or_else(|| code.to_string());
-            return Some((*item_id, name));
-        }
-        return None;
-    }
-    let needle = item_name.trim();
-    if needle.is_empty() {
-        return None;
-    }
-    let hits: Vec<_> = items
-        .iter()
-        .filter(|item| item.name.eq_ignore_ascii_case(needle))
-        .collect();
-    if hits.len() == 1 {
-        Some((hits[0].id, hits[0].name.clone()))
-    } else {
-        None
-    }
 }
 
 fn check_item_plan(
@@ -1345,8 +1349,12 @@ fn check_item_plan(
         }
     }
     for variant in variants {
-        let removed = options.iter().any(|draft| draft.remove && draft.option_id == Some(variant.id));
-        let replaced = options.iter().any(|draft| draft.option_id == Some(variant.id));
+        let removed = options
+            .iter()
+            .any(|draft| draft.remove && draft.option_id == Some(variant.id));
+        let replaced = options
+            .iter()
+            .any(|draft| draft.option_id == Some(variant.id));
         if removed || replaced {
             continue;
         }
@@ -1364,7 +1372,8 @@ fn check_item_plan(
             }
         }
         if let Some(code) = &draft.barcode {
-            if let Some(owner) = seen_codes.insert(code.clone(), format!("Items row {}", draft.row)) {
+            if let Some(owner) = seen_codes.insert(code.clone(), format!("Items row {}", draft.row))
+            {
                 errors.push(format!(
                     "Items row {}: barcode {code} is already used by {owner}.",
                     draft.row
@@ -1377,7 +1386,9 @@ fn check_item_plan(
             continue;
         }
         if let Some(code) = &draft.barcode {
-            if let Some(owner) = seen_codes.insert(code.clone(), format!("Options row {}", draft.row)) {
+            if let Some(owner) =
+                seen_codes.insert(code.clone(), format!("Options row {}", draft.row))
+            {
                 errors.push(format!(
                     "Options row {}: barcode {code} is already used by {owner}.",
                     draft.row
@@ -1390,7 +1401,12 @@ fn check_item_plan(
                 .filter(|other| !other.remove && other.item_id == Some(item_id))
                 .map(|other| other.name.to_lowercase())
                 .collect();
-            if names.iter().filter(|name| *name == &draft.name.to_lowercase()).count() > 1 {
+            if names
+                .iter()
+                .filter(|name| *name == &draft.name.to_lowercase())
+                .count()
+                > 1
+            {
                 errors.push(format!(
                     "Options row {}: each option needs its own name.",
                     draft.row
@@ -1402,7 +1418,10 @@ fn check_item_plan(
         if draft.prompt == "none" {
             continue;
         }
-        let removed: Vec<i32> = options.iter().filter_map(|option| option.remove.then_some(option.option_id).flatten()).collect();
+        let removed: Vec<i32> = options
+            .iter()
+            .filter_map(|option| option.remove.then_some(option.option_id).flatten())
+            .collect();
         let kept = draft.id.is_some_and(|id| {
             variants
                 .iter()
@@ -1439,10 +1458,15 @@ fn resolve_option_item(
             )));
         }
         if let Some(code) = &draft.item_barcode {
-            let matches = existing.iter().any(|item| item.id == item_id && item.barcode.as_ref() == Some(code))
-                || items.iter().any(|item| item.id == Some(item_id) && item.barcode.as_ref() == Some(code))
+            let matches = existing
+                .iter()
+                .any(|item| item.id == item_id && item.barcode.as_ref() == Some(code))
+                || items
+                    .iter()
+                    .any(|item| item.id == Some(item_id) && item.barcode.as_ref() == Some(code))
                 || items.iter().any(|item| {
-                    id_of_row.get(&item.row) == Some(&item_id) && item.barcode.as_ref() == Some(code)
+                    id_of_row.get(&item.row) == Some(&item_id)
+                        && item.barcode.as_ref() == Some(code)
                 });
             if !matches {
                 return Err(AppError::BadRequest(format!(
@@ -1462,10 +1486,16 @@ fn resolve_option_item(
     if let Some(row) = barcode_of_new.get(code) {
         return Ok(id_of_row[row]);
     }
-    if let Some(item) = items.iter().find(|item| item.barcode.as_ref() == Some(code)) {
+    if let Some(item) = items
+        .iter()
+        .find(|item| item.barcode.as_ref() == Some(code))
+    {
         return Ok(id_of_row[&item.row]);
     }
-    if let Some(item) = existing.iter().find(|item| item.barcode.as_ref() == Some(code)) {
+    if let Some(item) = existing
+        .iter()
+        .find(|item| item.barcode.as_ref() == Some(code))
+    {
         return Ok(item.id);
     }
     Err(AppError::BadRequest(format!(
@@ -1482,7 +1512,11 @@ fn find_section(sections: &[SectionRef], label: &str) -> Option<i32> {
     sections
         .iter()
         .find(|section| section.short_name.eq_ignore_ascii_case(label))
-        .or_else(|| sections.iter().find(|section| section.name.eq_ignore_ascii_case(label)))
+        .or_else(|| {
+            sections
+                .iter()
+                .find(|section| section.name.eq_ignore_ascii_case(label))
+        })
         .map(|section| section.id)
 }
 
@@ -1497,11 +1531,18 @@ fn normalize_prompt(value: &str) -> Result<String, String> {
 
 fn clean_code(value: &str) -> Option<String> {
     let value = value.trim();
-    if value.is_empty() { None } else { Some(value.to_string()) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn is_yes(value: &str) -> bool {
-    matches!(value.trim().to_lowercase().as_str(), "yes" | "y" | "true" | "1" | "remove" | "delete")
+    matches!(
+        value.trim().to_lowercase().as_str(),
+        "yes" | "y" | "true" | "1" | "remove" | "delete"
+    )
 }
 
 fn whole(value: &str, label: &str) -> Result<Option<i32>, String> {
@@ -1554,12 +1595,14 @@ fn open_book(bytes: &[u8]) -> Result<Xlsx<Cursor<&[u8]>>, AppError> {
     if bytes.is_empty() {
         return Err(AppError::BadRequest("Choose an Excel workbook.".into()));
     }
-    Xlsx::new(Cursor::new(bytes)).map_err(|_| {
-        AppError::BadRequest("That file is not an Excel workbook (.xlsx).".into())
-    })
+    Xlsx::new(Cursor::new(bytes))
+        .map_err(|_| AppError::BadRequest("That file is not an Excel workbook (.xlsx).".into()))
 }
 
-fn named_range(book: &mut Xlsx<Cursor<&[u8]>>, name: &str) -> Result<Option<calamine::Range<Data>>, AppError> {
+fn named_range(
+    book: &mut Xlsx<Cursor<&[u8]>>,
+    name: &str,
+) -> Result<Option<calamine::Range<Data>>, AppError> {
     let found = book
         .sheet_names()
         .into_iter()
@@ -1584,7 +1627,11 @@ fn header_map(row: &[Data]) -> HashMap<String, usize> {
         .enumerate()
         .filter_map(|(index, cell)| {
             let name = cell_string(cell).trim().to_lowercase().replace(' ', "_");
-            if name.is_empty() { None } else { Some((name, index)) }
+            if name.is_empty() {
+                None
+            } else {
+                Some((name, index))
+            }
         })
         .collect()
 }
@@ -1615,10 +1662,16 @@ fn cost_cents(text: &str) -> Result<Option<i64>, String> {
         Some((major, frac)) => (major, frac.trim_end_matches('0')),
         None => (trimmed.as_str(), ""),
     };
-    if major.is_empty() || !major.chars().all(|ch| ch.is_ascii_digit()) || frac.len() > 2 || !frac.chars().all(|ch| ch.is_ascii_digit()) {
+    if major.is_empty()
+        || !major.chars().all(|ch| ch.is_ascii_digit())
+        || frac.len() > 2
+        || !frac.chars().all(|ch| ch.is_ascii_digit())
+    {
         return Err("cost uses up to 2 decimals.".into());
     }
-    let major: i64 = major.parse().map_err(|_| "cost is too large.".to_string())?;
+    let major: i64 = major
+        .parse()
+        .map_err(|_| "cost is too large.".to_string())?;
     if major > 100_000_000 {
         return Err("cost is too large.".into());
     }
@@ -1646,7 +1699,13 @@ fn cell_string(cell: &Data) -> String {
         }
         Data::Float(value) => format!("{value}"),
         Data::Int(value) => value.to_string(),
-        Data::Bool(value) => if *value { "yes".into() } else { String::new() },
+        Data::Bool(value) => {
+            if *value {
+                "yes".into()
+            } else {
+                String::new()
+            }
+        }
         _ => String::new(),
     }
 }
@@ -1658,7 +1717,9 @@ fn write_text(
     value: &str,
     format: &Format,
 ) -> Result<(), AppError> {
-    sheet.write_string_with_format(row, col, value, format).sheet()?;
+    sheet
+        .write_string_with_format(row, col, value, format)
+        .sheet()?;
     Ok(())
 }
 
@@ -1711,16 +1772,4 @@ struct CategorySheetRow {
     id: i32,
     name: String,
     sort_order: i32,
-}
-
-#[derive(sqlx::FromRow)]
-struct MovementSheetRow {
-    id: i32,
-    time_utc: String,
-    barcode: Option<String>,
-    item: String,
-    section: String,
-    qty: i32,
-    reason: String,
-    bill_no: Option<String>,
 }

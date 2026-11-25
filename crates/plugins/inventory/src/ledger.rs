@@ -1,4 +1,6 @@
-use sqlx::{Postgres, Transaction};
+use std::collections::HashMap;
+
+use catalog_contract::CatalogApi;
 
 use platform_kernel::error::AppError;
 
@@ -15,16 +17,16 @@ pub struct StockMove {
     pub total: Option<i64>,
 }
 
-#[derive(Debug, serde::Serialize, sqlx::FromRow)]
-pub struct StockMovement {
-    pub id: i32,
-    pub item_id: i32,
-    pub item_name: String,
-    pub section_name: String,
-    pub qty: i32,
-    pub reason: String,
-    pub bill_no: Option<String>,
-    pub created_at: String,
+pub use inventory_contract::{MixLine, StockMovement};
+
+#[derive(sqlx::FromRow)]
+struct MovementRow {
+    id: i32,
+    item_id: i32,
+    qty: i32,
+    reason: String,
+    bill_no: Option<String>,
+    created_at: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -43,124 +45,19 @@ pub struct StockBalance {
     pub stock: i32,
 }
 
-#[derive(sqlx::FromRow)]
-struct BalanceRow {
-    id: i32,
-    barcode: Option<String>,
-    name: String,
-    section_id: i32,
-    section_name: String,
-    accent: String,
-    rate: i32,
-    cost: i64,
-    stock: i32,
-    received: i64,
-    removed: i64,
-}
-
-#[derive(Debug, serde::Serialize, sqlx::FromRow)]
-pub struct SectionTotal {
-    pub id: i32,
-    pub name: String,
-    pub short_name: String,
-    pub accent: String,
-    pub bills: i64,
-    pub total: i64,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct BillLineView {
-    pub name: String,
-    pub qty: i32,
-    pub rate: i32,
-    pub amount: i32,
-    /// What the item cost when this line sold. Reports never read the current
-    /// item cost for an old bill.
-    pub unit_cost: i64,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct BillView {
-    pub id: i32,
-    pub bill_no: String,
-    pub section_name: String,
-    pub short_name: String,
-    pub accent: String,
-    pub total: i32,
-    pub cost: i64,
-    pub created_at: String,
-    pub cashier_name: Option<String>,
-    pub customer: Option<String>,
-    pub lines: Vec<BillLineView>,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct Reports {
-    pub sections: Vec<SectionTotal>,
-    pub bills: Vec<BillView>,
-    pub movements: Vec<StockMovement>,
-    pub bill_count: i64,
-    pub total: i64,
-    pub stock_units: i64,
-    pub stock_value: i64,
-    pub profit: i64,
-    pub bills_truncated: bool,
-    pub movements_truncated: bool,
-    pub mix: Vec<MixLine>,
-    pub mix_truncated: bool,
-    pub range_label: String,
-}
-
-#[derive(Debug, serde::Serialize, sqlx::FromRow)]
-pub struct MixLine {
-    pub id: i32,
-    pub barcode: Option<String>,
-    pub name: String,
-    pub section_name: String,
-    pub qty_in: i64,
-    pub qty_out: i64,
-    pub opening: i64,
-}
-
 const MIX_LIMIT: i64 = 400;
-
-#[derive(sqlx::FromRow)]
-struct BillRow {
-    id: i32,
-    bill_no: String,
-    section_name: String,
-    short_name: String,
-    accent: String,
-    total: i32,
-    created_at: String,
-    cashier_name: Option<String>,
-    customer: Option<String>,
-}
-
-#[derive(sqlx::FromRow)]
-struct LineRow {
-    bill_id: i32,
-    name: String,
-    qty: i32,
-    rate: i32,
-    amount: i32,
-    unit_cost: i64,
-}
-
-#[derive(sqlx::FromRow)]
-struct CostRow {
-    bill_id: i32,
-    cost: i64,
-}
 
 const LIST_LIMIT: i64 = 200;
 
 pub async fn adjust_stock(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     move_request: &StockMove,
 ) -> Result<Vec<StockMovement>, AppError> {
     if move_request.qty < 1 {
-        return Err(AppError::BadRequest("Enter a quantity of at least 1.".into()));
+        return Err(AppError::BadRequest(
+            "Enter a quantity of at least 1.".into(),
+        ));
     }
     if move_request.qty > 1_000_000 {
         return Err(AppError::BadRequest(
@@ -170,11 +67,7 @@ pub async fn adjust_stock(
     let inbound = match move_request.direction.as_str() {
         "in" => true,
         "out" => false,
-        _ => {
-            return Err(AppError::BadRequest(
-                "Choose stock in or stock out.".into(),
-            ))
-        }
+        _ => return Err(AppError::BadRequest("Choose stock in or stock out.".into())),
     };
     let note = move_request
         .note
@@ -182,20 +75,41 @@ pub async fn adjust_stock(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
     if note.is_some_and(|value| value.chars().count() > 80) {
-        return Err(AppError::BadRequest("Keep the note to 80 characters.".into()));
+        return Err(AppError::BadRequest(
+            "Keep the note to 80 characters.".into(),
+        ));
     }
     let label = if inbound { "Received" } else { "Removed" };
     let reason = match note {
         Some(value) => format!("{label} · {value}"),
         None => label.to_string(),
     };
-    let delta = if inbound { move_request.qty } else { -move_request.qty };
+    let delta = if inbound {
+        move_request.qty
+    } else {
+        -move_request.qty
+    };
 
-    let held = sqlx::query_as::<_, (i32, i64)>(
-        "SELECT stock, avg_cost FROM items WHERE id = $1 AND active FOR UPDATE",
+    if catalog.0.get_item(tx, move_request.item_id).await?.is_none() {
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO inventory_balances (tenant_id, item_id, stock, avg_cost)
+        VALUES (current_setting('app.tenant_id')::uuid, $1, 0, 0)
+        ON CONFLICT (tenant_id, item_id) DO NOTHING
+        "#,
     )
     .bind(move_request.item_id)
-    .fetch_optional(&mut **tx)
+    .execute(tx.conn())
+    .await?;
+    let held = sqlx::query_as::<_, (i32, i64)>(
+        "SELECT stock, avg_cost FROM inventory_balances WHERE item_id = $1 FOR UPDATE",
+    )
+    .bind(move_request.item_id)
+    .fetch_optional(tx.conn())
     .await?;
     let Some((on_hand, average)) = held else {
         return Err(AppError::NotFound(
@@ -203,15 +117,11 @@ pub async fn adjust_stock(
         ));
     };
     if !inbound && on_hand < move_request.qty {
-        return Err(AppError::BadRequest(format!(
-            "Only {on_hand} are on hand."
-        )));
+        return Err(AppError::BadRequest(format!("Only {on_hand} are on hand.")));
     }
     let next_cost = if move_request.update_cost {
         if !inbound {
-            return Err(AppError::BadRequest(
-                "A purchase adds stock.".into(),
-            ));
+            return Err(AppError::BadRequest("A purchase adds stock.".into()));
         }
         let Some(total) = move_request.total else {
             return Err(AppError::BadRequest(
@@ -227,12 +137,19 @@ pub async fn adjust_stock(
     } else {
         None
     };
-    sqlx::query("UPDATE items SET stock = stock + $1, avg_cost = COALESCE($2, avg_cost) WHERE id = $3")
-        .bind(delta)
-        .bind(next_cost)
-        .bind(move_request.item_id)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        r#"
+        UPDATE inventory_balances
+        SET stock = stock + $1,
+            avg_cost = COALESCE($2, avg_cost)
+        WHERE item_id = $3
+        "#,
+    )
+    .bind(delta)
+    .bind(next_cost)
+    .bind(move_request.item_id)
+    .execute(tx.conn())
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO stock_movements (item_id, qty, reason)
@@ -242,215 +159,118 @@ pub async fn adjust_stock(
     .bind(move_request.item_id)
     .bind(delta)
     .bind(&reason)
-    .execute(&mut **tx)
+    .execute(tx.conn())
     .await?;
-    movements_tx(tx, Some(move_request.item_id), None, None, 40).await
+    movements_tx(tx, catalog, Some(move_request.item_id), None, None, 40).await
 }
 
-pub async fn stock_summary(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<StockBalance>, AppError> {
-    let rows = sqlx::query_as::<_, BalanceRow>(
+pub async fn stock_summary(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
+) -> Result<Vec<StockBalance>, AppError> {
+    let snapshot = catalog.0.snapshot(tx).await?;
+    let totals: Vec<(i32, i64, i64)> = sqlx::query_as(
         r#"
-        SELECT
-            i.id,
-            i.barcode,
-            i.name,
-            i.section_id,
-            s.short_name AS section_name,
-            s.accent,
-            i.rate,
-            i.avg_cost AS cost,
-            i.stock,
-            COALESCE(SUM(m.qty) FILTER (WHERE m.qty > 0), 0)::bigint AS received,
-            COALESCE(SUM(-m.qty) FILTER (WHERE m.qty < 0), 0)::bigint AS removed
-        FROM items i
-        JOIN sections s ON s.id = i.section_id
-        LEFT JOIN stock_movements m ON m.item_id = i.id
-        WHERE i.active
-        GROUP BY i.id, s.id
-        ORDER BY s.pos_order, i.sort_order, i.id
+        SELECT item_id,
+               COALESCE(SUM(qty) FILTER (WHERE qty > 0), 0)::bigint,
+               COALESCE(SUM(-qty) FILTER (WHERE qty < 0), 0)::bigint
+        FROM stock_movements
+        GROUP BY item_id
         "#,
     )
-    .fetch_all(&mut **tx)
+    .fetch_all(tx.conn())
     .await?;
-    Ok(rows
+    let totals: HashMap<i32, (i64, i64)> = totals
         .into_iter()
-        .map(|row| {
-            let net = row.received - row.removed;
-            let opening = i64::from(row.stock) - net;
-            let stock_in = row.received + opening.max(0);
-            let stock_out = row.removed + (-opening).max(0);
+        .map(|(item_id, received, removed)| (item_id, (received, removed)))
+        .collect();
+    let sections: HashMap<i32, (String, String, i32)> = snapshot
+        .sections
+        .iter()
+        .map(|section| {
+            (
+                section.id,
+                (
+                    section.short_name.clone(),
+                    section.accent.clone(),
+                    section.pos_order,
+                ),
+            )
+        })
+        .collect();
+    let order: HashMap<i32, usize> = snapshot
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.id, index))
+        .collect();
+    let mut rows: Vec<StockBalance> = snapshot
+        .items
+        .iter()
+        .map(|item| {
+            let (received, removed) = totals.get(&item.id).copied().unwrap_or((0, 0));
+            let net = received - removed;
+            let opening = i64::from(item.stock) - net;
+            let stock_in = received + opening.max(0);
+            let stock_out = removed + (-opening).max(0);
+            let (section_name, accent, _) = sections
+                .get(&item.section_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), String::new(), 0));
             StockBalance {
-                id: row.id,
-                barcode: row.barcode,
-                name: row.name,
-                section_id: row.section_id,
-                section_name: row.section_name,
-                accent: row.accent,
-                rate: row.rate,
-                cost: row.cost,
-                value: i64::from(row.stock).saturating_mul(row.cost),
+                id: item.id,
+                barcode: item.barcode.clone(),
+                name: item.name.clone(),
+                section_id: item.section_id,
+                section_name,
+                accent,
+                rate: item.rate,
+                cost: item.cost,
+                value: i64::from(item.stock).saturating_mul(item.cost),
                 stock_in,
                 stock_out,
-                stock: row.stock,
+                stock: item.stock,
             }
         })
-        .collect())
+        .collect();
+    rows.sort_by_key(|row| {
+        (
+            sections
+                .get(&row.section_id)
+                .map(|(_, _, pos_order)| *pos_order)
+                .unwrap_or(0),
+            order.get(&row.id).copied().unwrap_or(usize::MAX),
+        )
+    });
+    Ok(rows)
 }
 
 pub async fn recent_movements(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     item_id: Option<i32>,
 ) -> Result<Vec<StockMovement>, AppError> {
-    movements_tx(tx, item_id, None, None, 40).await
+    movements_tx(tx, catalog, item_id, None, None, 40).await
 }
 
-pub async fn load_reports(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn stock_report(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     from: Option<&str>,
     to: Option<&str>,
-) -> Result<Reports, AppError> {
+) -> Result<inventory_contract::StockReport, AppError> {
     check_range_tx(tx, from, to).await?;
-    let sections = sqlx::query_as::<_, SectionTotal>(
-        r#"
-        SELECT
-            s.id,
-            s.name,
-            s.short_name,
-            s.accent,
-            COUNT(b.id)::bigint AS bills,
-            COALESCE(SUM(b.total), 0)::bigint AS total
-        FROM sections s
-        LEFT JOIN bills b ON b.section_id = s.id
-            AND ($1::text IS NULL OR b.created_at >= $1::timestamptz)
-            AND ($2::text IS NULL OR b.created_at < $2::timestamptz)
-        GROUP BY s.id
-        ORDER BY s.pos_order, s.id
-        "#,
-    )
-    .bind(from)
-    .bind(to)
-    .fetch_all(&mut **tx)
-    .await?;
-
-    let bill_count: i64 = sections.iter().map(|section| section.bills).sum();
-    let total: i64 = sections.iter().map(|section| section.total).sum();
-    let (stock_units, stock_value) = sqlx::query_as::<_, (i64, i64)>(
-        r#"
-        SELECT
-            COALESCE(SUM(stock), 0)::bigint,
-            COALESCE(SUM(stock::bigint * avg_cost), 0)::bigint
-        FROM items
-        WHERE active
-        "#,
-    )
-    .fetch_one(&mut **tx)
-    .await?;
-    let goods = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(SUM(bl.cost_total), 0)::bigint
-        FROM bill_lines bl
-        JOIN bills b ON b.id = bl.bill_id
-        WHERE ($1::text IS NULL OR b.created_at >= $1::timestamptz)
-          AND ($2::text IS NULL OR b.created_at < $2::timestamptz)
-        "#,
-    )
-    .bind(from)
-    .bind(to)
-    .fetch_one(&mut **tx)
-    .await?;
-    let profit = total.saturating_mul(100) - goods;
-
-    let rows = sqlx::query_as::<_, BillRow>(
-        r#"
-        SELECT
-            b.id,
-            b.bill_no,
-            s.name AS section_name,
-            s.short_name,
-            s.accent,
-            b.total,
-            to_char(b.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            u.name AS cashier_name,
-            b.customer
-        FROM bills b
-        JOIN sections s ON s.id = b.section_id
-        LEFT JOIN users u ON u.id = b.user_id
-        WHERE ($1::text IS NULL OR b.created_at >= $1::timestamptz)
-          AND ($2::text IS NULL OR b.created_at < $2::timestamptz)
-        ORDER BY b.created_at DESC, b.id DESC
-        LIMIT 200
-        "#,
-    )
-    .bind(from)
-    .bind(to)
-    .fetch_all(&mut **tx)
-    .await?;
-
-    let bill_ids: Vec<i32> = rows.iter().map(|bill| bill.id).collect();
-    let line_rows = if bill_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, LineRow>(
-            r#"
-            SELECT bill_id, name, qty, rate, amount, unit_cost
-            FROM bill_lines
-            WHERE bill_id = ANY($1)
-            ORDER BY id
-            "#,
-        )
-        .bind(&bill_ids)
-        .fetch_all(&mut **tx)
-        .await?
-    };
-    let cost_rows = if bill_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, CostRow>(
-            r#"
-            SELECT
-                bill_id,
-                COALESCE(SUM(cost_total), 0)::bigint AS cost
-            FROM bill_lines
-            WHERE bill_id = ANY($1)
-            GROUP BY bill_id
-            "#,
-        )
-        .bind(&bill_ids)
-        .fetch_all(&mut **tx)
-        .await?
-    };
-
-    let bills = rows
-        .into_iter()
-        .map(|bill| BillView {
-            lines: line_rows
-                .iter()
-                .filter(|line| line.bill_id == bill.id)
-                .map(|line| BillLineView {
-                    name: line.name.clone(),
-                    qty: line.qty,
-                    rate: line.rate,
-                    amount: line.amount,
-                    unit_cost: line.unit_cost,
-                })
-                .collect(),
-            id: bill.id,
-            bill_no: bill.bill_no,
-            section_name: bill.section_name,
-            short_name: bill.short_name,
-            accent: bill.accent,
-            total: bill.total,
-            cost: cost_rows
-                .iter()
-                .find(|row| row.bill_id == bill.id)
-                .map(|row| row.cost)
-                .unwrap_or(0),
-            created_at: bill.created_at,
-            cashier_name: bill.cashier_name,
-            customer: bill.customer,
-        })
-        .collect();
-
+    let snapshot = catalog.0.snapshot(tx).await?;
+    let stock_units = snapshot
+        .items
+        .iter()
+        .map(|item| i64::from(item.stock))
+        .sum();
+    let stock_value = snapshot
+        .items
+        .iter()
+        .map(|item| i64::from(item.stock).saturating_mul(item.cost))
+        .sum();
     let movement_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
@@ -461,25 +281,18 @@ pub async fn load_reports(
     )
     .bind(from)
     .bind(to)
-    .fetch_one(&mut **tx)
+    .fetch_one(tx.conn())
     .await?;
-    let movements = movements_tx(tx, None, from, to, LIST_LIMIT).await?;
-    let mix = product_mix_tx(tx, from, to).await?;
-
-    Ok(Reports {
-        sections,
-        bills_truncated: bill_count > LIST_LIMIT,
-        movements_truncated: movement_count > LIST_LIMIT,
-        bills,
+    let movements = movements_tx(tx, catalog, None, from, to, LIST_LIMIT).await?;
+    let mix = product_mix_tx(tx, catalog, from, to).await?;
+    Ok(inventory_contract::StockReport {
         movements,
-        bill_count,
-        total,
         stock_units,
         stock_value,
-        profit,
+        movements_truncated: movement_count > LIST_LIMIT,
+        mix: mix.lines,
         mix_truncated: mix.truncated,
         range_label: mix.label,
-        mix: mix.lines,
     })
 }
 
@@ -490,53 +303,100 @@ pub struct ProductMix {
 }
 
 pub async fn product_mix(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<ProductMix, AppError> {
-    let mix = product_mix_tx(tx, from, to).await?;
-    Ok(mix)
+    product_mix_tx(tx, catalog, from, to).await
 }
 
 async fn product_mix_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<ProductMix, AppError> {
     check_range_tx(tx, from, to).await?;
-    let mut lines = sqlx::query_as::<_, MixLine>(
+    let snapshot = catalog.0.snapshot(tx).await?;
+    let range: Vec<(i32, i64, i64)> = sqlx::query_as(
         r#"
-        SELECT
-            i.id,
-            i.barcode,
-            i.name,
-            s.short_name AS section_name,
-            COALESCE(SUM(CASE WHEN m.qty > 0 THEN m.qty ELSE 0 END), 0)::bigint AS qty_in,
-            COALESCE(SUM(CASE WHEN m.qty < 0 THEN -m.qty ELSE 0 END), 0)::bigint AS qty_out,
-            (
-                i.stock::bigint - COALESCE((
-                    SELECT SUM(earlier.qty)::bigint
-                    FROM stock_movements earlier
-                    WHERE earlier.item_id = i.id
-                        AND ($1::text IS NULL OR earlier.created_at >= $1::timestamptz)
-                ), 0)
-            ) AS opening
-        FROM items i
-        JOIN sections s ON s.id = i.section_id
-        JOIN stock_movements m ON m.item_id = i.id
-            AND ($1::text IS NULL OR m.created_at >= $1::timestamptz)
-            AND ($2::text IS NULL OR m.created_at < $2::timestamptz)
-        WHERE i.active
-        GROUP BY i.id, i.barcode, i.name, s.short_name, s.pos_order
-        ORDER BY s.pos_order, i.name
-        LIMIT $3
+        SELECT item_id,
+               COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0)::bigint,
+               COALESCE(SUM(CASE WHEN qty < 0 THEN -qty ELSE 0 END), 0)::bigint
+        FROM stock_movements
+        WHERE ($1::text IS NULL OR created_at >= $1::timestamptz)
+          AND ($2::text IS NULL OR created_at < $2::timestamptz)
+        GROUP BY item_id
         "#,
     )
     .bind(from)
     .bind(to)
-    .bind(MIX_LIMIT + 1)
-    .fetch_all(&mut **tx)
+    .fetch_all(tx.conn())
     .await?;
+    let range: HashMap<i32, (i64, i64)> = range
+        .into_iter()
+        .map(|(item_id, qty_in, qty_out)| (item_id, (qty_in, qty_out)))
+        .collect();
+    let later: Vec<(i32, i64)> = sqlx::query_as(
+        r#"
+        SELECT item_id, COALESCE(SUM(qty), 0)::bigint
+        FROM stock_movements
+        WHERE ($1::text IS NULL OR created_at >= $1::timestamptz)
+        GROUP BY item_id
+        "#,
+    )
+    .bind(from)
+    .fetch_all(tx.conn())
+    .await?;
+    let later: HashMap<i32, i64> = later.into_iter().collect();
+    let sections: HashMap<i32, (String, i32)> = snapshot
+        .sections
+        .iter()
+        .map(|section| (section.id, (section.short_name.clone(), section.pos_order)))
+        .collect();
+    let item_section: HashMap<i32, i32> = snapshot
+        .items
+        .iter()
+        .map(|item| {
+            (
+                item.id,
+                sections
+                    .get(&item.section_id)
+                    .map(|(_, pos_order)| *pos_order)
+                    .unwrap_or(0),
+            )
+        })
+        .collect();
+    let mut lines: Vec<MixLine> = snapshot
+        .items
+        .iter()
+        .filter_map(|item| {
+            let (qty_in, qty_out) = *range.get(&item.id)?;
+            let (section_name, _) = sections
+                .get(&item.section_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), 0));
+            Some(MixLine {
+                id: item.id,
+                barcode: item.barcode.clone(),
+                name: item.name.clone(),
+                section_name,
+                qty_in,
+                qty_out,
+                opening: i64::from(item.stock) - later.get(&item.id).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    lines.sort_by(|a, b| {
+        item_section
+            .get(&a.id)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&item_section.get(&b.id).copied().unwrap_or(0))
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let truncated = lines.len() > MIX_LIMIT as usize;
     lines.truncate(MIX_LIMIT as usize);
     Ok(ProductMix {
@@ -547,7 +407,7 @@ async fn product_mix_tx(
 }
 
 async fn range_label_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<String, AppError> {
@@ -563,33 +423,45 @@ async fn range_label_tx(
     )
     .bind(from)
     .bind(to)
-    .fetch_one(&mut **tx)
+    .fetch_one(tx.conn())
     .await?;
     Ok(label)
 }
 
 async fn movements_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+    catalog: &CatalogApi,
     item_id: Option<i32>,
     from: Option<&str>,
     to: Option<&str>,
     limit: i64,
 ) -> Result<Vec<StockMovement>, AppError> {
-    sqlx::query_as::<_, StockMovement>(
+    let snapshot = catalog.0.snapshot(tx).await?;
+    let items: HashMap<i32, &str> = snapshot
+        .items
+        .iter()
+        .map(|item| (item.id, item.name.as_str()))
+        .collect();
+    let sections: HashMap<i32, &str> = snapshot
+        .sections
+        .iter()
+        .map(|section| (section.id, section.short_name.as_str()))
+        .collect();
+    let item_sections: HashMap<i32, i32> = snapshot
+        .items
+        .iter()
+        .map(|item| (item.id, item.section_id))
+        .collect();
+    let rows = sqlx::query_as::<_, MovementRow>(
         r#"
         SELECT
             m.id,
             m.item_id,
-            i.name AS item_name,
-            s.short_name AS section_name,
             m.qty,
             m.reason,
-            b.bill_no,
+            m.bill_no,
             to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
         FROM stock_movements m
-        JOIN items i ON i.id = m.item_id
-        JOIN sections s ON s.id = i.section_id
-        LEFT JOIN bills b ON b.id = m.bill_id
         WHERE ($1::int IS NULL OR m.item_id = $1)
           AND ($2::text IS NULL OR m.created_at >= $2::timestamptz)
           AND ($3::text IS NULL OR m.created_at < $3::timestamptz)
@@ -601,13 +473,34 @@ async fn movements_tx(
     .bind(from)
     .bind(to)
     .bind(limit)
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(AppError::from)
+    .fetch_all(tx.conn())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| StockMovement {
+            id: row.id,
+            item_id: row.item_id,
+            item_name: items
+                .get(&row.item_id)
+                .copied()
+                .unwrap_or("Unknown item")
+                .to_string(),
+            section_name: item_sections
+                .get(&row.item_id)
+                .and_then(|section_id| sections.get(section_id))
+                .copied()
+                .unwrap_or("")
+                .to_string(),
+            qty: row.qty,
+            reason: row.reason,
+            bill_no: row.bill_no,
+            created_at: row.created_at,
+        })
+        .collect())
 }
 
 async fn check_range_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut platform_kernel::context::TenantTx<'_>,
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<(), AppError> {
@@ -620,7 +513,7 @@ async fn check_range_tx(
     sqlx::query("SELECT $1::timestamptz, $2::timestamptz")
         .bind(from)
         .bind(to)
-        .execute(&mut **tx)
+        .execute(tx.conn())
         .await
         .map_err(|_| AppError::BadRequest("That date range could not be read.".into()))?;
     Ok(())

@@ -2,23 +2,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use catalog_contract::CatalogApi;
-use inventory_contract::{StockBalance, StockIssue, StockLedger};
-use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityHandler, CapabilityKind};
+use inventory_contract::{
+    InventoryReporting, InventoryReportsProvider, ProductMix, ProductMixLine, StockBalance,
+    StockIssue, StockLedger, StockLedgerProvider,
+};
+use platform_kernel::capability::{
+    Capability, CapabilityEffect, CapabilityHandler, CapabilityKind,
+};
 use platform_kernel::context::TenantTx;
 use platform_kernel::contract::Registrar;
 use platform_kernel::error::AppError;
-use platform_kernel::event::{EventEnvelope, EventHandler};
-use platform_kernel::events::PluginEvents;
 use platform_kernel::manifest::{Dependency, NavItem, PluginManifest};
-use platform_kernel::routes::RegistrationError;
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
+use platform_kernel::routes::RegistrationError;
 use serde_json::json;
 
 pub mod ledger;
 mod routes;
-pub mod sale;
+mod workbook;
 
 pub struct InventoryPlugin;
 
@@ -29,9 +32,11 @@ pub fn plugin() -> std::sync::Arc<dyn Plugin> {
 
 impl Plugin for InventoryPlugin {
     fn manifest(&self) -> PluginManifest {
-        let mut manifest = PluginManifest::v1("inventory", "Inventory", "0.1.0");
+        let mut manifest = PluginManifest::v1("inventory", "Inventory", "0.1.1");
+        manifest.default_enabled = true;
         manifest.description = "Stock balances, average cost and movements.".into();
-        manifest.requires = vec![Dependency::new("catalog", "^0.1")];
+        // Catalog supplies CatalogApi for item labels; Inventory enables alone.
+        manifest.optional = vec![Dependency::new("catalog", "^0.1")];
         manifest.permissions = vec![
             Permission::new("inventory.read"),
             Permission::new("inventory.write"),
@@ -67,7 +72,6 @@ impl Plugin for InventoryPlugin {
                 description: "Adjust stock (requires confirm: true).".into(),
             },
         ];
-        manifest.events_consumed = vec!["sales.bill_posted".into()];
         manifest.nav = vec![NavItem {
             id: "stock".into(),
             label: "Stock In / Out".into(),
@@ -80,16 +84,19 @@ impl Plugin for InventoryPlugin {
     }
 
     fn migrations(&self) -> &'static [Migration] {
-        &[]
+        static MIGRATIONS: &[Migration] = &[Migration::new(
+            1,
+            "inventory_own_balances",
+            include_str!("../migrations/001_own_balances.sql"),
+        )];
+        MIGRATIONS
     }
 
-    fn routes(&self, routes: &mut platform_kernel::routes::PluginRoutes) -> Result<(), RegistrationError> {
+    fn routes(
+        &self,
+        routes: &mut platform_kernel::routes::PluginRoutes,
+    ) -> Result<(), RegistrationError> {
         routes::mount(routes)
-    }
-
-    fn event_handlers(&self, events: &mut PluginEvents) -> Result<(), RegistrationError> {
-        events.on(Arc::new(OnBillPosted))?;
-        Ok(())
     }
 
     fn register(&self, registrar: &mut Registrar) {
@@ -98,9 +105,21 @@ impl Plugin for InventoryPlugin {
             .expect("catalog is registered before inventory")
             .as_ref()
             .clone();
-        registrar.provide(Arc::new(PgStockLedger {
+        let ledger = Arc::new(PgStockLedger {
             catalog: catalog.clone(),
-        }));
+        });
+        registrar.provide(Arc::new(StockLedgerProvider(ledger.clone())));
+        registrar.provide(ledger);
+        registrar.provide(Arc::new(InventoryReportsProvider(Arc::new(
+            PgInventoryReporting {
+                catalog: catalog.clone(),
+            },
+        ))));
+        registrar.provide(Arc::new(
+            inventory_contract::InventoryWorkbookProvider(Arc::new(workbook::PgInventoryWorkbook {
+                catalog: catalog.clone(),
+            })),
+        ));
         registrar.capability(
             Capability {
                 id: "inventory.summary".into(),
@@ -112,7 +131,9 @@ impl Plugin for InventoryPlugin {
                 output_schema: json!({"type":"array"}),
                 description: "Stock summary".into(),
             },
-            Arc::new(SummaryCapability),
+            Arc::new(SummaryCapability {
+                catalog: catalog.clone(),
+            }),
         );
         registrar.capability(
             Capability {
@@ -139,23 +160,41 @@ impl Plugin for InventoryPlugin {
     }
 }
 
-struct OnBillPosted;
+struct PgInventoryReporting {
+    catalog: CatalogApi,
+}
 
 #[async_trait]
-impl EventHandler for OnBillPosted {
-    fn event_type(&self) -> &str {
-        "sales.bill_posted"
+impl InventoryReporting for PgInventoryReporting {
+    async fn stock_report(
+        &self,
+        tx: &mut TenantTx<'_>,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<inventory_contract::StockReport, AppError> {
+        ledger::stock_report(tx, &self.catalog, from, to).await
     }
 
-    fn subscriber_id(&self) -> &str {
-        "sale"
-    }
-
-    async fn handle(&self, tx: &mut TenantTx<'_>, envelope: &EventEnvelope) -> Result<(), AppError> {
-        let Some(bill_no) = envelope.payload.get("bill_no").and_then(|value| value.as_str()) else {
-            return Ok(());
-        };
-        sale::apply_bill(tx.transaction(), bill_no).await
+    async fn product_mix(
+        &self,
+        tx: &mut TenantTx<'_>,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<ProductMix, AppError> {
+        let mix = ledger::product_mix(tx, &self.catalog, from, to).await?;
+        Ok(ProductMix {
+            lines: mix
+                .lines
+                .into_iter()
+                .map(|line| ProductMixLine {
+                    name: line.name,
+                    qty_in: line.qty_in,
+                    qty_out: line.qty_out,
+                })
+                .collect(),
+            truncated: mix.truncated,
+            label: mix.label,
+        })
     }
 }
 
@@ -172,6 +211,21 @@ impl PgStockLedger {
         }
         Ok(())
     }
+
+    async fn lock_balance(
+        &self,
+        tx: &mut TenantTx<'_>,
+        item_id: i32,
+    ) -> Result<(i32, i64), AppError> {
+        StockLedger::ensure_balance(self, tx, item_id, None).await?;
+        let row: Option<(i32, i64)> = sqlx::query_as(
+            "SELECT stock, avg_cost FROM inventory_balances WHERE item_id = $1 FOR UPDATE",
+        )
+        .bind(item_id)
+        .fetch_optional(tx.conn())
+        .await?;
+        row.ok_or_else(|| AppError::NotFound("That item is no longer in the catalog.".into()))
+    }
 }
 
 #[async_trait]
@@ -182,16 +236,13 @@ impl StockLedger for PgStockLedger {
         ids.dedup();
         for item_id in ids {
             self.ensure_stocked(tx, item_id).await?;
-            sqlx::query("SELECT id FROM items WHERE id = $1 FOR UPDATE")
-                .bind(item_id)
-                .fetch_optional(tx.conn())
-                .await?;
+            self.lock_balance(tx, item_id).await?;
         }
         for issue in issues {
             let updated = sqlx::query(
                 r#"
-                UPDATE items SET stock = stock - $1
-                WHERE id = $2 AND stock >= $1
+                UPDATE inventory_balances SET stock = stock - $1
+                WHERE item_id = $2 AND stock >= $1
                 "#,
             )
             .bind(issue.qty)
@@ -206,19 +257,8 @@ impl StockLedger for PgStockLedger {
             }
             sqlx::query(
                 r#"
-                UPDATE inventory_balances SET stock = stock - $1
-                WHERE item_id = $2 AND stock >= $1
-                "#,
-            )
-            .bind(issue.qty)
-            .bind(issue.item_id)
-            .execute(tx.conn())
-            .await
-            .ok();
-            sqlx::query(
-                r#"
-                INSERT INTO stock_movements (item_id, qty, reason, source_type, source_id)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO stock_movements (item_id, qty, reason, source_type, source_id, bill_id, bill_no)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 "#,
             )
             .bind(issue.item_id)
@@ -226,6 +266,8 @@ impl StockLedger for PgStockLedger {
             .bind(&issue.reason)
             .bind(&issue.source_type)
             .bind(issue.source_id)
+            .bind(issue.bill_id)
+            .bind(issue.bill_no.as_deref())
             .execute(tx.conn())
             .await?;
         }
@@ -241,40 +283,21 @@ impl StockLedger for PgStockLedger {
         reason: &str,
     ) -> Result<StockBalance, AppError> {
         self.ensure_stocked(tx, item_id).await?;
-        let held: Option<(i32, i64)> =
-            sqlx::query_as("SELECT stock, avg_cost FROM items WHERE id = $1 AND active FOR UPDATE")
-                .bind(item_id)
-                .fetch_optional(tx.conn())
-                .await?;
-        let Some((on_hand, average)) = held else {
-            return Err(AppError::NotFound(
-                "That item is no longer in the catalog.".into(),
-            ));
-        };
+        let (on_hand, average) = self.lock_balance(tx, item_id).await?;
         let next_cost = total_major.map(|total| next_average(on_hand, average, qty, total));
         sqlx::query(
-            "UPDATE items SET stock = stock + $1, avg_cost = COALESCE($2, avg_cost) WHERE id = $3",
+            r#"
+            UPDATE inventory_balances
+            SET stock = stock + $1,
+                avg_cost = COALESCE($2, avg_cost)
+            WHERE item_id = $3
+            "#,
         )
         .bind(qty)
         .bind(next_cost)
         .bind(item_id)
         .execute(tx.conn())
         .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO inventory_balances (tenant_id, item_id, stock, avg_cost)
-            VALUES (current_setting('app.tenant_id')::uuid, $1, $2, COALESCE($3, 0))
-            ON CONFLICT (tenant_id, item_id) DO UPDATE
-            SET stock = inventory_balances.stock + EXCLUDED.stock,
-                avg_cost = COALESCE($3, inventory_balances.avg_cost)
-            "#,
-        )
-        .bind(item_id)
-        .bind(qty)
-        .bind(next_cost)
-        .execute(tx.conn())
-        .await
-        .ok();
         sqlx::query(
             "INSERT INTO stock_movements (item_id, qty, reason, source_type) VALUES ($1, $2, $3, 'manual')",
         )
@@ -297,7 +320,7 @@ impl StockLedger for PgStockLedger {
         item_id: i32,
     ) -> Result<Option<StockBalance>, AppError> {
         let row: Option<(i32, i64)> =
-            sqlx::query_as("SELECT stock, avg_cost FROM items WHERE id = $1 AND active")
+            sqlx::query_as("SELECT stock, avg_cost FROM inventory_balances WHERE item_id = $1")
                 .bind(item_id)
                 .fetch_optional(tx.conn())
                 .await?;
@@ -318,21 +341,53 @@ impl StockLedger for PgStockLedger {
         ids.dedup();
         let mut out = Vec::new();
         for id in ids {
-            let row: Option<(i32, i64)> = sqlx::query_as(
-                "SELECT stock, avg_cost FROM items WHERE id = $1 AND active FOR UPDATE",
-            )
-            .bind(id)
-            .fetch_optional(tx.conn())
-            .await?;
-            if let Some((stock, avg_cost)) = row {
-                out.push(StockBalance {
-                    item_id: id,
-                    stock,
-                    avg_cost,
-                });
+            if !self.catalog.0.is_stock_tracked(tx, id).await? {
+                continue;
             }
+            let (stock, avg_cost) = self.lock_balance(tx, id).await?;
+            out.push(StockBalance {
+                item_id: id,
+                stock,
+                avg_cost,
+            });
         }
         Ok(out)
+    }
+
+    async fn ensure_balance(
+        &self,
+        tx: &mut TenantTx<'_>,
+        item_id: i32,
+        avg_cost: Option<i64>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO inventory_balances (tenant_id, item_id, stock, avg_cost)
+            VALUES (current_setting('app.tenant_id')::uuid, $1, 0, COALESCE($2, 0))
+            ON CONFLICT (tenant_id, item_id) DO UPDATE
+            SET avg_cost = COALESCE($2, inventory_balances.avg_cost)
+            "#,
+        )
+        .bind(item_id)
+        .bind(avg_cost)
+        .execute(tx.conn())
+        .await?;
+        Ok(())
+    }
+
+    async fn all_balances(&self, tx: &mut TenantTx<'_>) -> Result<Vec<StockBalance>, AppError> {
+        let rows: Vec<(i32, i32, i64)> =
+            sqlx::query_as("SELECT item_id, stock, avg_cost FROM inventory_balances")
+                .fetch_all(tx.conn())
+                .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(item_id, stock, avg_cost)| StockBalance {
+                item_id,
+                stock,
+                avg_cost,
+            })
+            .collect())
     }
 }
 
@@ -347,7 +402,9 @@ fn next_average(on_hand: i32, average: i64, qty: i32, total_major: i64) -> i64 {
     (on_hand * average + qty * unit + next / 2) / next
 }
 
-struct SummaryCapability;
+struct SummaryCapability {
+    catalog: CatalogApi,
+}
 
 #[async_trait]
 impl CapabilityHandler for SummaryCapability {
@@ -356,15 +413,12 @@ impl CapabilityHandler for SummaryCapability {
         tx: &mut TenantTx<'_>,
         _input: serde_json::Value,
     ) -> Result<serde_json::Value, AppError> {
-        let rows: Vec<(i32, String, i32, i64)> = sqlx::query_as(
-            "SELECT id, name, stock, avg_cost FROM items WHERE active ORDER BY sort_order, id",
-        )
-        .fetch_all(tx.conn())
-        .await?;
-        Ok(json!(rows
+        let snapshot = self.catalog.0.snapshot(tx).await?;
+        Ok(json!(snapshot
+            .items
             .into_iter()
-            .map(|(id, name, stock, avg_cost)| {
-                json!({"id": id, "name": name, "stock": stock, "avg_cost": avg_cost})
+            .map(|item| {
+                json!({"id": item.id, "name": item.name, "stock": item.stock, "avg_cost": item.cost})
             })
             .collect::<Vec<_>>()))
     }
@@ -389,7 +443,8 @@ impl CapabilityHandler for AdjustCapability {
         let qty = input
             .get("qty")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| AppError::BadRequest("qty is required.".into()))? as i32;
+            .ok_or_else(|| AppError::BadRequest("qty is required.".into()))?
+            as i32;
         let direction = input
             .get("direction")
             .and_then(|v| v.as_str())
@@ -412,6 +467,8 @@ impl CapabilityHandler for AdjustCapability {
                             reason: "AI adjust".into(),
                             source_type: "manual".into(),
                             source_id: None,
+                            bill_id: None,
+                            bill_no: None,
                         }],
                     )
                     .await?;

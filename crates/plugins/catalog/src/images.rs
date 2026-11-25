@@ -55,7 +55,9 @@ pub fn sniff_image(bytes: &[u8]) -> Result<&'static str, AppError> {
     if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return Ok("webp");
     }
-    Err(AppError::BadRequest("Use a JPEG, PNG, WebP, or GIF.".into()))
+    Err(AppError::BadRequest(
+        "Use a JPEG, PNG, WebP, or GIF.".into(),
+    ))
 }
 
 pub fn write_image(id: i32, ext: &str, bytes: &[u8]) -> Result<(), AppError> {

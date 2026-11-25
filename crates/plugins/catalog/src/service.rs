@@ -1,4 +1,7 @@
-use catalog_contract::{CategoryRef, ItemRef, SectionRef, VariantRef};
+use catalog_contract::{
+    CatalogCategory, CatalogItem, CatalogSection, CatalogSnapshot, CatalogVariant, CategoryRef,
+    ItemRef, SectionRef, VariantRef,
+};
 use platform_kernel::context::TenantTx;
 use platform_kernel::error::AppError;
 use serde::{Deserialize, Serialize};
@@ -125,7 +128,9 @@ impl ItemKind {
 }
 
 pub fn tracks_stock(item_type: &str) -> bool {
-    ItemKind::parse(item_type).map(|kind| kind.tracks_stock()).unwrap_or(true)
+    ItemKind::parse(item_type)
+        .map(|kind| kind.tracks_stock())
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -189,11 +194,17 @@ async fn emit(tx: &mut TenantTx<'_>, event_type: &str, item_id: i32) -> Result<(
     Ok(())
 }
 
-pub async fn save_section(tx: &mut TenantTx<'_>, id: Option<i32>, form: &SectionForm) -> Result<i32, AppError> {
+pub async fn save_section(
+    tx: &mut TenantTx<'_>,
+    id: Option<i32>,
+    form: &SectionForm,
+) -> Result<i32, AppError> {
     let name = form.name.trim();
     let short_name = form.short_name.trim();
     if name.is_empty() || short_name.is_empty() {
-        return Err(AppError::BadRequest("Enter a section name and short name.".into()));
+        return Err(AppError::BadRequest(
+            "Enter a section name and short name.".into(),
+        ));
     }
     if form.kind != "retail" && form.kind != "food" {
         return Err(AppError::BadRequest("Choose retail or food.".into()));
@@ -210,13 +221,16 @@ pub async fn save_section(tx: &mut TenantTx<'_>, id: Option<i32>, form: &Section
         .execute(tx.conn())
         .await?;
         if updated.rows_affected() == 0 {
-            return Err(AppError::NotFound("That section is no longer in the catalog.".into()));
+            return Err(AppError::NotFound(
+                "That section is no longer in the catalog.".into(),
+            ));
         }
         Ok(id)
     } else {
-        let order = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(pos_order), -1) + 1 FROM sections")
-            .fetch_one(tx.conn())
-            .await?;
+        let order =
+            sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(pos_order), -1) + 1 FROM sections")
+                .fetch_one(tx.conn())
+                .await?;
         let id = sqlx::query_scalar::<_, i32>(
             r#"
             INSERT INTO sections (name, short_name, kind, accent, show_on_pos, pos_order)
@@ -235,32 +249,42 @@ pub async fn save_section(tx: &mut TenantTx<'_>, id: Option<i32>, form: &Section
     }
 }
 
-pub async fn remove_section(tx: &mut TenantTx<'_>, id: i32) -> Result<(), AppError> {
+pub async fn remove_section(
+    tx: &mut TenantTx<'_>,
+    id: i32,
+    bill_count: i64,
+) -> Result<(), AppError> {
     let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM items WHERE section_id = $1")
         .bind(id)
         .fetch_one(tx.conn())
         .await?;
     if items > 0 {
-        return Err(AppError::BadRequest("Move this section's items before removing it.".into()));
+        return Err(AppError::BadRequest(
+            "Move this section's items before removing it.".into(),
+        ));
     }
-    let bills: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bills WHERE section_id = $1")
-        .bind(id)
-        .fetch_one(tx.conn())
-        .await?;
-    if bills > 0 {
-        return Err(AppError::BadRequest("This section has bills, so it stays on record.".into()));
+    if bill_count > 0 {
+        return Err(AppError::BadRequest(
+            "This section has bills, so it stays on record.".into(),
+        ));
     }
     let deleted = sqlx::query("DELETE FROM sections WHERE id = $1")
         .bind(id)
         .execute(tx.conn())
         .await?;
     if deleted.rows_affected() == 0 {
-        return Err(AppError::NotFound("That section is no longer in the catalog.".into()));
+        return Err(AppError::NotFound(
+            "That section is no longer in the catalog.".into(),
+        ));
     }
     Ok(())
 }
 
-pub async fn save_category(tx: &mut TenantTx<'_>, id: Option<i32>, form: &CategoryForm) -> Result<i32, AppError> {
+pub async fn save_category(
+    tx: &mut TenantTx<'_>,
+    id: Option<i32>,
+    form: &CategoryForm,
+) -> Result<i32, AppError> {
     let name = form.name.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest("Enter a category name.".into()));
@@ -273,38 +297,53 @@ pub async fn save_category(tx: &mut TenantTx<'_>, id: Option<i32>, form: &Catego
             .await
             .map_err(catalog_error)?;
         if updated.rows_affected() == 0 {
-            return Err(AppError::NotFound("That category is no longer in the catalog.".into()));
+            return Err(AppError::NotFound(
+                "That category is no longer in the catalog.".into(),
+            ));
         }
         Ok(id)
     } else {
-        let order = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories")
-            .fetch_one(tx.conn())
-            .await?;
-        sqlx::query_scalar(
-            "INSERT INTO categories (name, sort_order) VALUES ($1, $2) RETURNING id",
+        let order = sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories",
         )
-        .bind(name)
-        .bind(order)
         .fetch_one(tx.conn())
-        .await
-        .map_err(catalog_error)
+        .await?;
+        sqlx::query_scalar("INSERT INTO categories (name, sort_order) VALUES ($1, $2) RETURNING id")
+            .bind(name)
+            .bind(order)
+            .fetch_one(tx.conn())
+            .await
+            .map_err(catalog_error)
     }
 }
 
-pub async fn reorder(tx: &mut TenantTx<'_>, table: &str, column: &str, ids: &[i32]) -> Result<(), AppError> {
+pub async fn reorder(
+    tx: &mut TenantTx<'_>,
+    table: &str,
+    column: &str,
+    ids: &[i32],
+) -> Result<(), AppError> {
     let (table, column) = match (table, column) {
         ("sections", "pos_order") => ("sections", "pos_order"),
         ("categories", "sort_order") => ("categories", "sort_order"),
-        _ => return Err(AppError::BadRequest("That catalog list cannot be reordered.".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "That catalog list cannot be reordered.".into(),
+            ))
+        }
     };
     if ids.is_empty() {
-        return Err(AppError::BadRequest("List every record when changing the order.".into()));
+        return Err(AppError::BadRequest(
+            "List every record when changing the order.".into(),
+        ));
     }
     let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
         .fetch_one(tx.conn())
         .await?;
     if total != ids.len() as i64 {
-        return Err(AppError::BadRequest("List every record when changing the order.".into()));
+        return Err(AppError::BadRequest(
+            "List every record when changing the order.".into(),
+        ));
     }
     for (index, id) in ids.iter().enumerate() {
         sqlx::query(&format!("UPDATE {table} SET {column} = $1 WHERE id = $2"))
@@ -322,19 +361,27 @@ pub async fn remove_category(tx: &mut TenantTx<'_>, id: i32) -> Result<(), AppEr
         .fetch_one(tx.conn())
         .await?;
     if items > 0 {
-        return Err(AppError::BadRequest("Move this category's items before removing it.".into()));
+        return Err(AppError::BadRequest(
+            "Move this category's items before removing it.".into(),
+        ));
     }
     let deleted = sqlx::query("DELETE FROM categories WHERE id = $1")
         .bind(id)
         .execute(tx.conn())
         .await?;
     if deleted.rows_affected() == 0 {
-        return Err(AppError::NotFound("That category is no longer in the catalog.".into()));
+        return Err(AppError::NotFound(
+            "That category is no longer in the catalog.".into(),
+        ));
     }
     Ok(())
 }
 
-pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemForm) -> Result<i32, AppError> {
+pub async fn save_item(
+    tx: &mut TenantTx<'_>,
+    item_id: Option<i32>,
+    form: &ItemForm,
+) -> Result<i32, AppError> {
     let name = form.name.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest("Enter an item name.".into()));
@@ -355,9 +402,9 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
             r#"
             UPDATE items
             SET section_id = $1, category_id = $2, barcode = $3, name = $4, rate = $5,
-                prompt = $6, base_rate = $7, scale = $8, avg_cost = $9,
-                item_type = $10, unit_id = COALESCE($11, unit_id)
-            WHERE id = $12 AND active
+                prompt = $6, base_rate = $7, scale = $8,
+                item_type = $9, unit_id = COALESCE($10, unit_id)
+            WHERE id = $11 AND active
             "#,
         )
         .bind(form.section_id)
@@ -368,7 +415,6 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
         .bind(prompt)
         .bind(form.base_rate)
         .bind(form.scale.max(1))
-        .bind(form.cost)
         .bind(kind.as_str())
         .bind(form.unit_id)
         .bind(id)
@@ -376,9 +422,15 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
         .await
         .map_err(catalog_error)?;
         if updated.rows_affected() == 0 {
-            return Err(AppError::NotFound("That item is not in the catalog.".into()));
+            return Err(AppError::NotFound(
+                "That item is not in the catalog.".into(),
+            ));
         }
-        let keep: Vec<i32> = form.variants.iter().filter_map(|variant| variant.id).collect();
+        let keep: Vec<i32> = form
+            .variants
+            .iter()
+            .filter_map(|variant| variant.id)
+            .collect();
         sqlx::query("DELETE FROM item_variants WHERE item_id = $1 AND NOT (id = ANY($2))")
             .bind(id)
             .bind(&keep)
@@ -401,10 +453,10 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
         sqlx::query_scalar(
             r#"
             INSERT INTO items (
-                section_id, category_id, barcode, name, rate, stock, prompt, base_rate, scale,
-                avg_cost, sort_order, item_type, unit_id
+                section_id, category_id, barcode, name, rate, prompt, base_rate, scale,
+                sort_order, item_type, unit_id
             )
-            VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
             "#,
         )
@@ -416,7 +468,6 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
         .bind(prompt)
         .bind(form.base_rate)
         .bind(form.scale.max(1))
-        .bind(form.cost)
         .bind(sort_order)
         .bind(kind.as_str())
         .bind(form.unit_id)
@@ -495,7 +546,11 @@ pub async fn save_item(tx: &mut TenantTx<'_>, item_id: Option<i32>, form: &ItemF
     Ok(saved)
 }
 
-pub async fn set_item_prompt(tx: &mut TenantTx<'_>, item_id: i32, request: &ItemPromptRequest) -> Result<(), AppError> {
+pub async fn set_item_prompt(
+    tx: &mut TenantTx<'_>,
+    item_id: i32,
+    request: &ItemPromptRequest,
+) -> Result<(), AppError> {
     let updated = sqlx::query(
         "UPDATE items SET prompt = $1, base_rate = $2, scale = $3 WHERE id = $4 AND active",
     )
@@ -506,15 +561,23 @@ pub async fn set_item_prompt(tx: &mut TenantTx<'_>, item_id: i32, request: &Item
     .execute(tx.conn())
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::NotFound("That item is not in the catalog.".into()));
+        return Err(AppError::NotFound(
+            "That item is not in the catalog.".into(),
+        ));
     }
     emit(tx, catalog_contract::events::ITEM_SAVED, item_id).await?;
     Ok(())
 }
 
-pub async fn set_item_image(tx: &mut TenantTx<'_>, item_id: i32, ext: &str) -> Result<(), AppError> {
+pub async fn set_item_image(
+    tx: &mut TenantTx<'_>,
+    item_id: i32,
+    ext: &str,
+) -> Result<(), AppError> {
     if !matches!(ext, "jpg" | "png" | "webp" | "gif") {
-        return Err(AppError::BadRequest("Use a JPEG, PNG, WebP, or GIF.".into()));
+        return Err(AppError::BadRequest(
+            "Use a JPEG, PNG, WebP, or GIF.".into(),
+        ));
     }
     let updated = sqlx::query(
         "UPDATE items SET image_ext = $1, image_rev = image_rev + 1 WHERE id = $2 AND active",
@@ -524,7 +587,9 @@ pub async fn set_item_image(tx: &mut TenantTx<'_>, item_id: i32, ext: &str) -> R
     .execute(tx.conn())
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::NotFound("That item is no longer in the catalog.".into()));
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
     }
     Ok(())
 }
@@ -535,7 +600,9 @@ pub async fn clear_item_image(tx: &mut TenantTx<'_>, item_id: i32) -> Result<(),
         .execute(tx.conn())
         .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::NotFound("That item is no longer in the catalog.".into()));
+        return Err(AppError::NotFound(
+            "That item is no longer in the catalog.".into(),
+        ));
     }
     Ok(())
 }
@@ -564,7 +631,9 @@ pub async fn save_unit(tx: &mut TenantTx<'_>, form: &UnitForm) -> Result<i32, Ap
         return Err(AppError::BadRequest("Enter a unit code and name.".into()));
     }
     if form.factor < 1 {
-        return Err(AppError::BadRequest("A unit factor must be at least 1.".into()));
+        return Err(AppError::BadRequest(
+            "A unit factor must be at least 1.".into(),
+        ));
     }
     sqlx::query_scalar(
         r#"
@@ -591,7 +660,19 @@ const ITEM_SQL: &str = r#"
     LEFT JOIN catalog_units u ON u.id = i.unit_id
 "#;
 
-fn map_item(row: (i32, String, i32, i32, Option<String>, i32, bool, String, Option<String>)) -> ItemRef {
+fn map_item(
+    row: (
+        i32,
+        String,
+        i32,
+        i32,
+        Option<String>,
+        i32,
+        bool,
+        String,
+        Option<String>,
+    ),
+) -> ItemRef {
     ItemRef {
         id: row.0,
         name: row.1,
@@ -607,6 +688,27 @@ fn map_item(row: (i32, String, i32, i32, Option<String>, i32, bool, String, Opti
 
 pub struct Query;
 
+#[derive(sqlx::FromRow)]
+struct SnapshotItemRow {
+    id: i32,
+    section_id: i32,
+    category_id: i32,
+    category_name: String,
+    barcode: Option<String>,
+    name: String,
+    rate: i32,
+    avg_cost: i64,
+    stock: i32,
+    portion: String,
+    group_name: Option<String>,
+    signature: bool,
+    prompt: String,
+    base_rate: Option<i32>,
+    scale: i32,
+    image_ext: Option<String>,
+    image_rev: i32,
+}
+
 #[async_trait::async_trait]
 impl catalog_contract::CatalogQuery for Query {
     async fn get_item(&self, tx: &mut TenantTx<'_>, id: i32) -> Result<Option<ItemRef>, AppError> {
@@ -617,30 +719,41 @@ impl catalog_contract::CatalogQuery for Query {
         Ok(row.map(map_item))
     }
 
-    async fn get_variant(&self, tx: &mut TenantTx<'_>, id: i32) -> Result<Option<VariantRef>, AppError> {
-        let row: Option<(i32, i32, String, i32, i32, Option<String>, Option<String>)> = sqlx::query_as(
-            r#"
+    async fn get_variant(
+        &self,
+        tx: &mut TenantTx<'_>,
+        id: i32,
+    ) -> Result<Option<VariantRef>, AppError> {
+        let row: Option<(i32, i32, String, i32, i32, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                r#"
             SELECT v.id, v.item_id, v.name, v.rate, v.units, v.barcode, u.code
             FROM item_variants v
             LEFT JOIN catalog_units u ON u.id = v.unit_id
             WHERE v.id = $1
             "#,
-        )
-        .bind(id)
-        .fetch_optional(tx.conn())
-        .await?;
-        Ok(row.map(|(id, item_id, name, rate, units, barcode, unit_code)| VariantRef {
-            id,
-            item_id,
-            name,
-            rate,
-            units,
-            barcode,
-            unit_code,
-        }))
+            )
+            .bind(id)
+            .fetch_optional(tx.conn())
+            .await?;
+        Ok(row.map(
+            |(id, item_id, name, rate, units, barcode, unit_code)| VariantRef {
+                id,
+                item_id,
+                name,
+                rate,
+                units,
+                barcode,
+                unit_code,
+            },
+        ))
     }
 
-    async fn items_by_ids(&self, tx: &mut TenantTx<'_>, ids: &[i32]) -> Result<Vec<ItemRef>, AppError> {
+    async fn items_by_ids(
+        &self,
+        tx: &mut TenantTx<'_>,
+        ids: &[i32],
+    ) -> Result<Vec<ItemRef>, AppError> {
         let rows = sqlx::query_as(&format!("{ITEM_SQL} WHERE i.id = ANY($1) ORDER BY i.id"))
             .bind(ids)
             .fetch_all(tx.conn())
@@ -648,7 +761,11 @@ impl catalog_contract::CatalogQuery for Query {
         Ok(rows.into_iter().map(map_item).collect())
     }
 
-    async fn find_by_barcode(&self, tx: &mut TenantTx<'_>, barcode: &str) -> Result<Option<ItemRef>, AppError> {
+    async fn find_by_barcode(
+        &self,
+        tx: &mut TenantTx<'_>,
+        barcode: &str,
+    ) -> Result<Option<ItemRef>, AppError> {
         let row = sqlx::query_as(&format!("{ITEM_SQL} WHERE i.barcode = $1"))
             .bind(barcode)
             .fetch_optional(tx.conn())
@@ -663,7 +780,11 @@ impl catalog_contract::CatalogQuery for Query {
                 .await?;
         Ok(rows
             .into_iter()
-            .map(|(id, name, short_name)| SectionRef { id, name, short_name })
+            .map(|(id, name, short_name)| SectionRef {
+                id,
+                name,
+                short_name,
+            })
             .collect())
     }
 
@@ -678,11 +799,131 @@ impl catalog_contract::CatalogQuery for Query {
             .collect())
     }
 
-    async fn is_stock_tracked(&self, tx: &mut TenantTx<'_>, item_id: i32) -> Result<bool, AppError> {
+    async fn is_stock_tracked(
+        &self,
+        tx: &mut TenantTx<'_>,
+        item_id: i32,
+    ) -> Result<bool, AppError> {
         let kind: Option<String> = sqlx::query_scalar("SELECT item_type FROM items WHERE id = $1")
             .bind(item_id)
             .fetch_optional(tx.conn())
             .await?;
         Ok(kind.as_deref().map(tracks_stock).unwrap_or(false))
     }
+
+    async fn set_pos_layout(
+        &self,
+        tx: &mut TenantTx<'_>,
+        layout: &[(i32, bool, i32)],
+    ) -> Result<(), AppError> {
+        for (section_id, show_on_pos, pos_order) in layout {
+            sqlx::query("UPDATE sections SET show_on_pos = $1, pos_order = $2 WHERE id = $3")
+                .bind(show_on_pos)
+                .bind(pos_order)
+                .bind(section_id)
+                .execute(tx.conn())
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn snapshot(&self, tx: &mut TenantTx<'_>) -> Result<CatalogSnapshot, AppError> {
+        let sections = sqlx::query_as::<_, (i32, String, String, String, String, bool, i32)>(
+            "SELECT id, name, short_name, kind, accent, show_on_pos, pos_order FROM sections ORDER BY pos_order, id",
+        )
+        .fetch_all(tx.conn())
+        .await?
+        .into_iter()
+        .map(|(id, name, short_name, kind, accent, show_on_pos, pos_order)| CatalogSection {
+            id,
+            name,
+            short_name,
+            kind,
+            accent,
+            show_on_pos,
+            pos_order,
+        })
+        .collect();
+        let categories = sqlx::query_as::<_, (i32, String, i32)>(
+            "SELECT id, name, sort_order FROM categories ORDER BY sort_order, id",
+        )
+        .fetch_all(tx.conn())
+        .await?
+        .into_iter()
+        .map(|(id, name, sort_order)| CatalogCategory {
+            id,
+            name,
+            sort_order,
+        })
+        .collect();
+        let rows = sqlx::query_as::<_, SnapshotItemRow>(
+            r#"
+            SELECT i.id, i.section_id, i.category_id, c.name AS category_name, i.barcode, i.name,
+                   i.rate, COALESCE(b.avg_cost, 0) AS avg_cost, COALESCE(b.stock, 0) AS stock,
+                   i.portion, i.group_name, i.signature,
+                   i.prompt, i.base_rate, i.scale, i.image_ext, i.image_rev
+            FROM items i
+            JOIN categories c ON c.id = i.category_id
+            LEFT JOIN inventory_balances b ON b.item_id = i.id
+            WHERE i.active
+            ORDER BY i.sort_order, i.id
+            "#,
+        )
+        .fetch_all(tx.conn())
+        .await?;
+        let variants: Vec<CatalogVariant> = sqlx::query_as::<_, (i32, i32, String, i32, i32, Option<String>)>(
+            "SELECT id, item_id, name, rate, units, barcode FROM item_variants ORDER BY sort_order, id",
+        )
+        .fetch_all(tx.conn())
+        .await?
+        .into_iter()
+        .map(|(id, item_id, name, rate, units, barcode)| CatalogVariant {
+            id,
+            item_id,
+            name,
+            rate,
+            units,
+            barcode,
+        })
+        .collect();
+        let items = rows
+            .into_iter()
+            .map(|row| CatalogItem {
+                id: row.id,
+                section_id: row.section_id,
+                category_id: row.category_id,
+                category_name: row.category_name,
+                barcode: row.barcode,
+                name: row.name,
+                rate: row.rate,
+                cost: row.avg_cost,
+                stock: row.stock,
+                portion: row.portion,
+                group_name: row.group_name,
+                signature: row.signature,
+                prompt: row.prompt,
+                base_rate: row.base_rate,
+                scale: row.scale,
+                image_url: item_image_url(row.id, row.image_ext.as_deref(), row.image_rev),
+                variants: variants
+                    .iter()
+                    .filter(|variant| variant.item_id == row.id)
+                    .cloned()
+                    .collect(),
+            })
+            .collect();
+        Ok(CatalogSnapshot {
+            sections,
+            categories,
+            items,
+        })
+    }
+}
+
+fn item_image_url(id: i32, ext: Option<&str>, rev: i32) -> Option<String> {
+    let ext = ext?;
+    if !matches!(ext, "jpg" | "png" | "webp" | "gif") {
+        return None;
+    }
+    Some(format!("/api/v1/catalog/items/{id}/image?v={rev}"))
 }

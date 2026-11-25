@@ -13,8 +13,11 @@ struct MovementQuery {
 }
 
 async fn summary(db: TenantDb) -> Result<Json<Vec<crate::ledger::StockBalance>>, AppError> {
+    let catalog = db
+        .provider::<catalog_contract::CatalogApi>()
+        .ok_or_else(|| AppError::Conflict("Catalog is not enabled.".into()))?;
     let mut tx = db.begin(true).await?;
-    let rows = stock_summary(tx.transaction()).await?;
+    let rows = stock_summary(&mut tx, &catalog).await?;
     tx.commit().await?;
     Ok(Json(rows))
 }
@@ -23,15 +26,21 @@ async fn movements(
     db: TenantDb,
     Query(query): Query<MovementQuery>,
 ) -> Result<Json<Vec<crate::ledger::StockMovement>>, AppError> {
+    let catalog = db
+        .provider::<catalog_contract::CatalogApi>()
+        .ok_or_else(|| AppError::Conflict("Catalog is not enabled.".into()))?;
     let mut tx = db.begin(true).await?;
-    let rows = recent_movements(tx.transaction(), query.item_id).await?;
+    let rows = recent_movements(&mut tx, &catalog, query.item_id).await?;
     tx.commit().await?;
     Ok(Json(rows))
 }
 
 async fn adjust(db: TenantDb, Json(body): Json<StockMove>) -> Result<Json<Value>, AppError> {
+    let catalog = db
+        .provider::<catalog_contract::CatalogApi>()
+        .ok_or_else(|| AppError::Conflict("Catalog is not enabled.".into()))?;
     let mut tx = db.begin(false).await?;
-    let movements = adjust_stock(tx.transaction(), &body).await?;
+    let movements = adjust_stock(&mut tx, &catalog, &body).await?;
     tx.commit().await?;
     Ok(Json(json!({ "movements": movements })))
 }
