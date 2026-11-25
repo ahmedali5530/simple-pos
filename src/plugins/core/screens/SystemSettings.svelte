@@ -1,12 +1,12 @@
 <script lang="ts">
   import { saveShopProfile } from '../../../lib/api'
-  import type { BarcodeRule, PosSnapshot } from '../../../lib/types'
+  import type { BarcodeRule, ShopSnapshot } from '../../../lib/types'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Select } from '../../../lib/ui'
 
   interface Props {
-    snapshot: PosSnapshot
-    onChange: (pos: PosSnapshot) => void
+    snapshot: ShopSnapshot
+    onChange: (shop: ShopSnapshot) => void
   }
 
   let { snapshot, onChange }: Props = $props()

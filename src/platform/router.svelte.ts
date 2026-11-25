@@ -6,7 +6,7 @@ export type ReportPage = (typeof reportPages)[number]
 
 function canonical(pathname: string) {
   const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
-  if (path === '/' || path === '') return '/billing'
+  if (path === '/' || path === '') return '/settings/system'
   if (path === '/settings') return '/settings/items'
   if (path === '/reports') return '/reports/sales'
   return path

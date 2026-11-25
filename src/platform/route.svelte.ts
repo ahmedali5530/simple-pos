@@ -1,3 +1,5 @@
+import type { UiNavItem } from './registry'
+
 const settingsPages = ['items', 'sections', 'categories', 'units', 'users', 'system', 'printing', 'plugins'] as const
 const reportPages = ['sales', 'ledger', 'mix'] as const
 
@@ -6,7 +8,7 @@ export type ReportPage = (typeof reportPages)[number]
 
 function canonical(pathname: string) {
   const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
-  if (path === '/' || path === '') return '/billing'
+  if (path === '/' || path === '') return '/settings/system'
   if (path === '/settings') return '/settings/items'
   if (path === '/reports') return '/reports/sales'
   return path
@@ -49,6 +51,10 @@ export function screenOf(path: string) {
 export function settingsPage(path: string): SettingsPage {
   const page = path.slice('/settings/'.length)
   return settingsPages.includes(page as SettingsPage) ? (page as SettingsPage) : 'items'
+}
+
+export function navFirst(nav: UiNavItem[]): string {
+  return nav.length ? nav[0].href ?? '/settings/system' : '/settings/system'
 }
 
 export function reportsPage(path: string): ReportPage {

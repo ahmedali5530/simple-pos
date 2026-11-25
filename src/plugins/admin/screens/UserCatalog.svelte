@@ -1,12 +1,12 @@
 <script lang="ts">
   import { removeUser, saveUser } from '../../../lib/api'
-  import type { PosSnapshot, PosUser } from '../../../lib/types'
+  import type { PosUser } from '../../../lib/types'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Segmented, Switch } from '../../../lib/ui'
 
   interface Props {
     users: PosUser[]
-    onChange: (pos: PosSnapshot) => void
+    onChange: (users: PosUser[]) => void
   }
 
   let { users, onChange }: Props = $props()
@@ -52,15 +52,18 @@
     }
     saving = true
     try {
-      const saved = await saveUser(editing === 'new' ? null : editing, {
+      const savedUsers = await saveUser(editing === 'new' ? null : editing, {
         name: name.trim(),
         password: password.trim() || null,
         role,
         active,
       })
-      onChange(saved.pos)
-      loaded = saved.id
-      editing = saved.id
+      onChange(savedUsers)
+      const saved = savedUsers.find((user) => user.name === name.trim())
+      if (saved) {
+        loaded = saved.id
+        editing = saved.id
+      }
       password = ''
       toastSaved('User saved.')
     } catch (error) {
