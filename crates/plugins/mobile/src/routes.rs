@@ -1,5 +1,6 @@
 use axum::extract::{Path, Query};
 use axum::Json;
+use catalog_contract::CatalogApi;
 use platform_kernel::error::AppError;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
 use serde::Deserialize;
@@ -198,11 +199,11 @@ async fn save_model(
     }
     let months = valid_months(body.warranty_months)?;
     let mut tx = db.begin(false).await?;
-    let exists: Option<i32> = sqlx::query_scalar("SELECT id FROM items WHERE id = $1 AND active")
-        .bind(item_id)
-        .fetch_optional(tx.conn())
-        .await?;
-    if exists.is_none() {
+    let catalog = db.provider::<CatalogApi>().ok_or_else(|| {
+        AppError::Conflict("Catalog is not enabled.".into())
+    })?;
+    let item = catalog.0.get_item(&mut tx, item_id).await?;
+    if item.is_none_or(|item| !item.active) {
         return Err(AppError::NotFound(
             "That item is not in the catalog.".into(),
         ));
@@ -249,39 +250,24 @@ struct DeviceQuery {
     item_id: Option<i32>,
 }
 
-/// Device status is derived from the bills too, not only from `mobile_devices`.
-/// The warranty handler marks the row sold a moment after the bill commits, so
-/// between those two steps a just-sold unit would otherwise still look available.
+/// Sale state is projected onto mobile-owned records from the sales event.
 const DEVICE_SQL: &str = r#"
     WITH devices AS (
         SELECT d.id, d.item_id, d.imei, d.serial,
                CASE
-                   WHEN d.status = 'sold' OR sold.bill_id IS NOT NULL THEN 'sold'
+                   WHEN d.status = 'sold' THEN 'sold'
                    ELSE 'in_stock'
                END AS status,
                d.received_on::text AS received_on,
                d.warranty_months,
-               COALESCE(NULLIF(d.sold_bill_no, ''), sold.bill_no, '') AS sold_bill_no,
-               COALESCE(d.sold_at::text, sold.created_at) AS sold_at,
-               COALESCE(NULLIF(d.customer_name, ''), sold.customer, '') AS customer_name,
+               COALESCE(d.sold_bill_no, '') AS sold_bill_no,
+               COALESCE(d.sold_at::text, '') AS sold_at,
+               COALESCE(d.customer_name, '') AS customer_name,
                COALESCE(m.brand, '') AS brand,
                COALESCE(m.model, '') AS model,
                w.starts_on,
                w.ends_on
         FROM mobile_devices d
-        LEFT JOIN LATERAL (
-            SELECT b.id AS bill_id,
-                   b.bill_no,
-                   b.created_at::text AS created_at,
-                   COALESCE(b.customer, '') AS customer
-            FROM bill_lines bl
-            JOIN bills b ON b.tenant_id = bl.tenant_id AND b.id = bl.bill_id
-            WHERE bl.tenant_id = d.tenant_id
-              AND bl.source = 'mobile.device'
-              AND bl.reference = 'device:' || d.id::text
-            ORDER BY bl.id DESC
-            LIMIT 1
-        ) sold ON true
         LEFT JOIN mobile_models m
           ON m.tenant_id = d.tenant_id AND m.item_id = d.item_id
         LEFT JOIN LATERAL (
@@ -470,9 +456,7 @@ async fn open_claim(db: TenantDb, Json(body): Json<NewClaim>) -> Result<Json<Val
         .fetch_optional(tx.conn())
         .await?;
     if device.is_none() {
-        return Err(AppError::NotFound(
-            "That device is not registered.".into(),
-        ));
+        return Err(AppError::NotFound("That device is not registered.".into()));
     }
     let id: i32 = sqlx::query_scalar(
         r#"

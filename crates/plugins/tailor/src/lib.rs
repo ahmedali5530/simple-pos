@@ -1,4 +1,4 @@
-use platform_kernel::manifest::{Dependency, NavItem, PluginManifest, SlotDecl};
+use platform_kernel::manifest::{NavItem, PluginManifest, SlotDecl};
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
@@ -17,7 +17,6 @@ impl Plugin for TailorPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("tailor", "Tailor", "0.1.0");
         manifest.description = "Orders with measurements, cloth, sewing, delivery, and payment splits.".into();
-        manifest.optional = vec![Dependency::new("customers", "^0.1")];
         manifest.permissions = vec![Permission::new("tailor.read"), Permission::new("tailor.write")];
         manifest.nav = vec![NavItem {
             id: "tailor".into(),

@@ -2,6 +2,7 @@
   import type { Snippet } from 'svelte'
   import { loadPos } from '../lib/api'
   import type { PosSnapshot } from '../lib/types'
+  import PluginNeed from './PluginNeed.svelte'
 
   interface Props {
     children: Snippet<[PosSnapshot, (pos: PosSnapshot) => void]>
@@ -21,7 +22,10 @@
 {#if snapshot}
   {@render children(snapshot, (pos) => (snapshot = pos))}
 {:else if failed}
-  <p class="loading">The till did not open.</p>
+  <PluginNeed
+    plugin="Point of Sale"
+    purpose="Enable Point of Sale in Settings → Plugins to open the till."
+  />
 {:else}
   <p class="loading">Opening the till…</p>
 {/if}

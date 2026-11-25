@@ -1,12 +1,21 @@
 <script lang="ts">
-  import ShopGate from '../../../platform/ShopGate.svelte'
+  import PluginNeed from '../../../platform/PluginNeed.svelte'
+  import ShopLocaleGate from '../../../platform/ShopLocaleGate.svelte'
+  import { pluginEnabled } from '../../../platform/enabled.svelte'
   import CashScreen from './CashScreen.svelte'
 </script>
 
-<main class="stage">
-  <ShopGate>
-    {#snippet children(snapshot)}
-      <CashScreen currency={snapshot.currency} locale={snapshot.locale} />
-    {/snippet}
-  </ShopGate>
-</main>
+{#if !pluginEnabled('pos')}
+  <PluginNeed
+    plugin="Point of Sale"
+    purpose="Enable Point of Sale in Settings → Plugins so cash closing can read sales totals."
+  />
+{:else}
+  <main class="stage">
+    <ShopLocaleGate>
+      {#snippet children(shop)}
+        <CashScreen currency={shop.currency} locale={shop.locale} />
+      {/snippet}
+    </ShopLocaleGate>
+  </main>
+{/if}

@@ -13,4 +13,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
 sales-contract = { path = "../../contracts/sales-contract" }
-printing-contract = { path = "../../contracts/printing-contract" }
+cash-contract = { path = "../../contracts/cash-contract" }

@@ -1,11 +1,9 @@
-use platform_kernel::capability::{Capability, CapabilityEffect, CapabilityKind};
 use platform_kernel::contract::Registrar;
 use platform_kernel::manifest::{Dependency, NavItem, PluginManifest, ReportPage};
 use platform_kernel::migrate::Migration;
 use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
-use serde_json::json;
 
 mod routes;
 
@@ -19,30 +17,14 @@ pub fn plugin() -> std::sync::Arc<dyn Plugin> {
 impl Plugin for ReportsPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("reports", "Reports", "0.1.0");
+        manifest.default_enabled = true;
         manifest.description = "Sales, ledger and product-mix reports.".into();
-        manifest.requires = vec![
+        manifest.optional = vec![
             Dependency::new("pos", "^0.1"),
             Dependency::new("inventory", "^0.1"),
+            Dependency::new("printing", "^0.1"),
         ];
-        manifest.optional = vec![Dependency::new("printing", "^0.1")];
         manifest.permissions = vec![Permission::new("reports.read")];
-        manifest.capabilities = vec![Capability {
-            id: "reports.summary".into(),
-            kind: CapabilityKind::Query,
-            permission: "reports.read".into(),
-            effect: CapabilityEffect::Read,
-            requires_confirmation: false,
-            input_schema: json!({
-                "type":"object",
-                "properties":{
-                    "from":{"type":"string"},
-                    "to":{"type":"string"}
-                }
-            }),
-            output_schema: json!({"type":"object"}),
-            description: "Sales and stock report summary.".into(),
-        }];
-        manifest.events_consumed = vec!["sales.bill_posted".into()];
         manifest.nav = vec![NavItem {
             id: "reports".into(),
             label: "Reports & Summary".into(),

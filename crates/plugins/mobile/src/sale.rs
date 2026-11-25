@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use platform_kernel::context::TenantTx;
 use platform_kernel::error::AppError;
 use platform_kernel::event::{EventEnvelope, EventHandler};
+use sales_contract::BillPostedV3;
 use serde_json::Value;
 use tracing::warn;
 
@@ -24,51 +25,19 @@ impl EventHandler for StartWarranties {
         tx: &mut TenantTx<'_>,
         envelope: &EventEnvelope,
     ) -> Result<(), AppError> {
-        if envelope.version < 2 {
+        if envelope.version < 3 {
             return Ok(());
         }
-        let Some(bill_id) = bill_id_for(tx, &envelope.payload).await? else {
-            return Ok(());
-        };
-        apply_bill(tx, bill_id).await
+        let event: BillPostedV3 = serde_json::from_value(envelope.payload.clone())
+            .map_err(|error| AppError::BadRequest(format!("invalid sales event: {error}")))?;
+        apply_bill(tx, &event).await
     }
 }
 
-async fn bill_id_for(
-    tx: &mut TenantTx<'_>,
-    payload: &Value,
-) -> Result<Option<i32>, AppError> {
-    let by_id = payload
-        .get("bill_id")
-        .and_then(Value::as_i64)
-        .and_then(|value| i32::try_from(value).ok())
-        .filter(|id| *id > 0);
-    if by_id.is_some() {
-        return Ok(by_id);
-    }
-    let Some(bill_no) = payload.get("bill_no").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let id: Option<i32> = sqlx::query_scalar("SELECT id FROM bills WHERE bill_no = $1")
-        .bind(bill_no)
-        .fetch_optional(tx.conn())
-        .await?;
-    Ok(id)
-}
-
-/// Mark the devices on this bill sold and start their warranties. Safe to run more than once.
-pub async fn apply_bill(tx: &mut TenantTx<'_>, bill_id: i32) -> Result<(), AppError> {
-    let lines: Vec<(i32, i32, i32, String, Value)> = sqlx::query_as(
-        r#"
-        SELECT id, item_id, qty, reference, details
-        FROM bill_lines
-        WHERE bill_id = $1 AND source = 'mobile.device'
-        ORDER BY id
-        "#,
-    )
-    .bind(bill_id)
-    .fetch_all(tx.conn())
-    .await?;
+/// Mark the devices from the sales event sold and start their warranties.
+/// The event contains the sale facts, so this plugin does not query POS tables.
+async fn apply_bill(tx: &mut TenantTx<'_>, event: &BillPostedV3) -> Result<(), AppError> {
+    let lines: Vec<_> = event.lines.iter().filter(|line| line.source == "mobile.device").collect();
     if lines.is_empty() {
         return Ok(());
     }
@@ -79,17 +48,22 @@ pub async fn apply_bill(tx: &mut TenantTx<'_>, bill_id: i32) -> Result<(), AppEr
         .unwrap_or_else(|| "UTC".into());
 
     let mut seen = std::collections::HashSet::new();
-    for (line_id, item_id, qty, reference, details) in lines {
+    for (line_index, line) in lines.into_iter().enumerate() {
+        let qty = line.quantity.parse::<i32>().unwrap_or_default();
+        let Some(item_id) = line.item_id else {
+            warn!(bill_id = event.bill_id, line_index, "mobile sale line has no catalog item id");
+            continue;
+        };
         if qty != 1 {
-            warn!(bill_id, line_id, qty, "mobile device line has quantity other than one");
+            warn!(bill_id = event.bill_id, line_index, qty, "mobile device line has quantity other than one");
             continue;
         }
-        let Some(device_id) = device_id_from_line(&reference, &details) else {
-            warn!(bill_id, line_id, "mobile device line has no device reference");
+        let Some(device_id) = device_id_from_line(&line.reference, &line.details) else {
+            warn!(bill_id = event.bill_id, line_index, "mobile device line has no device reference");
             continue;
         };
         if !seen.insert(device_id) {
-            warn!(bill_id, line_id, device_id, "mobile device repeats on the same bill");
+            warn!(bill_id = event.bill_id, line_index, device_id, "mobile device repeats on the same bill");
             continue;
         }
 
@@ -97,20 +71,21 @@ pub async fn apply_bill(tx: &mut TenantTx<'_>, bill_id: i32) -> Result<(), AppEr
             r#"
             UPDATE mobile_devices d
             SET status = 'sold',
-                sold_bill_id = b.id,
-                sold_bill_no = b.bill_no,
-                sold_at = b.created_at,
-                customer_name = COALESCE(b.customer, ''),
+                sold_bill_id = $2,
+                sold_bill_no = $3,
+                sold_at = $4::timestamptz,
+                customer_name = COALESCE($5, ''),
                 updated_at = now()
-            FROM bills b
             WHERE d.id = $1
-              AND b.id = $2
-              AND d.item_id = $3
+              AND d.item_id = $6
               AND d.status = 'in_stock'
             "#,
         )
         .bind(device_id)
-        .bind(bill_id)
+        .bind(event.bill_id)
+        .bind(&event.bill_no)
+        .bind(&event.posted_at)
+        .bind(event.customer.as_deref())
         .bind(item_id)
         .execute(tx.conn())
         .await?;
@@ -119,12 +94,12 @@ pub async fn apply_bill(tx: &mut TenantTx<'_>, bill_id: i32) -> Result<(), AppEr
             let sold_here: Option<bool> = sqlx::query_scalar(
                 "SELECT sold_bill_id = $1 FROM mobile_devices WHERE id = $2",
             )
-            .bind(bill_id)
+            .bind(event.bill_id)
             .bind(device_id)
             .fetch_optional(tx.conn())
             .await?;
             if sold_here != Some(true) {
-                warn!(bill_id, device_id, "mobile device is not available for this sale");
+                warn!(bill_id = event.bill_id, device_id, "mobile device is not available for this sale");
                 continue;
             }
         }
@@ -133,20 +108,22 @@ pub async fn apply_bill(tx: &mut TenantTx<'_>, bill_id: i32) -> Result<(), AppEr
             r#"
             INSERT INTO mobile_warranties
                 (device_id, bill_id, bill_no, months, sold_at, starts_on, ends_on, customer_name)
-            SELECT d.id, b.id, b.bill_no, d.warranty_months, b.created_at,
-                   (b.created_at AT TIME ZONE $3::text)::date,
-                   ((b.created_at AT TIME ZONE $3::text)
+            SELECT d.id, $2, $3, d.warranty_months, $4::timestamptz,
+                   (($4::timestamptz) AT TIME ZONE $5::text)::date,
+                   ((($4::timestamptz) AT TIME ZONE $5::text)
                      + make_interval(months => d.warranty_months))::date,
-                   COALESCE(b.customer, '')
+                   COALESCE($6, '')
             FROM mobile_devices d
-            JOIN bills b ON b.id = $2
             WHERE d.id = $1 AND d.sold_bill_id = $2
             ON CONFLICT (tenant_id, bill_id, device_id) DO NOTHING
             "#,
         )
         .bind(device_id)
-        .bind(bill_id)
+        .bind(event.bill_id)
+        .bind(&event.bill_no)
+        .bind(&event.posted_at)
         .bind(&timezone)
+        .bind(event.customer.as_deref())
         .execute(tx.conn())
         .await?;
     }

@@ -1,15 +1,18 @@
 <script lang="ts">
   import { loadBootstrap, login, saveUser } from './api'
   import { navigate } from './route.svelte'
+  import { navFirst } from '../platform/route.svelte'
   import { signIn } from './session.svelte'
   import { toast, toastError } from './toast'
   import { Button, Field, Input } from './ui'
+  import type { UiNavItem } from './registry'
 
   let name = $state('')
   let password = $state('')
   let sending = $state(false)
   let needsUser = $state(false)
   let shopName = $state('Shop')
+  let { nav }: { nav: UiNavItem[] } = $props()
 
   $effect(() => {
     document.title = shopName
@@ -48,7 +51,7 @@
       }
       const user = await login(name.trim(), password)
       signIn({ id: user.id, name: user.name, role: user.role, token: user.token })
-      navigate('/billing')
+      navigate(navFirst(nav))
     } catch (error) {
       toastError(error, 'Could not sign in.')
     } finally {

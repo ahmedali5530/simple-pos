@@ -6,8 +6,12 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use cash_contract::CashClosing;
+use inventory_contract::ProductMix;
+use platform_kernel::context::TenantTx;
 use platform_kernel::error::AppError;
-use plugin_pos::models::ShopConfig;
+use platform_runtime::shop_profile::ShopProfile;
+use sales_contract::ReceiptData;
 use sqlx::{Postgres, Transaction};
 
 const WIDTH: usize = 42;
@@ -43,52 +47,21 @@ struct Receipt {
 /// Print a saved bill on the shop printer. A turned-off printer is not an error.
 pub async fn print_saved_bill(
     tx: &mut Transaction<'_, Postgres>,
-    shop: &ShopConfig,
-    bill_no: &str,
+    shop: &ShopProfile,
+    data: ReceiptData,
 ) -> Result<PrintOutcome, AppError> {
-    let bill_no = bill_no.trim();
-    if bill_no.is_empty() {
-        return Err(AppError::BadRequest("That bill has no number.".into()));
-    }
     let Some(printer) = enabled_printer_tx(tx).await? else {
         return Ok(PrintOutcome { printed: false });
     };
-
-    let header = sqlx::query_as::<_, BillHead>(
-        r#"
-        SELECT
-            b.id,
-            b.bill_no,
-            b.total,
-            to_char(b.created_at AT TIME ZONE 'Asia/Karachi', 'YYYY-MM-DD HH12:MI AM') AS sold_at,
-            COALESCE(u.name, '') AS cashier,
-            b.customer
-        FROM bills b
-        LEFT JOIN users u ON u.id = b.user_id
-        WHERE b.bill_no = $1
-        "#,
-    )
-    .bind(bill_no)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(header) = header else {
-        return Err(AppError::NotFound("That bill is not in the till.".into()));
-    };
-    let lines = sqlx::query_as::<_, LineRow>(
-        "SELECT name, qty, rate, amount FROM bill_lines WHERE bill_id = $1 ORDER BY id",
-    )
-    .bind(header.id)
-    .fetch_all(&mut **tx)
-    .await?;
-    let shop = plugin_pos::billing::current_shop_tx(tx, shop).await?;
     let receipt = Receipt {
-        shop_name: shop.name,
-        currency: shop.currency,
-        bill_no: header.bill_no,
-        sold_at: header.sold_at,
-        cashier: if header.cashier.is_empty() { "Cashier".into() } else { header.cashier },
-        customer: header.customer,
-        lines: lines
+        shop_name: shop.name.clone(),
+        currency: shop.currency.clone(),
+        bill_no: data.bill_no,
+        sold_at: data.sold_at,
+        cashier: data.cashier,
+        customer: data.customer,
+        lines: data
+            .lines
             .into_iter()
             .map(|line| ReceiptLine {
                 name: line.name,
@@ -97,7 +70,7 @@ pub async fn print_saved_bill(
                 amount: line.amount,
             })
             .collect(),
-        total: header.total,
+        total: data.total,
     };
     let bytes = build_final_receipt(&receipt);
     dispatch(&printer, &bytes, "The sale is saved.")?;
@@ -106,42 +79,45 @@ pub async fn print_saved_bill(
 
 pub async fn print_product_mix(
     tx: &mut Transaction<'_, Postgres>,
-    shop: &ShopConfig,
-    from: Option<&str>,
-    to: Option<&str>,
+    shop: &ShopProfile,
+    mix: ProductMix,
 ) -> Result<PrintOutcome, AppError> {
     let Some(printer) = enabled_printer_tx(tx).await? else {
         return Ok(PrintOutcome { printed: false });
     };
-    let mix = plugin_inventory::ledger::product_mix(tx, from, to).await?;
-    let shop = plugin_pos::billing::current_shop_tx(tx, shop).await?;
     let lines = mix
         .lines
         .iter()
         .map(|line| MixSlipLine {
             name: line.name.clone(),
-            qty_in: line.qty_in,
-            qty_out: line.qty_out,
+            qty_in: line.qty_in as i64,
+            qty_out: line.qty_out as i64,
         })
         .collect::<Vec<_>>();
-    let bytes = build_mix_slip(&shop.name, &shop.currency, &mix.label, &lines, mix.truncated);
+    let bytes = build_mix_slip(
+        &shop.name,
+        &shop.currency,
+        &mix.label,
+        &lines,
+        mix.truncated,
+    );
     dispatch(&printer, &bytes, "Nothing else changed.")?;
     Ok(PrintOutcome { printed: true })
 }
 
 pub async fn print_cash_shift(
     tx: &mut Transaction<'_, Postgres>,
-    shop: &ShopConfig,
-    id: i32,
+    shop: &ShopProfile,
+    shift: CashClosing,
 ) -> Result<PrintOutcome, AppError> {
     let Some(printer) = enabled_printer_tx(tx).await? else {
         return Ok(PrintOutcome { printed: false });
     };
-    let shift = plugin_cash::desk::load_shift(tx, id).await?;
     if shift.closed_at.is_none() {
-        return Err(AppError::BadRequest("Close the shift before printing it.".into()));
+        return Err(AppError::BadRequest(
+            "Close the shift before printing it.".into(),
+        ));
     }
-    let shop = plugin_pos::billing::current_shop_tx(tx, shop).await?;
     let bytes = build_cash_slip(&shop.name, &shop.currency, &shift);
     dispatch(&printer, &bytes, "The closing is saved.")?;
     Ok(PrintOutcome { printed: true })
@@ -152,9 +128,9 @@ async fn enabled_printer_tx(
 ) -> Result<Option<PrinterRow>, AppError> {
     let printer = sqlx::query_as::<_, PrinterRow>(
         r#"
-        SELECT print_enabled, printer_kind, printer_target, printer_port
-        FROM shop_settings
-        WHERE id = 1
+        SELECT enabled AS print_enabled, kind AS printer_kind, target AS printer_target, port AS printer_port
+        FROM printing_settings
+        WHERE tenant_id = current_setting('app.tenant_id')::uuid
         "#,
     )
     .fetch_optional(&mut **tx)
@@ -175,7 +151,12 @@ fn build_final_receipt(receipt: &Receipt) -> Vec<u8> {
     out.normal();
     out.pair(&format!("Invoice# {}", receipt.bill_no), &receipt.sold_at);
     out.pair(&format!("Cashier: {}", receipt.cashier), "");
-    if let Some(customer) = receipt.customer.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+    if let Some(customer) = receipt
+        .customer
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
         out.text(&clip(&format!("Customer: {customer}"), WIDTH));
     }
     out.rule();
@@ -225,12 +206,18 @@ fn dispatch(printer: &PrinterRow, bytes: &[u8], kept: &str) -> Result<(), AppErr
         "usb" => send_usb(&printer.printer_target, bytes),
         other => Err(format!("{other} is not a printer connection.")),
     };
-    result.map_err(|detail| AppError::BadRequest(format!("The receipt did not print. {detail} {kept}")))
+    result.map_err(|detail| {
+        AppError::BadRequest(format!("The receipt did not print. {detail} {kept}"))
+    })
 }
 
 fn send_network(target: &str, port: i32, bytes: &[u8]) -> Result<(), String> {
     let host = target.trim();
-    let port = if (1..=65535).contains(&port) { port as u16 } else { 9100 };
+    let port = if (1..=65535).contains(&port) {
+        port as u16
+    } else {
+        9100
+    };
     if host.is_empty() {
         return Err("Enter the printer address.".into());
     }
@@ -243,9 +230,7 @@ fn send_network(target: &str, port: i32, bytes: &[u8]) -> Result<(), String> {
     };
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(4))
         .map_err(|_| "The printer did not answer.".to_string())?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(8)))
-        .ok();
+    stream.set_write_timeout(Some(Duration::from_secs(8))).ok();
     stream
         .write_all(bytes)
         .map_err(|_| "The printer stopped while the receipt was sending.".to_string())?;
@@ -339,7 +324,13 @@ struct MixSlipLine {
     qty_out: i64,
 }
 
-fn build_mix_slip(shop: &str, _currency: &str, label: &str, lines: &[MixSlipLine], truncated: bool) -> Vec<u8> {
+fn build_mix_slip(
+    shop: &str,
+    _currency: &str,
+    label: &str,
+    lines: &[MixSlipLine],
+    truncated: bool,
+) -> Vec<u8> {
     let mut out = EscPos::new();
     out.init();
     if !shop.is_empty() {
@@ -401,7 +392,7 @@ fn build_mix_slip(shop: &str, _currency: &str, label: &str, lines: &[MixSlipLine
     out.into_bytes()
 }
 
-fn build_cash_slip(shop: &str, currency: &str, shift: &plugin_cash::desk::CashShift) -> Vec<u8> {
+fn build_cash_slip(shop: &str, currency: &str, shift: &CashClosing) -> Vec<u8> {
     let mut out = EscPos::new();
     out.init();
     if !shop.is_empty() {
@@ -422,11 +413,20 @@ fn build_cash_slip(shop: &str, currency: &str, shift: &plugin_cash::desk::CashSh
         out.text(&format!("Closed by {name}"));
     }
     out.rule();
-    out.pair("Previous till", &money_wide(currency, i64::from(shift.opening_cash)));
-    out.pair("Petty cash", &money_wide(currency, i64::from(shift.petty_cash)));
+    out.pair(
+        "Previous till",
+        &money_wide(currency, i64::from(shift.opening_cash)),
+    );
+    out.pair(
+        "Petty cash",
+        &money_wide(currency, i64::from(shift.petty_cash)),
+    );
     out.pair("Cash sales", &money_wide(currency, shift.sales));
     if shift.lines.is_empty() {
-        out.pair("Expenses", &money_wide(currency, i64::from(shift.expenses.unwrap_or(0))));
+        out.pair(
+            "Expenses",
+            &money_wide(currency, i64::from(shift.expenses.unwrap_or(0))),
+        );
     } else {
         out.text("Expenses");
         for line in &shift.lines {
@@ -435,17 +435,35 @@ fn build_cash_slip(shop: &str, currency: &str, shift: &plugin_cash::desk::CashSh
                 &money_wide(currency, i64::from(line.amount)),
             );
         }
-        out.pair("Expense total", &money_wide(currency, i64::from(shift.expenses.unwrap_or(0))));
+        out.pair(
+            "Expense total",
+            &money_wide(currency, i64::from(shift.expenses.unwrap_or(0))),
+        );
     }
-    out.pair("Taken out", &money_wide(currency, i64::from(shift.cash_taken.unwrap_or(0))));
+    out.pair(
+        "Taken out",
+        &money_wide(currency, i64::from(shift.cash_taken.unwrap_or(0))),
+    );
     out.rule();
     out.bold_underline();
-    out.pair("System count", &money_wide(currency, shift.system_count.unwrap_or(0)));
-    out.pair("Manual count", &money_wide(currency, i64::from(shift.manual_count.unwrap_or(0))));
+    out.pair(
+        "System count",
+        &money_wide(currency, shift.system_count.unwrap_or(0)),
+    );
+    out.pair(
+        "Manual count",
+        &money_wide(currency, i64::from(shift.manual_count.unwrap_or(0))),
+    );
     out.normal();
-    out.pair("Difference", &money_wide(currency, shift.difference.unwrap_or(0)));
+    out.pair(
+        "Difference",
+        &money_wide(currency, shift.difference.unwrap_or(0)),
+    );
     out.bold();
-    out.pair("Left for next", &money_wide(currency, i64::from(shift.cash_left.unwrap_or(0))));
+    out.pair(
+        "Left for next",
+        &money_wide(currency, i64::from(shift.cash_left.unwrap_or(0))),
+    );
     out.normal();
     out.feed(1);
     out.align_center();
@@ -456,7 +474,13 @@ fn build_cash_slip(shop: &str, currency: &str, shift: &plugin_cash::desk::CashSh
 }
 
 fn item_header() -> String {
-    format!("{}{}{}{}", left("Item", 22), right("Qty", 3), right("Rate", 7), right("Ttl", 10))
+    format!(
+        "{}{}{}{}",
+        left("Item", 22),
+        right("Qty", 3),
+        right("Rate", 7),
+        right("Ttl", 10)
+    )
 }
 
 fn item_row(name: &str, qty: i32, rate: i32, amount: i32) -> String {
@@ -500,7 +524,9 @@ fn plain(text: &str) -> String {
 }
 
 fn printed_at() -> String {
-    chrono::Local::now().format("%m/%d/%Y, %I:%M %p").to_string()
+    chrono::Local::now()
+        .format("%m/%d/%Y, %I:%M %p")
+        .to_string()
 }
 
 struct EscPos {
@@ -509,7 +535,9 @@ struct EscPos {
 
 impl EscPos {
     fn new() -> Self {
-        Self { bytes: Vec::with_capacity(1024) }
+        Self {
+            bytes: Vec::with_capacity(1024),
+        }
     }
 
     fn into_bytes(self) -> Vec<u8> {
@@ -525,15 +553,18 @@ impl EscPos {
     }
 
     fn bold(&mut self) {
-        self.bytes.extend_from_slice(b"\x1b\x45\x01\x1b\x35\x1b\x2d\x00");
+        self.bytes
+            .extend_from_slice(b"\x1b\x45\x01\x1b\x35\x1b\x2d\x00");
     }
 
     fn bold_underline(&mut self) {
-        self.bytes.extend_from_slice(b"\x1b\x45\x01\x1b\x35\x1b\x2d\x01");
+        self.bytes
+            .extend_from_slice(b"\x1b\x45\x01\x1b\x35\x1b\x2d\x01");
     }
 
     fn normal(&mut self) {
-        self.bytes.extend_from_slice(b"\x1b\x45\x00\x1b\x35\x1b\x2d\x00\x1b\x61\x00");
+        self.bytes
+            .extend_from_slice(b"\x1b\x45\x00\x1b\x35\x1b\x2d\x00\x1b\x61\x00");
     }
 
     fn text(&mut self, line: &str) {
@@ -544,7 +575,11 @@ impl EscPos {
 
     fn pair(&mut self, left_text: &str, right_text: &str) {
         let half = WIDTH / 2;
-        self.text(&format!("{}{}", left(left_text, half), right(right_text, half)));
+        self.text(&format!(
+            "{}{}",
+            left(left_text, half),
+            right(right_text, half)
+        ));
     }
 
     fn rule(&mut self) {
@@ -575,22 +610,76 @@ struct PrinterRow {
     printer_port: i32,
 }
 
-#[derive(sqlx::FromRow)]
-struct BillHead {
-    id: i32,
-    bill_no: String,
-    total: i32,
-    sold_at: String,
-    cashier: String,
-    customer: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrinterSettings {
+    pub enabled: bool,
+    pub kind: String,
+    pub target: String,
+    pub port: i32,
 }
 
-#[derive(sqlx::FromRow)]
-struct LineRow {
-    name: String,
-    qty: i32,
-    rate: i32,
-    amount: i32,
+#[derive(Debug, Deserialize)]
+pub struct PrinterForm {
+    #[serde(default)]
+    pub print_enabled: bool,
+    #[serde(default = "default_printer_kind")]
+    pub printer_kind: String,
+    #[serde(default)]
+    pub printer_target: String,
+    #[serde(default = "default_printer_port")]
+    pub printer_port: i32,
+}
+
+impl PrinterForm {
+    pub fn checked(self) -> Result<PrinterSettings, AppError> {
+        let kind = self.printer_kind.trim().to_string();
+        if !["network", "usb", "serial"].contains(&kind.as_str()) {
+            return Err(AppError::BadRequest(
+                "The printer is network, usb, or serial.".into(),
+            ));
+        }
+        if !(1..=1_000_000).contains(&self.printer_port) {
+            return Err(AppError::BadRequest(
+                "The printer port is not a usable number.".into(),
+            ));
+        }
+        let target = self.printer_target.trim().to_string();
+        if self.print_enabled && kind != "usb" && target.is_empty() {
+            return Err(AppError::BadRequest("Enter the printer address.".into()));
+        }
+        Ok(PrinterSettings {
+            enabled: self.print_enabled,
+            kind,
+            target,
+            port: self.printer_port,
+        })
+    }
+}
+
+fn default_printer_kind() -> String {
+    "network".into()
+}
+fn default_printer_port() -> i32 {
+    9100
+}
+
+pub async fn load_printer_settings(tx: &mut TenantTx<'_>) -> Result<PrinterSettings, AppError> {
+    let row = sqlx::query_as::<_, PrinterRow>(
+        "SELECT enabled AS print_enabled, kind AS printer_kind, target AS printer_target, port AS printer_port FROM printing_settings WHERE tenant_id = $1",
+    ).bind(tx.tenant_id.as_uuid()).fetch_optional(tx.conn()).await?;
+    Ok(row
+        .map(|row| PrinterSettings {
+            enabled: row.print_enabled,
+            kind: row.printer_kind,
+            target: row.printer_target,
+            port: row.printer_port,
+        })
+        .unwrap_or(PrinterSettings {
+            enabled: false,
+            kind: "network".into(),
+            target: String::new(),
+            port: 9100,
+        }))
 }
 
 #[cfg(test)]
@@ -652,7 +741,7 @@ mod tests {
 
     #[test]
     fn cash_closing_lists_the_count() {
-        let shift = plugin_cash::desk::CashShift {
+        let shift = CashClosing {
             id: 4,
             opened_by: "Kashif".into(),
             closed_by: Some("cashier".into()),
@@ -667,7 +756,7 @@ mod tests {
             system_count: Some(7300),
             difference: Some(0),
             cash_left: Some(5000),
-            lines: vec![plugin_cash::desk::CashExpense {
+            lines: vec![cash_contract::CashExpense {
                 description: "Tea".into(),
                 category: "Food".into(),
                 amount: 200,
@@ -682,5 +771,35 @@ mod tests {
         assert!(text.contains("Printed "));
         assert!(bytes.windows(2).any(|chunk| chunk == b"\x1b\x64"));
         assert!(bytes.windows(3).any(|chunk| chunk == b"\x1d\x56\x00"));
+    }
+
+    #[test]
+    fn printer_settings_reject_invalid_connections_and_missing_targets() {
+        assert!(PrinterForm {
+            print_enabled: true,
+            printer_kind: "network".into(),
+            printer_target: "  ".into(),
+            printer_port: 9100,
+        }
+        .checked()
+        .is_err());
+        assert!(PrinterForm {
+            print_enabled: false,
+            printer_kind: "bluetooth".into(),
+            printer_target: String::new(),
+            printer_port: 9100,
+        }
+        .checked()
+        .is_err());
+        let settings = PrinterForm {
+            print_enabled: true,
+            printer_kind: " usb ".into(),
+            printer_target: " 0x04b8:0x0e28 ".into(),
+            printer_port: 1,
+        }
+        .checked()
+        .unwrap();
+        assert_eq!(settings.kind, "usb");
+        assert_eq!(settings.target, "0x04b8:0x0e28");
     }
 }

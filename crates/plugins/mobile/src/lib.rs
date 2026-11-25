@@ -21,7 +21,7 @@ impl Plugin for MobilePlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("mobile", "Mobile & Warranty", "0.1.0");
         manifest.description = "Phone units, IMEI warranties and repair claims.".into();
-        manifest.requires = vec![
+        manifest.optional = vec![
             Dependency::new("catalog", "^0.1"),
             Dependency::new("pos", "^0.1"),
         ];

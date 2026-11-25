@@ -30,7 +30,15 @@ pub struct CashExpense {
     pub amount: i32,
 }
 
-const CATEGORIES: [&str; 7] = ["Supplies", "Wages", "Food", "Transport", "Utilities", "Maintenance", "Other"];
+const CATEGORIES: [&str; 7] = [
+    "Supplies",
+    "Wages",
+    "Food",
+    "Transport",
+    "Utilities",
+    "Maintenance",
+    "Other",
+];
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct CashShift {
@@ -60,7 +68,10 @@ pub struct CashDesk {
     pub history: Vec<CashShift>,
 }
 
-pub async fn cash_desk(tx: &mut Transaction<'_, Postgres>) -> Result<CashDesk, AppError> {
+pub async fn cash_desk(
+    tx: &mut Transaction<'_, Postgres>,
+    current_sales: i64,
+) -> Result<CashDesk, AppError> {
     let rows = shifts_tx(tx, 40).await?;
     let suggested_opening = sqlx::query_scalar::<_, i32>(
         r#"
@@ -78,7 +89,10 @@ pub async fn cash_desk(tx: &mut Transaction<'_, Postgres>) -> Result<CashDesk, A
     let mut history = Vec::new();
     for row in rows {
         if row.closed_at.is_none() && open.is_none() {
-            open = Some(row);
+            open = Some(CashShift {
+                sales: current_sales,
+                ..row
+            });
         } else if row.closed_at.is_some() {
             history.push(row);
         }
@@ -90,17 +104,23 @@ pub async fn cash_desk(tx: &mut Transaction<'_, Postgres>) -> Result<CashDesk, A
     })
 }
 
-pub async fn open_shift(tx: &mut Transaction<'_, Postgres>, user_id: i32, form: &OpenShift) -> Result<CashDesk, AppError> {
+pub async fn open_shift(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: i32,
+    user_name: &str,
+    form: &OpenShift,
+) -> Result<CashDesk, AppError> {
     let opening_cash = whole(form.opening_cash, "Previous till cash")?;
     let petty_cash = whole(form.petty_cash, "Petty cash")?;
     let inserted = sqlx::query(
         r#"
-        INSERT INTO cash_shifts (opened_by, opening_cash, petty_cash)
-        SELECT $1, $2, $3
+        INSERT INTO cash_shifts (opened_by, opened_by_name, opening_cash, petty_cash)
+        SELECT $1, $2, $3, $4
         WHERE NOT EXISTS (SELECT 1 FROM cash_shifts WHERE closed_at IS NULL)
         "#,
     )
     .bind(user_id)
+    .bind(user_name)
     .bind(opening_cash)
     .bind(petty_cash)
     .execute(&mut **tx)
@@ -108,21 +128,48 @@ pub async fn open_shift(tx: &mut Transaction<'_, Postgres>, user_id: i32, form: 
     if inserted.rows_affected() == 0 {
         return Err(AppError::BadRequest("A shift is already open.".into()));
     }
-    cash_desk(tx).await
+    cash_desk(tx, 0).await
+}
+
+pub async fn open_since(tx: &mut Transaction<'_, Postgres>) -> Result<Option<String>, AppError> {
+    Ok(
+        sqlx::query_scalar("SELECT opened_at::text FROM cash_shifts WHERE closed_at IS NULL")
+            .fetch_optional(&mut **tx)
+            .await?,
+    )
+}
+
+pub async fn lock_open_since(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT opened_at::text FROM cash_shifts WHERE closed_at IS NULL FOR UPDATE",
+    )
+    .fetch_optional(&mut **tx)
+    .await?)
 }
 
 pub async fn save_shift(
     tx: &mut Transaction<'_, Postgres>,
     user_id: i32,
+    user_name: &str,
     form: &ShiftForm,
     close: bool,
+    sales: i64,
 ) -> Result<CashDesk, AppError> {
     let lines = parse_lines(&form.expenses)?;
-    let expense_total = whole(lines.iter().map(|line| i64::from(line.amount)).sum(), "Expenses")?;
+    let expense_total = whole(
+        lines.iter().map(|line| i64::from(line.amount)).sum(),
+        "Expenses",
+    )?;
     let cash_taken = whole(form.cash_taken, "Cash taken out")?;
     let manual_count = match form.manual_count {
         Some(value) => Some(whole(value, "Manual count")?),
-        None if close => return Err(AppError::BadRequest("Enter the manual count before closing the day.".into())),
+        None if close => {
+            return Err(AppError::BadRequest(
+                "Enter the manual count before closing the day.".into(),
+            ))
+        }
         None => None,
     };
     let locked = sqlx::query_as::<_, (i32, i32, i32)>(
@@ -131,7 +178,9 @@ pub async fn save_shift(
     .fetch_optional(&mut **tx)
     .await?;
     let Some((id, opening_cash, petty_cash)) = locked else {
-        return Err(AppError::BadRequest("Start the day before closing the till.".into()));
+        return Err(AppError::BadRequest(
+            "Start the day before closing the till.".into(),
+        ));
     };
     sqlx::query("DELETE FROM cash_expenses WHERE shift_id = $1")
         .bind(id)
@@ -152,17 +201,9 @@ pub async fn save_shift(
         .execute(&mut **tx)
         .await?;
     }
-    let sales = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(SUM(total), 0)::bigint
-        FROM bills
-        WHERE created_at >= (SELECT opened_at FROM cash_shifts WHERE id = $1)
-        "#,
-    )
-    .bind(id)
-    .fetch_one(&mut **tx)
-    .await?;
-    let system = i64::from(opening_cash) + i64::from(petty_cash) + sales - i64::from(expense_total) - i64::from(cash_taken);
+    let system = i64::from(opening_cash) + i64::from(petty_cash) + sales
+        - i64::from(expense_total)
+        - i64::from(cash_taken);
     if close && system < 0 {
         return Err(AppError::BadRequest(
             "Cash left would be below zero. Check the expenses and the cash taken out.".into(),
@@ -177,19 +218,21 @@ pub async fn save_shift(
             r#"
             UPDATE cash_shifts
             SET closed_by = $2,
+                closed_by_name = $3,
                 closed_at = now(),
-                sales = $3,
-                expenses = $4,
-                cash_taken = $5,
-                manual_count = $6,
-                system_count = $7,
-                difference = $8,
-                cash_left = $9
+                sales = $4,
+                expenses = $5,
+                cash_taken = $6,
+                manual_count = $7,
+                system_count = $8,
+                difference = $9,
+                cash_left = $10
             WHERE id = $1 AND closed_at IS NULL
             "#,
         )
         .bind(id)
         .bind(user_id)
+        .bind(user_name)
         .bind(sales)
         .bind(expense_total)
         .bind(cash_taken)
@@ -216,10 +259,13 @@ pub async fn save_shift(
         .execute(&mut **tx)
         .await?;
     }
-    cash_desk(tx).await
+    cash_desk(tx, sales).await
 }
 
-pub async fn load_shift(tx: &mut Transaction<'_, Postgres>, id: i32) -> Result<CashShift, AppError> {
+pub async fn load_shift(
+    tx: &mut Transaction<'_, Postgres>,
+    id: i32,
+) -> Result<CashShift, AppError> {
     let shift = shifts_tx(tx, 200)
         .await?
         .into_iter()
@@ -236,20 +282,13 @@ async fn shifts_tx(
         r#"
         SELECT
             c.id,
-            opener.name AS opened_by,
-            closer.name AS closed_by,
+            c.opened_by_name AS opened_by,
+            c.closed_by_name AS closed_by,
             to_char(c.opened_at AT TIME ZONE 'Asia/Karachi', 'DD Mon YYYY, HH12:MI AM') AS opened_at,
             to_char(c.closed_at AT TIME ZONE 'Asia/Karachi', 'DD Mon YYYY, HH12:MI AM') AS closed_at,
             c.opening_cash,
             c.petty_cash,
-            CASE
-                WHEN c.closed_at IS NULL THEN (
-                    SELECT COALESCE(SUM(b.total), 0)::bigint
-                    FROM bills b
-                    WHERE b.created_at >= c.opened_at
-                )
-                ELSE c.sales
-            END AS sales,
+            c.sales,
             c.expenses,
             c.cash_taken,
             c.manual_count,
@@ -257,8 +296,6 @@ async fn shifts_tx(
             c.difference,
             c.cash_left
         FROM cash_shifts c
-        JOIN users opener ON opener.id = c.opened_by
-        LEFT JOIN users closer ON closer.id = c.closed_by
         ORDER BY c.opened_at DESC, c.id DESC
         LIMIT $1
         "#,
@@ -309,17 +346,23 @@ struct ParsedLine {
 
 fn parse_lines(inputs: &[ExpenseInput]) -> Result<Vec<ParsedLine>, AppError> {
     if inputs.len() > 40 {
-        return Err(AppError::BadRequest("Keep the expenses to 40 lines.".into()));
+        return Err(AppError::BadRequest(
+            "Keep the expenses to 40 lines.".into(),
+        ));
     }
     let mut lines = Vec::new();
     for input in inputs {
         let description = input.description.trim();
         let category = input.category.trim();
         if description.is_empty() {
-            return Err(AppError::BadRequest("Enter a description for each expense.".into()));
+            return Err(AppError::BadRequest(
+                "Enter a description for each expense.".into(),
+            ));
         }
         if description.chars().count() > 80 {
-            return Err(AppError::BadRequest("An expense description is too long.".into()));
+            return Err(AppError::BadRequest(
+                "An expense description is too long.".into(),
+            ));
         }
         if !CATEGORIES.contains(&category) {
             return Err(AppError::BadRequest("Choose an expense category.".into()));
