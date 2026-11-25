@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { downloadWorkbook, importCategoriesWorkbook, loadPos, orderCategories, removeCategory, saveCategory } from '../../../lib/api'
+  import { downloadWorkbook, importCategoriesWorkbook, loadCatalog, orderCategories, removeCategory, saveCategory } from '../../../lib/api'
   import type { Category, PosSnapshot } from '../../../lib/types'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input } from '../../../lib/ui'
@@ -62,8 +62,8 @@
     if (!file) return
     sheetBusy = true
     try {
-      await importCategoriesWorkbook(file)
-      const pos = await loadPos()
+      const result = await importCategoriesWorkbook(file)
+      const pos = await loadCatalog()
       onChange(pos)
       if (typeof editing === 'number' && !pos.categories.some((category) => category.id === editing)) {
         editing = null

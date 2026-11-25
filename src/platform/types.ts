@@ -85,7 +85,6 @@ export interface PosSnapshot {
   sections: PosSection[]
   all_sections: SectionChoice[]
   categories: Category[]
-  users: PosUser[]
   last_section_id: number | null
 }
 

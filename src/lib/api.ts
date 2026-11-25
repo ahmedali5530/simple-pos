@@ -1,4 +1,19 @@
-import type { CashDesk, PosSnapshot, PosUser, PostedBill, Reports, StockBalance, StockMovement } from './types'
+import type {
+  CashDesk,
+  Category,
+  Portion,
+  PosItem,
+  PosSection,
+  PosSnapshot,
+  PosUser,
+  PostedBill,
+  Reports,
+  SectionChoice,
+  SectionKind,
+  ShopSnapshot,
+  StockBalance,
+  StockMovement,
+} from './types'
 import { request } from '../platform/http'
 import { session, signOut } from './session.svelte'
 
@@ -6,6 +21,132 @@ export { request }
 
 export function loadPos(): Promise<PosSnapshot> {
   return request('/api/v1/pos/snapshot')
+}
+
+export function loadCoreSnapshot(): Promise<ShopSnapshot> {
+  return request('/api/v1/core/snapshot')
+}
+
+/** Raw catalog contract snapshot (no POS dependency). */
+export interface CatalogApiSnapshot {
+  sections: {
+    id: number
+    name: string
+    short_name: string
+    kind: string
+    accent: string
+    show_on_pos: boolean
+    pos_order: number
+  }[]
+  categories: { id: number; name: string; sort_order: number }[]
+  items: {
+    id: number
+    section_id: number
+    category_id: number
+    category_name: string
+    barcode: string | null
+    name: string
+    rate: number
+    cost: number
+    stock: number
+    portion: string
+    group_name: string | null
+    signature: boolean
+    prompt: string
+    base_rate: number | null
+    scale: number
+    image_url: string | null
+    variants: {
+      id: number
+      item_id: number
+      name: string
+      rate: number
+      units: number
+      barcode: string | null
+    }[]
+  }[]
+}
+
+function asSectionKind(value: string): SectionKind {
+  return value === 'food' ? 'food' : 'retail'
+}
+
+function asPortion(value: string): Portion {
+  if (value === 'full' || value === 'half') return value
+  return 'regular'
+}
+
+function asPrompt(value: string): PosItem['prompt'] {
+  if (value === 'quantity' || value === 'price') return value
+  return 'none'
+}
+
+/** Build the catalog settings view from catalog + core (no POS plugin). */
+export function catalogViewFrom(
+  catalog: CatalogApiSnapshot,
+  shop?: Pick<ShopSnapshot, 'shop_name' | 'currency' | 'locale' | 'bill_prefix' | 'barcode_rules'> | null,
+): PosSnapshot {
+  const items: PosItem[] = catalog.items.map((item) => ({
+    id: item.id,
+    section_id: item.section_id,
+    category_id: item.category_id,
+    category_name: item.category_name,
+    barcode: item.barcode,
+    name: item.name,
+    rate: item.rate,
+    cost: item.cost,
+    stock: item.stock,
+    portion: asPortion(item.portion),
+    group_name: item.group_name,
+    signature: item.signature,
+    prompt: asPrompt(item.prompt),
+    base_rate: item.base_rate,
+    scale: item.scale,
+    image_url: item.image_url,
+    variants: item.variants,
+  }))
+  const all_sections: SectionChoice[] = catalog.sections.map((section) => ({
+    id: section.id,
+    name: section.name,
+    short_name: section.short_name,
+    kind: asSectionKind(section.kind),
+    accent: section.accent,
+    show_on_pos: section.show_on_pos,
+    pos_order: section.pos_order,
+  }))
+  const sections: PosSection[] = all_sections.map((section) => ({
+    id: section.id,
+    name: section.name,
+    short_name: section.short_name,
+    kind: section.kind,
+    accent: section.accent,
+    items: items.filter((item) => item.section_id === section.id),
+  }))
+  const categories: Category[] = catalog.categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    sort_order: category.sort_order,
+  }))
+  return {
+    shop_name: shop?.shop_name ?? 'Shop',
+    bill_prefix: shop?.bill_prefix ?? 'BILL',
+    currency: shop?.currency ?? 'PKR',
+    locale: shop?.locale ?? 'en-PK',
+    barcode_rules: shop?.barcode_rules ?? [],
+    sections,
+    all_sections,
+    categories,
+    last_section_id: null,
+  }
+}
+
+/** Catalog settings refresh — does not call POS. */
+export async function loadCatalog(): Promise<PosSnapshot> {
+  const [catalog, shop] = await Promise.all([
+    request<CatalogApiSnapshot>('/api/v1/catalog/snapshot'),
+    loadCoreSnapshot().catch(() => null),
+  ])
+  return catalogViewFrom(catalog, shop)
 }
 
 export function rememberSection(sectionId: number): Promise<{ last_section_id: number }> {
@@ -56,7 +197,7 @@ export async function saveCatalogItem(
     method: itemId == null ? 'POST' : 'PUT',
     body: JSON.stringify(body),
   })
-  return { item_id: saved.item_id, pos: await loadPos() }
+  return { item_id: saved.item_id, pos: await loadCatalog() }
 }
 
 export async function saveItemPicture(
@@ -66,12 +207,12 @@ export async function saveItemPicture(
   const body = new FormData()
   body.append('picture', file)
   const saved = await request<{ item_id: number }>(`/api/v1/catalog/items/${itemId}/image`, { method: 'POST', body })
-  return { item_id: saved.item_id, pos: await loadPos() }
+  return { item_id: saved.item_id, pos: await loadCatalog() }
 }
 
 export async function removeItemPicture(itemId: number): Promise<{ item_id: number; pos: PosSnapshot }> {
   const saved = await request<{ item_id: number }>(`/api/v1/catalog/items/${itemId}/image`, { method: 'DELETE' })
-  return { item_id: saved.item_id, pos: await loadPos() }
+  return { item_id: saved.item_id, pos: await loadCatalog() }
 }
 
 export async function saveItemPrompt(
@@ -82,7 +223,7 @@ export async function saveItemPrompt(
     method: 'PUT',
     body: JSON.stringify(body),
   })
-  return loadPos()
+  return loadCatalog()
 }
 
 export interface SavedRecord {
@@ -96,17 +237,17 @@ export async function saveSection(
 ): Promise<SavedRecord> {
   const path = id == null ? '/api/v1/catalog/sections' : `/api/v1/catalog/sections/${id}`
   const saved = await request<{ id: number }>(path, { method: id == null ? 'POST' : 'PUT', body: JSON.stringify(body) })
-  return { id: saved.id, pos: await loadPos() }
+  return { id: saved.id, pos: await loadCatalog() }
 }
 
 export async function removeSection(id: number): Promise<PosSnapshot> {
   await request(`/api/v1/catalog/sections/${id}`, { method: 'DELETE' })
-  return loadPos()
+  return loadCatalog()
 }
 
 export async function orderSections(ids: number[]): Promise<PosSnapshot> {
   await request('/api/v1/catalog/sections/order', { method: 'PUT', body: JSON.stringify({ ids }) })
-  return loadPos()
+  return loadCatalog()
 }
 
 export async function saveCategory(id: number | null, name: string): Promise<SavedRecord> {
@@ -115,39 +256,58 @@ export async function saveCategory(id: number | null, name: string): Promise<Sav
     method: id == null ? 'POST' : 'PUT',
     body: JSON.stringify({ name }),
   })
-  return { id: saved.id, pos: await loadPos() }
+  return { id: saved.id, pos: await loadCatalog() }
 }
 
 export async function removeCategory(id: number): Promise<PosSnapshot> {
   await request(`/api/v1/catalog/categories/${id}`, { method: 'DELETE' })
-  return loadPos()
+  return loadCatalog()
 }
 
 export async function orderCategories(ids: number[]): Promise<PosSnapshot> {
   await request('/api/v1/catalog/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) })
-  return loadPos()
+  return loadCatalog()
 }
 
 export function saveUser(
   id: number | null,
   body: { name: string; password: string | null; role: 'cashier' | 'manager'; active: boolean },
-): Promise<SavedRecord> {
+): Promise<PosUser[]> {
   const path = id == null ? '/api/users' : `/api/users/${id}`
   return request(path, { method: id == null ? 'POST' : 'PUT', body: JSON.stringify(body) })
 }
 
-export function removeUser(id: number): Promise<PosSnapshot> {
+export function loadUsers(): Promise<PosUser[]> {
+  return request('/api/users')
+}
+
+export function removeUser(id: number): Promise<PosUser[]> {
   return request(`/api/users/${id}`, { method: 'DELETE' })
 }
 
-export function saveShopProfile(body: {
+export async function saveShopProfile(body: {
   name: string
   currency: string
   locale: string
   bill_prefix: string
   barcode_rules: { prefix: string; mode: 'weight' | 'price'; scale: number }[]
-}): Promise<PosSnapshot> {
-  return request('/api/v1/platform/shop', { method: 'PUT', body: JSON.stringify(body) })
+}): Promise<ShopSnapshot> {
+  const shop = await request<ShopSnapshot>('/api/v1/core/settings', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+  return shop
+}
+
+export interface PrinterSettings {
+  enabled: boolean
+  kind: 'network' | 'usb' | 'serial' | string
+  target: string
+  port: number
+}
+
+export function loadPrinterSettings(): Promise<PrinterSettings> {
+  return request('/api/v1/printing/settings')
 }
 
 export function savePrinter(body: {
@@ -155,7 +315,7 @@ export function savePrinter(body: {
   printer_kind: string
   printer_target: string
   printer_port: number
-}): Promise<PosSnapshot> {
+}): Promise<PrinterSettings> {
   return request('/api/v1/printing/settings', { method: 'PUT', body: JSON.stringify(body) })
 }
 
@@ -171,7 +331,7 @@ export async function adjustStock(body: {
     method: 'POST',
     body: JSON.stringify(body),
   })
-  return { movements: adjusted.movements, pos: await loadPos() }
+  return { movements: adjusted.movements, pos: await loadCatalog() }
 }
 
 export interface ItemImportResult {
@@ -227,7 +387,7 @@ export async function importMovementsWorkbook(file: File): Promise<MovementImpor
   const body = new FormData()
   body.append('file', file)
   const imported = await request<{ applied: number }>('/api/v1/catalog/movements/import', { method: 'POST', body })
-  return { applied: imported.applied, pos: await loadPos() }
+  return { applied: imported.applied, pos: await loadCatalog() }
 }
 
 export function loadStockSummary(): Promise<StockBalance[]> {

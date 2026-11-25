@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ShopGate from '../../../platform/ShopGate.svelte'
+  import CatalogGate from '../../../platform/CatalogGate.svelte'
   import ItemCatalog from './ItemCatalog.svelte'
   import { removeItemPicture, saveCatalogItem, saveItemPicture, type CatalogItem } from '../../../lib/api'
   import type { PosItem, PosSnapshot } from '../../../lib/types'
@@ -33,7 +33,7 @@
   }
 </script>
 
-<ShopGate>
+<CatalogGate>
   {#snippet children(snapshot, setSnapshot)}
     <ItemCatalog
       sections={snapshot.sections}
@@ -45,4 +45,4 @@
       onImported={setSnapshot}
     />
   {/snippet}
-</ShopGate>
+</CatalogGate>

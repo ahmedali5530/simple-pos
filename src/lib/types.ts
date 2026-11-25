@@ -68,24 +68,18 @@ export interface PosUser {
   active: boolean
 }
 
-export interface PrinterSettings {
-  enabled: boolean
-  kind: 'network' | 'usb' | 'serial' | string
-  target: string
-  port: number
-}
-
-export interface PosSnapshot {
+export interface ShopSnapshot {
   shop_name: string
   bill_prefix: string
   currency: string
   locale: string
   barcode_rules: BarcodeRule[]
-  printer: PrinterSettings
+}
+
+export interface PosSnapshot extends ShopSnapshot {
   sections: PosSection[]
   all_sections: SectionChoice[]
   categories: Category[]
-  users: PosUser[]
   last_section_id: number | null
 }
 

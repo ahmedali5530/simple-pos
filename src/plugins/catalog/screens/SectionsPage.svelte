@@ -1,9 +1,9 @@
 <script lang="ts">
-  import ShopGate from '../../../platform/ShopGate.svelte'
+  import CatalogGate from '../../../platform/CatalogGate.svelte'
   import SectionCatalog from './SectionCatalog.svelte'
 </script>
 
-<ShopGate>
+<CatalogGate>
   {#snippet children(snapshot, setSnapshot)}
     <SectionCatalog
       sections={snapshot.all_sections}
@@ -11,4 +11,4 @@
       onChange={setSnapshot}
     />
   {/snippet}
-</ShopGate>
+</CatalogGate>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { downloadWorkbook, importItemsWorkbook, loadPos, request, type CatalogItem } from '../../../lib/api'
+  import { downloadWorkbook, importItemsWorkbook, loadCatalog, request, type CatalogItem } from '../../../lib/api'
   import ItemPicture from '../../../lib/ui/ItemPicture.svelte'
   import VirtualList from '../../../lib/ui/VirtualList.svelte'
   import { centsToInput, formatCost, formatMoney, moneyToCents } from '../../../lib/money'
@@ -124,7 +124,7 @@
     sheetBusy = true
     try {
       const result = await importItemsWorkbook(file)
-      onImported(await loadPos())
+      onImported(await loadCatalog())
       const parts = [
         result.created ? `${result.created} added` : '',
         result.updated ? `${result.updated} updated` : '',
