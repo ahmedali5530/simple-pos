@@ -30,13 +30,15 @@ directory it is copied to `src/plugins/<id>/` and the frontend is rebuilt.
   automatically.
 - `src/plugins/*/index.ts` is discovered with `import.meta.glob` and must export exactly one UI plugin.
   Pages and slot components stay lazy, so code splitting is unchanged.
-- `cargo xtask plugins check` fails when `compose.rs` is stale; CI runs it. `cargo xtask plugins list`
-  prints the compiled plugins in dependency order.
+- `cargo xtask plugins check` fails when `compose.rs` is stale, a Rust/UI manifest disagrees, a slot
+  contribution has no host, or a wired plugin directory is missing; CI runs it. `cargo xtask plugins
+  list` prints the compiled plugins in dependency order.
 - `cargo xtask plugins new <id> [--ui]` scaffolds a crate that compiles immediately.
 
-A plugin added to a shop that already has plugin rows starts **disabled**; a brand-new till enables
-everything. Turn it on in Settings → Plugins. Migrations still run on boot while a plugin is disabled,
-which is what makes enabling instant.
+A plugin added to a shop that already has plugin rows starts **disabled**. A brand-new tenant only
+enables plugins whose Rust manifest sets `default_enabled = true`; experimental plugins stay off
+until an operator turns them on in Settings → Plugins. Migrations still run on boot while a plugin
+is disabled, which is what makes enabling instant.
 
 **Upgrading** — append a migration, bump `PluginManifest::version`, reinstall. Never edit a migration
 that has already run: the runner freezes them and refuses to boot ("Frozen migrations must not change").
@@ -93,7 +95,7 @@ The shell draws the top bar, the page outlet, and the settings list. It does not
 
 ## Sale line metadata
 
-`bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. Each line also snapshots `rate`, `unit_cost`, and `cost_total` when the bill posts, so editing an item's price or average cost later never rewrites an old bill or its reported profit. The `sales.bill_posted` event is version 2 and includes `SaleLine` entries (`source`, `reference`, `label`, `quantity`, `unit_amount`, `amount`, `details`), so a plugin can react to its own lines. Consumers that only need the bill can keep reading `bill_no` from the payload or query the tables.
+`bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. Each line also snapshots `rate`, `unit_cost`, and `cost_total` when the bill posts, so editing an item's price or average cost later never rewrites an old bill or its reported profit. The `sales.bill_posted` event is version 3 and includes the bill facts (`bill_id`, `bill_no`, `section_id`, `user_id`, `total`, `customer`, `posted_at`) plus `SaleLine` entries (`source`, `reference`, `label`, `quantity`, `unit_amount`, `amount`, `item_id`, `stock_quantity`, `details`), so a plugin can react to its own lines without reading POS tables. `Mobile` reads this event to mark devices sold and start warranties.
 
 ## Mobile shop example
 
@@ -107,4 +109,4 @@ A device reference identifies one physical unit, so `plugin-mobile` adds a trigg
 
 ## Proof a change belongs in a plugin
 
-A new trade (tailor jobs, installments, a butcher's weighed sale) ships as a plugin. The pull request does not modify `platform-kernel` or `platform-runtime`.
+A new trade (tailor jobs, a butcher's weighed sale) ships as a plugin. The pull request does not modify `platform-kernel` or `platform-runtime`.
