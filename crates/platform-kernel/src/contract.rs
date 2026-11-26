@@ -53,6 +53,15 @@ impl Registrar {
         }
     }
 
+    /// Register a provider that is not tied to one plugin owner.
+    /// Used for composable bags (e.g. multi-handler tender apply) so disabling
+    /// one contributing plugin does not hide the whole registry.
+    pub fn provide_shared<T: Any + Send + Sync>(&mut self, value: Arc<T>) {
+        let key = TypeId::of::<T>();
+        self.providers.insert(key, value);
+        self.provider_owners.remove(&key);
+    }
+
     pub fn begin_plugin(&mut self, owner: crate::manifest::PluginId) {
         self.current_owner = Some(owner);
     }

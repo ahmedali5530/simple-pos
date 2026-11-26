@@ -149,7 +149,7 @@ async fn post_bill(
             ))
             .into());
         };
-        let handled = provider.0.apply(&mut tx, &ctx, tender).await?;
+        let handled = provider.apply(&mut tx, &ctx, tender).await?;
         if !handled {
             return Err(AppError::BadRequest(format!(
                 "{} is not a supported tender method.",

@@ -113,7 +113,64 @@ pub trait TenderApply: Send + Sync {
     ) -> Result<bool, AppError>;
 }
 
-pub struct TenderApplyProvider(pub std::sync::Arc<dyn TenderApply>);
+/// Composable tender handlers. Plugins push; POS fans out until one returns true.
+pub struct TenderApplyProvider {
+    handlers: std::sync::Mutex<Vec<std::sync::Arc<dyn TenderApply>>>,
+}
+
+impl TenderApplyProvider {
+    pub fn new() -> Self {
+        Self {
+            handlers: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn push(&self, handler: std::sync::Arc<dyn TenderApply>) {
+        self.handlers
+            .lock()
+            .expect("tender apply registry")
+            .push(handler);
+    }
+
+    pub async fn apply(
+        &self,
+        tx: &mut TenantTx<'_>,
+        ctx: &TenderApplyContext<'_>,
+        tender: &SaleTender,
+    ) -> Result<bool, AppError> {
+        let handlers = self
+            .handlers
+            .lock()
+            .expect("tender apply registry")
+            .clone();
+        for handler in handlers {
+            if handler.apply(tx, ctx, tender).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+impl Default for TenderApplyProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Append a tender handler. First caller creates a shared (unowned) registry.
+pub fn register_tender_apply(
+    registrar: &mut platform_kernel::contract::Registrar,
+    handler: std::sync::Arc<dyn TenderApply>,
+) {
+    if let Some(existing) = registrar.get::<TenderApplyProvider>() {
+        existing.push(handler);
+        return;
+    }
+    let provider = std::sync::Arc::new(TenderApplyProvider::new());
+    provider.push(handler);
+    registrar.provide_shared(provider);
+}
 
 impl DomainEvent for BillPostedV2 {
     const TYPE: &'static str = "sales.bill_posted";

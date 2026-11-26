@@ -1945,6 +1945,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-payments"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "sales-contract",
+ "serde",
+ "serde_json",
+ "sqlx 0.8.6",
+ "tracing",
+]
+
+[[package]]
 name = "plugin-pos"
 version = "0.1.0"
 dependencies = [
@@ -2705,6 +2719,7 @@ dependencies = [
  "plugin-gift",
  "plugin-inventory",
  "plugin-mobile",
+ "plugin-payments",
  "plugin-pos",
  "plugin-printing",
  "plugin-reports",

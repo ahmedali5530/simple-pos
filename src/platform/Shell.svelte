@@ -78,6 +78,19 @@
     return letters.toUpperCase() || 'SH'
   }
 
+  function navGlyph(label: string) {
+    return initials(label).slice(0, 2)
+  }
+
+  function onGroupToggle(id: string) {
+    if (sidebarCollapsed) {
+      sidebarCollapsed = false
+      openGroup = id
+      return
+    }
+    toggleGroup(id)
+  }
+
   function active(href: string) {
     if (!href) return false
     if (location.path === href || location.path.startsWith(`${href}/`)) return true
@@ -169,12 +182,15 @@
               class="ui-nav-item sidebar-group-toggle"
               data-active={groupActive(item) ? 'true' : undefined}
               aria-expanded={open}
-              onclick={() => toggleGroup(item.id)}
+              aria-label={item.label}
+              title={item.label}
+              onclick={() => onGroupToggle(item.id)}
             >
+              <span class="nav-glyph" data-slot="icon" aria-hidden="true">{navGlyph(item.label)}</span>
               <span data-slot="label">{item.label}</span>
-              <span class="chevron" aria-hidden="true"></span>
+              <span class="chevron" data-slot="label" aria-hidden="true"></span>
             </button>
-            {#if open}
+            {#if open && !sidebarCollapsed}
               <div class="sidebar-submenu" role="group" aria-label={item.label}>
                 {#each item.children as child (child.id)}
                   {@const childHref = child.href ?? ''}
@@ -182,10 +198,13 @@
                     <a
                       class="ui-nav-item"
                       href={childHref}
+                      title={child.label}
+                      aria-label={child.label}
                       aria-current={active(childHref) ? 'page' : undefined}
                       data-active={active(childHref) ? 'true' : undefined}
                       onclick={(event) => go(event, childHref)}
                     >
+                      <span class="nav-glyph" data-slot="icon" aria-hidden="true">{navGlyph(child.label)}</span>
                       <span data-slot="label">{child.label}</span>
                     </a>
                   {/if}
@@ -197,10 +216,13 @@
           <a
             class="ui-nav-item"
             {href}
+            title={item.label}
+            aria-label={item.label}
             aria-current={active(href) ? 'page' : undefined}
             data-active={active(href) ? 'true' : undefined}
             onclick={(event) => go(event, href)}
           >
+            <span class="nav-glyph" data-slot="icon" aria-hidden="true">{navGlyph(item.label)}</span>
             <span data-slot="label">{item.label}</span>
           </a>
         {/if}
@@ -210,9 +232,29 @@
     <div class="sidebar-footer">
       {#if session.user}
         <div class="sidebar-who" data-slot="label">{session.user.name}</div>
-        <Button variant="secondary" data-block="" onclick={leave}>Sign out</Button>
+        <Button
+          variant="secondary"
+          data-block=""
+          class="sidebar-session"
+          aria-label="Sign out"
+          title="Sign out"
+          onclick={leave}
+        >
+          <span class="nav-glyph" data-slot="icon" aria-hidden="true">SO</span>
+          <span data-slot="label">Sign out</span>
+        </Button>
       {:else}
-        <Button variant="secondary" href="/login" onclick={(event) => go(event, '/login')}>Sign in</Button>
+        <Button
+          variant="secondary"
+          class="sidebar-session"
+          href="/login"
+          aria-label="Sign in"
+          title="Sign in"
+          onclick={(event) => go(event, '/login')}
+        >
+          <span class="nav-glyph" data-slot="icon" aria-hidden="true">SI</span>
+          <span data-slot="label">Sign in</span>
+        </Button>
       {/if}
     </div>
   </aside>

@@ -20,6 +20,8 @@ pub fn plugins() -> Vec<Arc<dyn Plugin>> {
     plugins.push(plugin_inventory::plugin());
     #[cfg(feature = "plugin-mobile")]
     plugins.push(plugin_mobile::plugin());
+    #[cfg(feature = "plugin-payments")]
+    plugins.push(plugin_payments::plugin());
     #[cfg(feature = "plugin-pos")]
     plugins.push(plugin_pos::plugin());
     #[cfg(feature = "plugin-printing")]

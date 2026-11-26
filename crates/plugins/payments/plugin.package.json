@@ -1,0 +1,6 @@
+{
+  "id": "payments",
+  "version": "0.1.0",
+  "kernel_api": "^1.0",
+  "content_sha256": "e9e7e0585e45f984e80f33839ac169b7346b5ad4ce730b847e468683140cab2c"
+}

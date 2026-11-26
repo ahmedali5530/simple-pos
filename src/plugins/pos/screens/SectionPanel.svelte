@@ -285,7 +285,7 @@
     {/each}
   </div>
 
-  <VirtualGrid class="items" items={visibleItems} estimate={150} min={200} gap={12} reset="{section.id}:{filter}" key={(item) => item.id}>
+  <VirtualGrid class="items" items={visibleItems} estimate={170} min={220} gap={14} reset="{section.id}:{filter}" key={(item) => item.id}>
     {#snippet children(item)}
       <button
         type="button"
@@ -383,8 +383,7 @@
                 <strong>{money(line.rate * line.qty)}</strong>
                 <Button
                   variant="ghost"
-                  size="sm"
-                  class="text-danger"
+                  class="text-danger cart-remove"
                   aria-label="Remove {line.name}"
                   onclick={() => onQty(line.key, 0)}
                 >×</Button>

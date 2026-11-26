@@ -33,7 +33,7 @@ body {
 }
 
 [data-density='touch'] {
-  --ui-density: 1.15;
+  --ui-density: 1.35;
 }
 
 [data-density='compact'] {

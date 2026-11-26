@@ -9,7 +9,7 @@ use platform_kernel::migrate::Migration;
 use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
-use sales_contract::TenderApplyProvider;
+use sales_contract::register_tender_apply;
 
 mod routes;
 mod sale;
@@ -74,7 +74,7 @@ impl Plugin for GiftPlugin {
     }
 
     fn register(&self, registrar: &mut Registrar) {
-        registrar.provide(Arc::new(TenderApplyProvider(Arc::new(tender::GiftTenderApply))));
+        register_tender_apply(registrar, Arc::new(tender::GiftTenderApply));
     }
 
     fn routes(&self, routes: &mut PluginRoutes) -> Result<(), RegistrationError> {

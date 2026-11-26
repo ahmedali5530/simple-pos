@@ -18,8 +18,8 @@
 }
 
 [data-density='touch'] {
-  --control-h: 3.5rem;
-  --control-px: 1.25rem;
-  --control-text: 1.0625rem;
-  --control-gap: 0.5rem;
+  --control-h: 3.75rem;
+  --control-px: 1.35rem;
+  --control-text: 1.125rem;
+  --control-gap: 0.625rem;
 }
