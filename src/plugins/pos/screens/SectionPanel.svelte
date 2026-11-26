@@ -7,7 +7,7 @@
   import { Button, Switch } from '../../../lib/ui'
   import Slot from '../../../platform/Slot.svelte'
   import { hasItemOptions } from '../../../platform/itemOptions'
-  import type { AddPosLine, LineMetadataPatch } from '../../../platform/slots'
+  import type { AddPosLine, LineMetadataPatch, PosTender } from '../../../platform/slots'
 
   interface Props {
     section: PosSection
@@ -31,6 +31,8 @@
     posting: boolean
     customer: string
     onCustomer: (name: string) => void
+    tenders: PosTender[]
+    onTenders: (tenders: PosTender[]) => void
     skipPrint: boolean
     receipts: boolean
     onSkipPrint: (skip: boolean) => void
@@ -58,6 +60,8 @@
     posting,
     customer,
     onCustomer,
+    tenders,
+    onTenders,
     skipPrint,
     receipts,
     onSkipPrint,
@@ -397,6 +401,16 @@
         oninput={(event) => onCustomer(event.currentTarget.value)}
       />
     </label>
+    <Slot
+      name="pos.tender"
+      context={{
+        total,
+        currency,
+        locale,
+        tenders,
+        setTenders: onTenders,
+      }}
+    />
     {#if receipts}
       <Switch class="skip-print" checked={skipPrint} label="Skip receipt" onchange={onSkipPrint} />
     {/if}

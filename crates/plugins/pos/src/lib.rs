@@ -17,9 +17,9 @@ use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
 use sales_contract::{
-    ReceiptData, ReceiptLine, SalesBill, SalesBillLine, SalesQuery, SalesQueryProvider,
-    SalesReceiptProvider, SalesReceiptQuery, SalesReport, SalesReporting, SalesReportingProvider,
-    SalesSectionTotal, SalesTotal,
+    ReceiptData, ReceiptLine, ReceiptTender, SalesBill, SalesBillLine, SalesQuery,
+    SalesQueryProvider, SalesReceiptProvider, SalesReceiptQuery, SalesReport, SalesReporting,
+    SalesReportingProvider, SalesSectionTotal, SalesTotal,
 };
 
 mod routes;
@@ -60,6 +60,7 @@ impl Plugin for PosPlugin {
             "pos.line-source".into(),
             "pos.line-detail".into(),
             "pos.item-options".into(),
+            "pos.tender".into(),
         ];
         manifest
     }
@@ -75,6 +76,11 @@ impl Plugin for PosPlugin {
                 2,
                 "line_cost",
                 include_str!("../migrations/002_line_cost.sql"),
+            ),
+            Migration::new(
+                3,
+                "bill_tenders",
+                include_str!("../migrations/003_bill_tenders.sql"),
             ),
         ];
         MIGRATIONS
@@ -117,6 +123,12 @@ impl SalesReceiptQuery for PgSalesReceiptQuery {
             rate: i32,
             amount: i32,
         }
+        #[derive(sqlx::FromRow)]
+        struct Tender {
+            method: String,
+            amount: i32,
+            reference: String,
+        }
         let head = sqlx::query_as::<_, Head>(r#"
             SELECT b.id, b.bill_no, b.total,
                    to_char(b.created_at AT TIME ZONE 'Asia/Karachi', 'YYYY-MM-DD HH12:MI AM') AS sold_at,
@@ -130,6 +142,20 @@ impl SalesReceiptQuery for PgSalesReceiptQuery {
         .bind(head.id)
         .fetch_all(tx.conn())
         .await?;
+        let mut tenders = sqlx::query_as::<_, Tender>(
+            "SELECT method, amount, reference FROM bill_tenders WHERE bill_id = $1 ORDER BY id",
+        )
+        .bind(head.id)
+        .fetch_all(tx.conn())
+        .await
+        .unwrap_or_default();
+        if tenders.is_empty() {
+            tenders.push(Tender {
+                method: "cash".into(),
+                amount: head.total,
+                reference: String::new(),
+            });
+        }
         Ok(ReceiptData {
             bill_no: head.bill_no,
             total: head.total,
@@ -147,6 +173,14 @@ impl SalesReceiptQuery for PgSalesReceiptQuery {
                     qty: line.qty,
                     rate: line.rate,
                     amount: line.amount,
+                })
+                .collect(),
+            tenders: tenders
+                .into_iter()
+                .map(|tender| ReceiptTender {
+                    method: tender.method,
+                    amount: tender.amount,
+                    reference: tender.reference,
                 })
                 .collect(),
         })

@@ -484,9 +484,15 @@ export function postBill(
     details?: Record<string, unknown> | null
   }[],
   customer: string | null,
+  tenders: {
+    method: string
+    amount: number
+    reference?: string | null
+    details?: Record<string, unknown> | null
+  }[] = [],
 ): Promise<PostedBill> {
   return request('/api/v1/pos/bills', {
     method: 'POST',
-    body: JSON.stringify({ section_id: sectionId, lines, customer }),
+    body: JSON.stringify({ section_id: sectionId, lines, customer, tenders }),
   })
 }

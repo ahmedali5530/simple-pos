@@ -49,7 +49,7 @@ fn production_plugins_do_not_depend_on_other_plugins() {
 
 fn allowed_tables(plugin: &str, table: &str) -> bool {
     match table {
-        "bills" | "bill_lines" => plugin == "pos",
+        "bills" | "bill_lines" | "bill_tenders" => plugin == "pos",
         "stock_movements" => plugin == "inventory",
         // Catalog reads balances for snapshot/sheet enrichment; only Inventory writes them.
         "inventory_balances" => plugin == "inventory" || plugin == "catalog",

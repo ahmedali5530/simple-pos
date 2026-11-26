@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Value};
 
 fn main() {
@@ -41,8 +43,183 @@ fn plugins(args: &[String]) -> Result<()> {
         "install" => install(rest),
         "remove" => remove(rest),
         "new" => scaffold(rest),
+        "package" => package_cmd(rest),
         other => bail!("unknown command `plugins {other}`; run `cargo xtask` for help"),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Package metadata + checksums
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PluginPackageMeta {
+    id: String,
+    version: String,
+    kernel_api: String,
+    content_sha256: String,
+}
+
+const PACKAGE_META_FILE: &str = "plugin.package.json";
+
+fn package_cmd(args: &[String]) -> Result<()> {
+    let Some(id) = args.first() else {
+        bail!("usage: cargo xtask plugins package <id>");
+    };
+    validate_id(id)?;
+    let crate_dir = root().join("crates/plugins").join(id);
+    if !crate_dir.is_dir() {
+        bail!("crates/plugins/{id} does not exist");
+    }
+    let meta = write_package_meta(&crate_dir, id, None)?;
+    println!(
+        "Wrote {} (sha256 {})",
+        crate_dir.join(PACKAGE_META_FILE).display(),
+        meta.content_sha256
+    );
+    Ok(())
+}
+
+fn package_version(crate_dir: &Path) -> Result<String> {
+    let text = fs::read_to_string(crate_dir.join("Cargo.toml"))?;
+    let doc: DocumentMut = text.parse()?;
+    doc.get("package")
+        .and_then(Item::as_table_like)
+        .and_then(|table| table.get("version"))
+        .and_then(Item::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("{} has no package.version", crate_dir.display()))
+}
+
+fn hash_package_content(crate_dir: &Path) -> Result<String> {
+    let mut paths = Vec::new();
+    collect_hash_paths(crate_dir, crate_dir, &mut paths)?;
+    let ui = crate_dir.join("ui");
+    if ui.is_dir() {
+        collect_hash_paths(&ui, crate_dir, &mut paths)?;
+    }
+    paths.sort();
+    let mut hasher = Sha256::new();
+    for relative in paths {
+        let absolute = crate_dir.join(&relative);
+        let bytes = fs::read(&absolute)
+            .with_context(|| format!("reading {} for package checksum", absolute.display()))?;
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn collect_hash_paths(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if matches!(
+            name.as_ref(),
+            "target" | ".git" | "node_modules" | PACKAGE_META_FILE
+        ) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_hash_paths(&path, root, out)?;
+        } else {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(relative);
+        }
+    }
+    Ok(())
+}
+
+fn write_package_meta(
+    crate_dir: &Path,
+    id: &str,
+    version: Option<&str>,
+) -> Result<PluginPackageMeta> {
+    let version = match version {
+        Some(value) => value.to_string(),
+        None => package_version(crate_dir)?,
+    };
+    let content_sha256 = hash_package_content(crate_dir)?;
+    let meta = PluginPackageMeta {
+        id: id.to_string(),
+        version,
+        kernel_api: "^1.0".into(),
+        content_sha256,
+    };
+    let text = serde_json::to_string_pretty(&meta)? + "\n";
+    fs::write(crate_dir.join(PACKAGE_META_FILE), text)?;
+    Ok(meta)
+}
+
+fn verify_package_meta(crate_dir: &Path, expected_id: &str) -> Result<()> {
+    let path = crate_dir.join(PACKAGE_META_FILE);
+    if !path.is_file() {
+        bail!(
+            "{} is missing; run `cargo xtask plugins package <id>` or `plugins new` to create it. \
+             Trust step: checksum + operator-trusted deploy (signing deferred).",
+            path.display()
+        );
+    }
+    let meta: PluginPackageMeta = serde_json::from_str(&fs::read_to_string(&path)?)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    if meta.id != expected_id {
+        bail!(
+            "plugin.package.json id `{}` does not match package id `{expected_id}`",
+            meta.id
+        );
+    }
+    let actual = hash_package_content(crate_dir)?;
+    if actual != meta.content_sha256 {
+        bail!(
+            "plugin.package.json checksum mismatch for `{expected_id}` \
+             (declared {}, computed {actual})",
+            meta.content_sha256
+        );
+    }
+    Ok(())
+}
+
+fn snapshot_existing_plugin(crate_dir: &Path, id: &str) -> Result<()> {
+    if !crate_dir.is_dir() {
+        return Ok(());
+    }
+    let version = package_version(crate_dir).unwrap_or_else(|_| "unknown".into());
+    let stamp = chrono_stamp();
+    let disabled = root().join("crates/plugins-disabled");
+    fs::create_dir_all(&disabled)?;
+    let dest = disabled.join(format!("{id}-{version}-{stamp}"));
+    if dest.exists() {
+        bail!(
+            "package rollback snapshot {} already exists; refusing to overwrite",
+            dest.display()
+        );
+    }
+    copy_tree(crate_dir, &dest)?;
+    let ui = root().join("src/plugins").join(id);
+    if ui.is_dir() {
+        copy_tree(&ui, &dest.join("ui"))?;
+    }
+    println!(
+        "Kept previous package tree at {} for rollback (restore manually, then `cargo xtask plugins sync`).",
+        dest.display()
+    );
+    Ok(())
+}
+
+fn chrono_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{secs}")
 }
 
 fn print_help() {
@@ -57,6 +234,7 @@ Commands:
   install <path>       Copy a plugin crate in, wire it up and rebuild
   remove <id>          Unwire a plugin; keeps its data unless --purge
   new <id>             Scaffold a new plugin crate (--ui also scaffolds the Svelte descriptor)
+  package <id>         Regenerate plugin.package.json checksum for an in-tree plugin
 
 Flags:
   --force              Replace an existing plugin directory on install
@@ -319,12 +497,14 @@ fn install(args: &[String]) -> Result<()> {
              composition root can mount it"
         );
     }
+    verify_package_meta(&source, id)?;
 
     let destination = root().join("crates/plugins").join(id);
     if destination.exists() {
         if !force {
             bail!("crates/plugins/{id} already exists; pass --force to replace it");
         }
+        snapshot_existing_plugin(&destination, id)?;
     }
     let ui_source = source.join("ui");
     let ui_destination = root().join("src/plugins").join(id);
@@ -339,6 +519,7 @@ fn install(args: &[String]) -> Result<()> {
             compose_path(),
             root().join("Cargo.lock"),
             root().join("dist"),
+            root().join("crates/plugins-disabled"),
         ],
         || {
             if destination.exists() {
@@ -547,6 +728,7 @@ fn scaffold(args: &[String]) -> Result<()> {
         crate_dir.join("migrations/.gitkeep"),
         "Plugin SQL migrations live here. Migration::new(1, \"name\", include_str!(\"../migrations/001_x.sql\")).\n",
     )?;
+    write_package_meta(&crate_dir, &id, Some("0.1.0"))?;
 
     if with_ui {
         let ui_dir = root().join("src/plugins").join(&id);

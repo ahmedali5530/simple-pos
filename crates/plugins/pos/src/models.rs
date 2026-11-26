@@ -201,11 +201,24 @@ pub struct BillLineInput {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TenderInput {
+    pub method: String,
+    pub amount: i32,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PostBillRequest {
     pub section_id: i32,
     pub lines: Vec<BillLineInput>,
     #[serde(default)]
     pub customer: Option<String>,
+    /// How the bill is paid. Empty means a single cash tender for the total.
+    #[serde(default)]
+    pub tenders: Vec<TenderInput>,
 }
 
 #[derive(Debug, Serialize)]

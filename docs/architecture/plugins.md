@@ -17,6 +17,32 @@ Plugins are compiled into the binary. Adding one is a directory plus one command
 
 Authoring SDK surface today: `platform-kernel` (Plugin trait, manifests, routes, events) + contract crates. Integration harness: `platform-testkit` (probe plugin + boot helpers). TypeScript helpers: `src/platform/registry.ts` (`defineUiPlugin`).
 
+## Trust and install
+
+**Install** is a deployment-pipeline step: `cargo xtask plugins install` copies the crate into the
+workspace, verifies `plugin.package.json`, rebuilds composition, and the operator ships a new
+binary. **Enable** is a runtime admin action on `tenant_plugins` (Settings → Plugins). A compiled
+plugin that is disabled has no tenant routes or event handlers.
+
+Native plugins are process-trusted (same privileges as the till process). Do not treat them as
+tenant-isolated. Package trust today is **checksum + operator-trusted deploy**; signing waits.
+Marketplace upload of untrusted code requires a sandbox and is out of scope.
+
+`plugin.package.json` records `id`, `version`, `kernel_api`, and `content_sha256` over the crate
+(and optional `ui/`). `cargo xtask plugins new` writes it; `cargo xtask plugins package <id>`
+regenerates it; `install` refuses a missing or mismatched checksum. On `--force` upgrade, the previous
+tree is kept under `crates/plugins-disabled/<id>-<version>-<stamp>/` for package rollback (restore
+the tree, then `cargo xtask plugins sync`). Failed installs still roll back the workspace via
+`with_workspace_transaction`.
+
+Before applying pending plugin SQL migrations at boot, the runner dumps existing tables named in
+those migrations to `data/migration-backups/<owner>/<timestamp>/` (override with
+`CHASKA_MIGRATION_BACKUP_DIR`). Restore by loading the JSON rows back into the tables after a bad
+migration is fixed offline.
+
+Per-tenant persistence is already covered: `tenant_plugins`, `plugin_settings`, and
+`role_permissions` — no redesign.
+
 ## Installing a plugin
 
 ```sh
@@ -28,16 +54,18 @@ A package is a crate plus, optionally, a `ui/` directory:
 
 ```
 my-plugin/
-  Cargo.toml          # package name: plugin-<id>
-  src/lib.rs          # must expose `pub fn plugin() -> Arc<dyn Plugin>`
-  migrations/         # plugin-owned SQL
-  uninstall.sql       # optional, used by `plugins remove --purge`
-  ui/                 # optional Svelte descriptor + screens, copied to src/plugins/<id>
+  Cargo.toml            # package name: plugin-<id>
+  plugin.package.json   # id, version, kernel_api, content_sha256
+  src/lib.rs            # must expose `pub fn plugin() -> Arc<dyn Plugin>`
+  migrations/           # plugin-owned SQL
+  uninstall.sql         # optional, used by `plugins remove --purge`
+  ui/                   # optional Svelte descriptor + screens, copied to src/plugins/<id>
 ```
 
-`install` copies the crate to `crates/plugins/<id>`, adds it to `crates/shop-api/Cargo.toml`, regenerates
-`crates/shop-api/src/compose.rs`, and runs `cargo check -p shop-api`. When the package has a `ui/`
-directory it is copied to `src/plugins/<id>/` and the frontend is rebuilt.
+`install` verifies the package checksum, copies the crate to `crates/plugins/<id>`, adds it to
+`crates/shop-api/Cargo.toml`, regenerates `crates/shop-api/src/compose.rs`, and runs
+`cargo check -p shop-api`. When the package has a `ui/` directory it is copied to
+`src/plugins/<id>/` and the frontend is rebuilt.
 
 - `crates/plugins/*` and `crates/contracts/*` are workspace glob members, so the crate joins the build
   automatically.
@@ -103,12 +131,14 @@ Contribution components are lazy and only mount when their owning plugin is both
   `patch({ source?, reference?, details? })` updates one cart line's plugin metadata.
 - `pos.item-options` — `{ item, section, lines, addLine, close, currency, locale }`.
   Rendered inside the POS variant sheet. A plugin adds its own option rows and calls `addLine` for each pick. A frontend plugin that needs this outlet registers a provider with `registerItemOptionsProvider({ plugin, prepare, hasOptions, reset })`; `hasOptions(itemId)` makes clicking that catalog item open the sheet instead of adding it directly. `prepare` loads the item ids for the current shop, and `reset` drops them when the session changes.
+- `pos.tender` — `{ total, currency, locale, tenders, setTenders }`.
+  Bill footer. Contributors add payment methods; empty `tenders` means an implied cash tender for the total. Amounts must sum to the bill total when present.
 
 The shell draws the top bar, the page outlet, and the settings list. It does not switch on business paths.
 
 ## Sale line metadata
 
-`bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. Each line also snapshots `rate`, `unit_cost`, and `cost_total` when the bill posts, so editing an item's price or average cost later never rewrites an old bill or its reported profit. The `sales.bill_posted` event is version 3 and includes the bill facts (`bill_id`, `bill_no`, `section_id`, `user_id`, `total`, `customer`, `posted_at`) plus `SaleLine` entries (`source`, `reference`, `label`, `quantity`, `unit_amount`, `amount`, `item_id`, `stock_quantity`, `details`), so a plugin can react to its own lines without reading POS tables. `Mobile` reads this event to mark devices sold and start warranties.
+`bill_lines` carries three plugin-owned columns: `source` (default `catalog.product`), `reference`, and `details JSONB`. POS stores and totals them without reading their meaning. Each line also snapshots `rate`, `unit_cost`, and `cost_total` when the bill posts, so editing an item's price or average cost later never rewrites an old bill or its reported profit. Settlements live in POS-owned `bill_tenders` (`method`, `amount`, `reference`, `details`). Non-cash methods are applied in the post transaction through `sales_contract::TenderApply`. The `sales.bill_posted` event is version 4 and includes the bill facts, `SaleLine` entries, and `tenders`, so a plugin can react without reading POS tables. `Mobile` consumes v3+ line facts; `Gift` issues cards from `gift.issue` lines and redeems via `method=gift.card`.
 
 ## Mobile shop example
 

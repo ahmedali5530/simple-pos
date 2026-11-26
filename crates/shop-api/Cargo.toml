@@ -19,6 +19,7 @@ plugin-printing = { path = "../plugins/printing", optional = true }
 plugin-reports = { path = "../plugins/reports", optional = true }
 plugin-tailor = { path = "../plugins/tailor", optional = true }
 plugin-mobile = { path = "../plugins/mobile", optional = true }
+plugin-gift = { path = "../plugins/gift", optional = true }
 dotenvy = "0.15"
 getrandom = "0.2"
 postgresql_embedded = { version = "0.22", optional = true, features = ["bundled", "tokio"] }
@@ -35,7 +36,7 @@ uuid = { version = "1", features = ["serde"] }
 [features]
 # Compile-time plugin selection. The default deployment includes the current whole plugin set.
 default = ["plugins-all"]
-plugins-all = ["plugin-core", "plugin-catalog", "plugin-inventory", "plugin-pos", "plugin-cash", "plugin-printing", "plugin-reports", "plugin-tailor", "plugin-mobile"]
+plugins-all = ["plugin-core", "plugin-catalog", "plugin-inventory", "plugin-pos", "plugin-cash", "plugin-printing", "plugin-reports", "plugin-tailor", "plugin-mobile", "plugin-gift"]
 plugin-core = ["dep:plugin-core"]
 plugin-catalog = ["dep:plugin-catalog"]
 # Inventory/POS/cash/reports/mobile stay compile-standalone; pair providers at deploy time.
@@ -46,6 +47,7 @@ plugin-printing = ["dep:plugin-printing"]
 plugin-reports = ["dep:plugin-reports"]
 plugin-tailor = ["dep:plugin-tailor"]
 plugin-mobile = ["dep:plugin-mobile"]
+plugin-gift = ["dep:plugin-gift"]
 # Pages and API in one process, using DATABASE_URL. The web image uses this.
 web = ["dep:axum-frontend", "dep:rust-embed"]
 # Desktop till: the web files plus a private Postgres. Do not use this on a VPS.

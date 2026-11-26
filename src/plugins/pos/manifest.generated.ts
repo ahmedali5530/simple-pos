@@ -9,6 +9,6 @@ export const metadata = {
   nav: [{ id: "billing", label: "POS Billing", href: "/billing", permission: "pos.bills.post", order: 10 }] as UiPlugin['nav'],
   settingsPages: [] as UiPlugin['settingsPages'],
   reportPages: [] as UiPlugin['reportPages'],
-  slotsProvided: ["pos.line-source", "pos.line-detail", "pos.item-options"] as string[],
+  slotsProvided: ["pos.line-source", "pos.line-detail", "pos.item-options", "pos.tender"] as string[],
   contributions: [] as Array<{ id: string; slot: string; order: number }>,
 }

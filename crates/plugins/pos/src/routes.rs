@@ -111,6 +111,7 @@ async fn post_bill(
         body.section_id,
         &body.lines,
         body.customer.as_deref(),
+        &body.tenders,
     )
     .await?;
     if let Some(ledger) = db.provider::<inventory_contract::StockLedgerProvider>() {
@@ -130,6 +131,32 @@ async fn post_bill(
             })
             .collect();
         ledger.0.issue(&mut tx, &issues).await?;
+    }
+    let tender_apply = db.provider::<sales_contract::TenderApplyProvider>();
+    let ctx = sales_contract::TenderApplyContext {
+        bill_id: event.bill_id,
+        bill_no: &event.bill_no,
+        total: event.total,
+    };
+    for tender in &event.tenders {
+        if tender.method == "cash" {
+            continue;
+        }
+        let Some(provider) = tender_apply.as_ref() else {
+            return Err(AppError::BadRequest(format!(
+                "No tender handler is available for {}.",
+                tender.method
+            ))
+            .into());
+        };
+        let handled = provider.0.apply(&mut tx, &ctx, tender).await?;
+        if !handled {
+            return Err(AppError::BadRequest(format!(
+                "{} is not a supported tender method.",
+                tender.method
+            ))
+            .into());
+        }
     }
     posted.pos = load_pos_catalog_tx(&mut tx, &till_fallback(), &catalog).await?;
     Outbox::publish(&mut tx, &event).await?;

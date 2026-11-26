@@ -22,6 +22,7 @@ pub fn plugins_for(profile: &str) -> Result<Vec<String>, AppError> {
         "shoe_market" => include_str!("../../../profiles/shoe_market.json"),
         "tailor" => include_str!("../../../profiles/tailor.json"),
         "installment_shop" => include_str!("../../../profiles/installment_shop.json"),
+        "gift_shop" => include_str!("../../../profiles/gift_shop.json"),
         "mobile_shop" => include_str!("../../../profiles/mobile_shop.json"),
         _ => return Err(AppError::NotFound(format!("Unknown profile `{profile}`."))),
     };

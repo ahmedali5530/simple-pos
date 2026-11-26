@@ -14,7 +14,7 @@
   import { location, screenOf } from '../../../lib/route.svelte'
   import { session } from '../../../lib/session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../../../lib/types'
-  import type { LineMetadataPatch, PosLineDraft } from '../../../platform/slots'
+  import type { LineMetadataPatch, PosLineDraft, PosTender } from '../../../platform/slots'
   import AttentionDialog from './AttentionDialog.svelte'
   import MeasureDialog from './MeasureDialog.svelte'
   import SectionPanel from './SectionPanel.svelte'
@@ -32,6 +32,7 @@
   let measure = $state<{ sectionId: number; itemId: number } | null>(null)
   let postingId = $state<number | null>(null)
   let customers = $state<Record<number, string>>({})
+  let tendersBySection = $state<Record<number, PosTender[]>>({})
   let skipPrint = $state(false)
   let now = $state(new Date())
   let pending = $state<{ sectionId: number; itemId: number } | null>(null)
@@ -421,6 +422,7 @@
     attention = null
     try {
       const customer = (customers[sectionId] ?? '').trim()
+      const tenders = tendersBySection[sectionId] ?? []
       const result = await postBill(
         sectionId,
         lines.map((line) => ({
@@ -435,10 +437,17 @@
           details: line.details ?? null,
         })),
         customer || null,
+        tenders.map((tender) => ({
+          method: tender.method,
+          amount: tender.amount,
+          reference: tender.reference ?? null,
+          details: tender.details ?? null,
+        })),
       )
       snapshot = result.pos
       carts = { ...carts, [sectionId]: [] }
       customers = { ...customers, [sectionId]: '' }
+      tendersBySection = { ...tendersBySection, [sectionId]: [] }
       posted = {
         ...posted,
         [sectionId]: `${result.bill_no} posted · ${formatMoney(result.total, result.pos.currency, result.pos.locale)}`,
@@ -632,11 +641,14 @@
           onClear={() => {
             carts = { ...carts, [active.id]: [] }
             customers = { ...customers, [active.id]: '' }
+            tendersBySection = { ...tendersBySection, [active.id]: [] }
           }}
           onPost={() => post(active.id)}
           posting={postingId === active.id}
           customer={customers[active.id] ?? ''}
           onCustomer={(name) => (customers = { ...customers, [active.id]: name })}
+          tenders={tendersBySection[active.id] ?? []}
+          onTenders={(tenders) => (tendersBySection = { ...tendersBySection, [active.id]: tenders })}
           {skipPrint}
           receipts={pluginEnabled('printing')}
           onSkipPrint={(skip) => (skipPrint = skip)}

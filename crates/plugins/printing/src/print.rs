@@ -33,6 +33,12 @@ struct ReceiptLine {
     amount: i32,
 }
 
+struct ReceiptTender {
+    method: String,
+    amount: i32,
+    reference: String,
+}
+
 struct Receipt {
     shop_name: String,
     currency: String,
@@ -42,6 +48,7 @@ struct Receipt {
     customer: Option<String>,
     lines: Vec<ReceiptLine>,
     total: i32,
+    tenders: Vec<ReceiptTender>,
 }
 
 /// Print a saved bill on the shop printer. A turned-off printer is not an error.
@@ -53,6 +60,22 @@ pub async fn print_saved_bill(
     let Some(printer) = enabled_printer_tx(tx).await? else {
         return Ok(PrintOutcome { printed: false });
     };
+    let mut tenders: Vec<ReceiptTender> = data
+        .tenders
+        .into_iter()
+        .map(|tender| ReceiptTender {
+            method: tender.method,
+            amount: tender.amount,
+            reference: tender.reference,
+        })
+        .collect();
+    if tenders.is_empty() {
+        tenders.push(ReceiptTender {
+            method: "cash".into(),
+            amount: data.total,
+            reference: String::new(),
+        });
+    }
     let receipt = Receipt {
         shop_name: shop.name.clone(),
         currency: shop.currency.clone(),
@@ -71,6 +94,7 @@ pub async fn print_saved_bill(
             })
             .collect(),
         total: data.total,
+        tenders,
     };
     let bytes = build_final_receipt(&receipt);
     dispatch(&printer, &bytes, "The sale is saved.")?;
@@ -178,10 +202,10 @@ fn build_final_receipt(receipt: &Receipt) -> Vec<u8> {
     out.pair("Total", &money(&receipt.currency, receipt.total));
     out.normal();
     out.rule();
-    out.pair("Cash", &money(&receipt.currency, receipt.total));
-    out.rule();
-    out.bold_underline();
-    out.pair("Change", &money(&receipt.currency, 0));
+    for tender in &receipt.tenders {
+        let label = tender_label(&tender.method, &tender.reference);
+        out.pair(&label, &money(&receipt.currency, tender.amount));
+    }
     out.normal();
     out.feed(1);
     out.align_center();
@@ -307,6 +331,20 @@ fn send_cups(bytes: &[u8]) -> Result<(), String> {
             .is_empty()
             .then(|| "The USB printer did not accept the receipt.".to_string())
             .unwrap_or_else(|| stderr.trim().to_string()))
+    }
+}
+
+fn tender_label(method: &str, reference: &str) -> String {
+    let name = match method {
+        "cash" => "Cash".to_string(),
+        "gift.card" => "Gift card".to_string(),
+        other => other.replace('.', " "),
+    };
+    let reference = reference.trim();
+    if reference.is_empty() {
+        name
+    } else {
+        format!("{name} ({reference})")
     }
 }
 
@@ -702,6 +740,11 @@ mod tests {
                 amount: 100,
             }],
             total: 100,
+            tenders: vec![ReceiptTender {
+                method: "cash".into(),
+                amount: 100,
+                reference: String::new(),
+            }],
         };
         let bytes = build_final_receipt(&receipt);
         let text = String::from_utf8_lossy(&bytes);
@@ -712,6 +755,7 @@ mod tests {
         assert!(text.contains("Cigarette - Pack"));
         assert!(!text.contains('·'));
         assert!(text.contains("PKR100"));
+        assert!(text.contains("Cash"));
         assert!(text.contains("Check Closed"));
         assert!(bytes.windows(3).any(|chunk| chunk == b"\x1d\x56\x00"));
     }

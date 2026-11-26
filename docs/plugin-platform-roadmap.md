@@ -97,39 +97,42 @@ permission catalog flag rather than engine code.
 
 ## Phase 4: prove meaningful extension
 
-- Support filters, tenders, receipt blocks, reporting widgets, settings sections, and generic line
-  policies through host-owned contracts.
-- Complete Installments or a gift-card example without editing POS or core.
+- [x] Host-owned POS tenders (`pos.tender` slot, `PostBillRequest.tenders`, `bill_tenders`,
+  `sales.bill_posted` v4) and receipt tender lines — no gift business rules in POS/core.
+- [x] Gift-card example plugin: issue via stock-neutral `gift.issue` lines, redeem via
+  `TenderApply` + `method=gift.card`, settings + liability `reportPages`.
+- [x] Reporting/settings composition proven via existing `reportPages` / `settingsPages` (no new
+  widget-slot host). Filters / generic interceptors deferred until a repeated need appears.
 
 ## Phase 5: lifecycle and trust
 
-- Add package metadata, checksums, upgrade/rollback, and migration backups.
-- Decide whether installation is a deployment pipeline or runtime admin operation.
-- Document native trusted plugin privileges; require sandboxing for untrusted marketplace code.
-- Persist per-tenant install/enable/config and role permission assignments.
+- [x] `plugin.package.json` metadata + content checksum; `cargo xtask plugins install` verifies;
+  `plugins new` / `plugins package` regenerate.
+- [x] Failed install still rolls back the workspace tree; `--force` keeps a dated package snapshot
+  under `crates/plugins-disabled/<id>-<version>-<stamp>/`.
+- [x] Pre-migration JSON dumps of plugin-owned tables under `data/migration-backups/` (override with
+  `CHASKA_MIGRATION_BACKUP_DIR`).
+- [x] Install = deployment pipeline; enable/disable = runtime admin (`tenant_plugins`).
+- [x] Trust documented: native plugins are process-trusted; sandbox required before marketplace
+  upload. Persistence (`tenant_plugins`, `plugin_settings`, `role_permissions`) unchanged.
 
 ## Decisions and deferred scope
 
 - Keep native plugins statically linked for now; this is a deployment model, not runtime isolation.
 - Prefer typed domain contracts over generic table access or a universal hook bus.
-- Keep install/upgrade in the operator deployment pipeline until package signing, migrations,
-  rollback, and trust policy are implemented.
-- Treat package marketplace, WASM/process isolation, and multi-tenant plugin administration as
-  later phases; they depend on the contract and lifecycle foundations above.
+- Install/upgrade stays in the operator deployment pipeline; runtime only enables compiled plugins.
+- Package marketplace, WASM/process isolation, package signing, and multi-tenant plugin upload remain
+  deferred until a sandbox exists.
 
-## Decisions for project review
+## Decisions for project review (closed)
 
-The existing direction is sound: statically linked trusted plugins, explicit dependencies,
-tenant-scoped data, and typed provider/event contracts are a reasonable first platform. The
-following choices should be decided before implementation reaches those phases:
-
-- Is the supported plugin install path a deployment pipeline that rebuilds the app, or runtime
-  installation? The Rust composition currently implies deployment-time installation.
-- Should experimental plugins default off universally, or can an operator mark a plugin on for
-  fresh tenants? The current implementation uses a core baseline allowlist.
-- Is third-party code trusted native Rust, or must the platform eventually accept sandboxed code?
-  Native code must not be described as tenant-isolated.
-- Is a generic filter/interceptor API needed now? Prefer specific contracts until real plugins
-  demonstrate a repeated cross-cutting need.
-- Which plugin-facing contracts are public and versioned? The API and event payloads need an
-  explicit compatibility policy before an external SDK is published.
+- **Install path:** deployment pipeline (`cargo xtask plugins install` → rebuild). Runtime admin
+  only enables/disables already-compiled plugins via `tenant_plugins`.
+- **Experimental defaults:** keep `default_enabled` / baseline allowlist — fresh tenants only get
+  explicitly opted-in plugins.
+- **Trust model:** native Rust plugins run with full process privilege. Do not describe them as
+  tenant-isolated. Untrusted upload requires a sandbox (out of scope).
+- **Filters / interceptors:** skip for now; gift card did not need them. Prefer specific contracts
+  until a repeated cross-cutting need appears.
+- **Public contracts:** kernel API `^1.0` plus versioned provider traits and domain events (Phase 3
+  compatibility table). Checksum + operator-trusted deploy is the package trust step until signing.

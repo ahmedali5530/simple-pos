@@ -1,10 +1,10 @@
 use crate::barcode::{codes_match, embedded_sale, parse_embedded, prompt_sale};
 use crate::models::{
     BarcodeRule, BillLineInput, Category, ItemVariant, PosItem, PosSection, PosSnapshot,
-    PostedBill, SectionChoice, SectionLayout, TillShop,
+    PostedBill, SectionChoice, SectionLayout, TenderInput, TillShop,
 };
 use platform_kernel::error::AppError;
-use sales_contract::{BillPostedV3, SaleLine};
+use sales_contract::{BillPostedV4, SaleLine, SaleTender};
 
 struct Sale {
     item_id: i32,
@@ -26,10 +26,84 @@ const MAX_SOURCE_LEN: usize = 128;
 const MAX_REFERENCE_LEN: usize = 512;
 const MAX_DETAILS_BYTES: usize = 16 * 1024;
 
-/// A posted bill plus the event body, so the route can publish v2 after the sale commits.
+/// A posted bill plus the event body, so the route can publish after the sale commits.
 pub struct PostBillOutcome {
     pub posted: PostedBill,
-    pub event: BillPostedV3,
+    pub event: BillPostedV4,
+}
+
+const DEFAULT_TENDER_METHOD: &str = "cash";
+const MAX_TENDER_METHOD_LEN: usize = 64;
+const MAX_TENDER_REFERENCE_LEN: usize = 512;
+const MAX_TENDER_DETAILS_BYTES: usize = 16 * 1024;
+
+fn normalize_tenders(raw: &[TenderInput], total: i32) -> Result<Vec<SaleTender>, AppError> {
+    if raw.is_empty() {
+        return Ok(vec![SaleTender {
+            method: DEFAULT_TENDER_METHOD.into(),
+            amount: total,
+            reference: String::new(),
+            details: serde_json::json!({}),
+        }]);
+    }
+    let mut tenders = Vec::with_capacity(raw.len());
+    let mut sum = 0_i32;
+    for tender in raw {
+        let method = tender.method.trim();
+        if method.is_empty() {
+            return Err(AppError::BadRequest("Every tender needs a method.".into()));
+        }
+        if method.chars().count() > MAX_TENDER_METHOD_LEN {
+            return Err(AppError::BadRequest("That tender method is too long.".into()));
+        }
+        if tender.amount < 1 {
+            return Err(AppError::BadRequest(
+                "Every tender amount has to be at least 1.".into(),
+            ));
+        }
+        let reference = tender
+            .reference
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        if reference.chars().count() > MAX_TENDER_REFERENCE_LEN {
+            return Err(AppError::BadRequest(
+                "That tender reference is too long.".into(),
+            ));
+        }
+        let details = match tender.details.as_ref() {
+            None | Some(serde_json::Value::Null) => serde_json::json!({}),
+            Some(value) => {
+                let size = serde_json::to_vec(value)
+                    .map_err(|err| {
+                        AppError::BadRequest(format!("That tender detail is not valid JSON: {err}"))
+                    })?
+                    .len();
+                if size > MAX_TENDER_DETAILS_BYTES {
+                    return Err(AppError::BadRequest(
+                        "That tender detail is too large.".into(),
+                    ));
+                }
+                value.clone()
+            }
+        };
+        sum = sum
+            .checked_add(tender.amount)
+            .ok_or_else(|| AppError::BadRequest("Those tender amounts are too large.".into()))?;
+        tenders.push(SaleTender {
+            method: method.to_string(),
+            amount: tender.amount,
+            reference,
+            details,
+        });
+    }
+    if sum != total {
+        return Err(AppError::BadRequest(format!(
+            "Tenders must add up to the bill total ({total})."
+        )));
+    }
+    Ok(tenders)
 }
 
 fn normalize_line_metadata(
@@ -355,6 +429,7 @@ pub async fn post_bill_tx(
     section_id: i32,
     lines: &[BillLineInput],
     customer: Option<&str>,
+    tenders: &[TenderInput],
 ) -> Result<PostBillOutcome, AppError> {
     if lines.is_empty() {
         return Err(AppError::BadRequest(
@@ -570,11 +645,28 @@ pub async fn post_bill_tx(
         .map_err(map_bill_line_error)?;
     }
 
+    let tenders = normalize_tenders(tenders, total)?;
+    for tender in &tenders {
+        sqlx::query(
+            r#"
+            INSERT INTO bill_tenders (bill_id, method, amount, reference, details)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(bill_id)
+        .bind(&tender.method)
+        .bind(tender.amount)
+        .bind(&tender.reference)
+        .bind(&tender.details)
+        .execute(tx.conn())
+        .await?;
+    }
+
     let posted_at: String = sqlx::query_scalar("SELECT created_at::text FROM bills WHERE id = $1")
         .bind(bill_id)
         .fetch_one(tx.conn())
         .await?;
-    let event = BillPostedV3 {
+    let event = BillPostedV4 {
         bill_id,
         bill_no: bill_no.clone(),
         section_id,
@@ -583,6 +675,7 @@ pub async fn post_bill_tx(
         customer: customer.map(str::to_string),
         posted_at,
         lines: event_lines(&prepared),
+        tenders,
     };
     let pos = load_pos_catalog_tx(tx, shop, catalog).await?;
     Ok(PostBillOutcome {

@@ -64,6 +64,57 @@ impl DomainEvent for BillPostedV3 {
     const VERSION: u16 = 3;
 }
 
+/// How a bill was settled. POS validates amounts; method owners apply side effects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaleTender {
+    pub method: String,
+    pub amount: i32,
+    #[serde(default)]
+    pub reference: String,
+    #[serde(default)]
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BillPostedV4 {
+    pub bill_id: i32,
+    pub bill_no: String,
+    pub section_id: i32,
+    pub user_id: i32,
+    pub total: i32,
+    pub customer: Option<String>,
+    pub posted_at: String,
+    pub lines: Vec<SaleLine>,
+    #[serde(default)]
+    pub tenders: Vec<SaleTender>,
+}
+
+impl DomainEvent for BillPostedV4 {
+    const TYPE: &'static str = "sales.bill_posted";
+    const VERSION: u16 = 4;
+}
+
+/// Context passed to tender handlers while the bill post transaction is open.
+pub struct TenderApplyContext<'a> {
+    pub bill_id: i32,
+    pub bill_no: &'a str,
+    pub total: i32,
+}
+
+/// Apply a non-cash tender inside the bill post transaction.
+/// Return `true` when this handler owns the method; `false` to let another try.
+#[async_trait]
+pub trait TenderApply: Send + Sync {
+    async fn apply(
+        &self,
+        tx: &mut TenantTx<'_>,
+        ctx: &TenderApplyContext<'_>,
+        tender: &SaleTender,
+    ) -> Result<bool, AppError>;
+}
+
+pub struct TenderApplyProvider(pub std::sync::Arc<dyn TenderApply>);
+
 impl DomainEvent for BillPostedV2 {
     const TYPE: &'static str = "sales.bill_posted";
     const VERSION: u16 = 2;
@@ -102,6 +153,8 @@ pub struct ReceiptData {
     pub cashier: String,
     pub customer: Option<String>,
     pub lines: Vec<ReceiptLine>,
+    #[serde(default)]
+    pub tenders: Vec<ReceiptTender>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +163,14 @@ pub struct ReceiptLine {
     pub qty: i32,
     pub rate: i32,
     pub amount: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiptTender {
+    pub method: String,
+    pub amount: i32,
+    #[serde(default)]
+    pub reference: String,
 }
 
 #[async_trait]

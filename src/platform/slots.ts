@@ -58,3 +58,19 @@ export interface PosLineDetailContext {
   currency: string
   locale: string
 }
+
+/** How the current bill will be paid. Empty tenders mean implied cash for the total. */
+export interface PosTender {
+  method: string
+  amount: number
+  reference?: string
+  details?: Record<string, unknown>
+}
+
+export interface PosTenderContext {
+  total: number
+  currency: string
+  locale: string
+  tenders: PosTender[]
+  setTenders: (tenders: PosTender[]) => void
+}
