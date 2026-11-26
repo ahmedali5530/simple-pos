@@ -1,0 +1,103 @@
+/* Bridge pos-ui tokens onto the app's semantic theme. */
+:root {
+  --ui-bg: var(--color-surface-muted, oklch(0.984 0.003 247.858));
+  --ui-surface: var(--color-surface, oklch(1 0 0));
+  --ui-surface-2: color-mix(in oklch, var(--color-surface-muted) 88%, var(--color-ink) 12%);
+  --ui-hover: color-mix(in oklch, var(--color-ink) 6%, var(--color-surface));
+  --ui-border: var(--color-border);
+  --ui-border-strong: var(--color-border-strong);
+  --ui-text: var(--color-ink);
+  --ui-text-muted: var(--color-ink-muted);
+  --ui-primary: var(--color-primary);
+  --ui-primary-fg: var(--color-primary-fg);
+  --ui-success: var(--color-success);
+  --ui-warning: var(--color-warning);
+  --ui-danger: var(--color-danger);
+  --ui-info: var(--color-focus);
+  --ui-ring: color-mix(in oklch, var(--color-focus) 55%, transparent);
+  --ui-radius: var(--radius-control);
+  --ui-radius-sm: calc(var(--radius-control) * 0.65);
+  --ui-radius-lg: var(--radius-card);
+}
+
+/* Shell owns the canvas; do not let pos-ui paint body. */
+body {
+  background: transparent;
+  color: inherit;
+}
+
+.app.ui-shell,
+.ui-shell.app {
+  background: var(--ui-bg);
+  color: var(--ui-text);
+}
+
+[data-density='touch'] {
+  --ui-density: 1.15;
+}
+
+[data-density='compact'] {
+  --ui-density: 0.85;
+}
+
+[data-density='comfortable'] {
+  --ui-density: 1;
+}
+
+/* Prefer regular weight; keep 600 only for clear hierarchy. */
+.ui-nav-item,
+.ui-label,
+.ui-pill,
+.ui-hint,
+.ui-btn,
+.settings-rail .ui-nav-item,
+.ui-sidebar .sidebar-who,
+.ui-sidebar .sidebar-brand h1 {
+  font-weight: 500;
+}
+
+.ui-nav-item:is([aria-current='page'], [data-active='true']),
+.ui-btn[data-variant='primary'],
+.ui-btn[data-variant='success'],
+.ui-btn[data-variant='danger'],
+.ui-totals > [data-grand],
+.ui-tile .price {
+  font-weight: 600;
+}
+
+.ui-btn {
+  font-weight: 500;
+}
+
+/*
+ * Overlay/modal positioning must be unlayered: pos-ui puts these in
+ * @layer components, which loses to layout when the dialog sits in the
+ * till flex column — that shoved the POS screen up and parked the sheet
+ * at the bottom. Re-declare fixed + center here so it always wins.
+ */
+.ui-overlay,
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  overflow: auto;
+  background: var(--ui-overlay, oklch(0.15 0.02 260 / 0.5));
+  backdrop-filter: blur(2px);
+}
+
+.ui-overlay > .ui-modal,
+.sheet-backdrop > .sheet,
+.sheet-backdrop > .ui-modal {
+  position: relative;
+  inset: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  margin: 0;
+  max-height: min(calc(100dvh - 2rem), 100%);
+  z-index: 1;
+}

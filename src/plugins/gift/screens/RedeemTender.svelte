@@ -74,18 +74,24 @@
 <div class="gift-redeem">
   <strong>Gift card tender</strong>
   <div class="row">
-    <input class="input" placeholder="Card code" maxlength="64" bind:value={code} />
+    <input class="ui-input input" placeholder="Card code" maxlength="64" bind:value={code} />
     <input
-      class="input"
+      class="ui-input input"
       placeholder={remaining > 0 ? String(remaining) : 'Amount'}
       inputmode="numeric"
       bind:value={amount}
     />
-    <button type="button" class="btn" disabled={looking || total < 1} onclick={lookupAndAdd}>
+    <button
+      type="button"
+      class="ui-btn btn btn-primary"
+      data-loading={looking ? 'true' : undefined}
+      disabled={looking || total < 1}
+      onclick={lookupAndAdd}
+    >
       {looking ? '…' : 'Apply'}
     </button>
     {#if giftTotal > 0}
-      <button type="button" class="btn ghost" onclick={clearGift}>Clear</button>
+      <button type="button" class="ui-btn btn btn-ghost" data-variant="ghost" onclick={clearGift}>Clear</button>
     {/if}
   </div>
   {#if giftTenders.length > 0}

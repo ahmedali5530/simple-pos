@@ -139,7 +139,7 @@
     background-color: var(--color-surface);
     color: var(--color-ink);
     font-size: var(--control-text);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.2;
   }
 
@@ -222,7 +222,7 @@
   label:has(> .textarea) {
     color: var(--color-ink);
     font-size: 0.8125rem;
-    font-weight: 700;
+    font-weight: 500;
   }
 
   label:has(> .input),
@@ -244,20 +244,20 @@
 
   .field-error {
     color: var(--color-danger);
-    font-weight: 700;
+    font-weight: 500;
     white-space: pre-wrap;
   }
 
   .posted {
     color: var(--color-success);
-    font-weight: 800;
+    font-weight: 600;
   }
 
   .check {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    font-weight: 600;
+    font-weight: 500;
   }
 
   .check input {
@@ -272,7 +272,7 @@
     gap: 0.75rem;
     margin-top: 1rem;
     font-size: var(--control-text);
-    font-weight: 600;
+    font-weight: 500;
   }
 
   .switch {
@@ -330,7 +330,7 @@
     background: var(--color-surface);
     color: var(--color-ink);
     font-size: var(--control-text);
-    font-weight: 700;
+    font-weight: 500;
   }
 
   .segmented button[aria-checked='true'] {

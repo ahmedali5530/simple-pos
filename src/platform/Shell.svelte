@@ -3,7 +3,7 @@
   import { loadBootstrap, logout } from '../lib/api'
   import { followLink, location } from './route.svelte'
   import { session, signOut } from './session.svelte'
-  import type { UiNavItem, UiPage, UiReportPage, UiSettingsPage } from './registry'
+  import type { UiNavItem, UiPage, UiSettingsPage } from './registry'
   import { pageForPath, reportPagesForEnabled } from '../plugins/registry'
 
   interface Props {
@@ -20,7 +20,8 @@
   let loaded = $state<{ default: import('svelte').Component } | null>(null)
   let openGroup = $state<string | null>(null)
   let openSettingsGroup = $state<string | null>(null)
-  let navEl = $state<HTMLElement | null>(null)
+  let mobileNavOpen = $state(false)
+  let sidebarCollapsed = $state(false)
   const page = $derived(pageForPath(location.path, enabled, compiled))
   const reports = $derived(reportPagesForEnabled(enabled, compiled))
   const inSettings = $derived(location.path.startsWith('/settings'))
@@ -34,14 +35,13 @@
     openSettingsGroup = openSettingsGroup === id ? null : id
   }
 
-  // Keep the group that owns the current settings page open.
   $effect(() => {
     if (!inSettings) {
       openSettingsGroup = null
       return
     }
-    const active = settingsPages.find((entry) => settingsGroupActive(entry))
-    if (active) openSettingsGroup = active.id
+    const activeEntry = settingsPages.find((entry) => settingsGroupActive(entry))
+    if (activeEntry) openSettingsGroup = activeEntry.id
   })
 
   $effect(() => {
@@ -96,21 +96,15 @@
     openGroup = openGroup === id ? null : id
   }
 
-  function closeOnOutside(event: MouseEvent) {
-    if (!openGroup) return
-    const target = event.target as Node | null
-    if (navEl && target && navEl.contains(target)) return
-    openGroup = null
-  }
-
-  function closeOnEscape(event: KeyboardEvent) {
-    if (event.key === 'Escape') openGroup = null
-  }
-
-  // A new page closes whatever dropdown is open.
   $effect(() => {
     location.path
-    openGroup = null
+    mobileNavOpen = false
+  })
+
+  // Keep the group that owns the current page open.
+  $effect(() => {
+    const match = nav.find((item) => item.children?.length && groupActive(item))
+    if (match) openGroup = match.id
   })
 
   async function leave() {
@@ -121,119 +115,184 @@
     }
     signOut()
   }
+
+  function go(event: MouseEvent, href: string) {
+    followLink(event, href)
+    mobileNavOpen = false
+  }
 </script>
 
-<svelte:window onclick={closeOnOutside} onkeydown={closeOnEscape} />
+<div class="ui-shell app">
+  <header class="shell-mobile-bar">
+    <Button variant="secondary" size="sm" onclick={() => (mobileNavOpen = !mobileNavOpen)}>
+      Menu
+    </Button>
+    <strong>{shopName}</strong>
+  </header>
 
-<div class="app">
-  <header class="topbar on-dark">
-    <div class="brand">
-      <div class="mark">{initials(shopName)}</div>
-      <div>
+  <aside
+    class="ui-sidebar"
+    class:ui-sheet={mobileNavOpen}
+    data-side="left"
+    data-collapsed={sidebarCollapsed ? 'true' : undefined}
+    data-open={mobileNavOpen ? 'true' : undefined}
+    data-state={mobileNavOpen ? 'open' : undefined}
+    aria-label="Main"
+  >
+    <div class="sidebar-brand">
+      <div class="sidebar-mark">{initials(shopName)}</div>
+      <div data-slot="label">
         <h1>{shopName}</h1>
       </div>
+      <button
+        type="button"
+        class="ui-btn sidebar-collapse"
+        data-variant="ghost"
+        data-size="sm"
+        data-icon=""
+        aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-pressed={sidebarCollapsed}
+        onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+      >
+        {sidebarCollapsed ? '»' : '«'}
+      </button>
     </div>
-    <nav class="nav" aria-label="Main" bind:this={navEl}>
+
+    <nav class="sidebar-nav">
       {#each nav as item (item.id)}
         {@const href = item.href ?? ''}
         {#if item.children?.length}
-          <div class="nav-group" class:open={openGroup === item.id}>
+          {@const open = openGroup === item.id}
+          <div class="ui-sidebar-group sidebar-group" class:open>
             <button
               type="button"
-              class="nav-toggle"
-              class:active={groupActive(item)}
-              aria-haspopup="menu"
-              aria-expanded={openGroup === item.id}
+              class="ui-nav-item sidebar-group-toggle"
+              data-active={groupActive(item) ? 'true' : undefined}
+              aria-expanded={open}
               onclick={() => toggleGroup(item.id)}
             >
-              {item.label}
+              <span data-slot="label">{item.label}</span>
               <span class="chevron" aria-hidden="true"></span>
             </button>
-            {#if openGroup === item.id}
-              <div class="nav-menu" role="menu" aria-label={item.label}>
+            {#if open}
+              <div class="sidebar-submenu" role="group" aria-label={item.label}>
                 {#each item.children as child (child.id)}
                   {@const childHref = child.href ?? ''}
-                  <a
-                    role="menuitem"
-                    href={childHref || '#'}
-                    class:active={active(childHref)}
-                    onclick={(event) => followLink(event, childHref)}
-                  >{child.label}</a>
+                  {#if childHref}
+                    <a
+                      class="ui-nav-item"
+                      href={childHref}
+                      aria-current={active(childHref) ? 'page' : undefined}
+                      data-active={active(childHref) ? 'true' : undefined}
+                      onclick={(event) => go(event, childHref)}
+                    >
+                      <span data-slot="label">{child.label}</span>
+                    </a>
+                  {/if}
                 {/each}
               </div>
             {/if}
           </div>
         {:else if href}
-          <a href={href} class:active={active(href)} onclick={(event) => followLink(event, href)}>{item.label}</a>
+          <a
+            class="ui-nav-item"
+            {href}
+            aria-current={active(href) ? 'page' : undefined}
+            data-active={active(href) ? 'true' : undefined}
+            onclick={(event) => go(event, href)}
+          >
+            <span data-slot="label">{item.label}</span>
+          </a>
         {/if}
       {/each}
     </nav>
-    <div class="top-actions">
+
+    <div class="sidebar-footer">
       {#if session.user}
-        <span class="who">{session.user.name}</span>
-        <Button variant="secondary" onclick={leave}>Sign out</Button>
+        <div class="sidebar-who" data-slot="label">{session.user.name}</div>
+        <Button variant="secondary" data-block="" onclick={leave}>Sign out</Button>
       {:else}
-        <Button variant="secondary" href="/login" onclick={(event) => followLink(event, '/login')}>Sign in</Button>
+        <Button variant="secondary" href="/login" onclick={(event) => go(event, '/login')}>Sign in</Button>
       {/if}
     </div>
-  </header>
+  </aside>
 
-  {#if inSettings}
-    <div class="settings">
-      <nav class="settings-nav" aria-label="Settings">
-        {#each settingsPages as entry (entry.id)}
-          {#if entry.children?.length}
-            {@const open = openSettingsGroup === entry.id}
-            <div class="settings-group" class:open>
-              <button
-                type="button"
-                class="settings-toggle"
-                class:active={settingsGroupActive(entry)}
-                aria-haspopup="menu"
-                aria-expanded={open}
-                onclick={() => toggleSettingsGroup(entry.id)}
+  <div class="shell-main">
+    {#if inSettings}
+      <div class="settings-layout">
+        <nav class="settings-rail" aria-label="Settings">
+          {#each settingsPages as entry (entry.id)}
+            {#if entry.children?.length}
+              {@const open = openSettingsGroup === entry.id}
+              <div class="settings-group" class:open>
+                <button
+                  type="button"
+                  class="ui-nav-item settings-group-toggle"
+                  data-active={settingsGroupActive(entry) ? 'true' : undefined}
+                  aria-expanded={open}
+                  onclick={() => toggleSettingsGroup(entry.id)}
+                >
+                  <span data-slot="label">{entry.label}</span>
+                  <span class="chevron" aria-hidden="true"></span>
+                </button>
+                {#if open}
+                  <div class="settings-submenu" role="group" aria-label={entry.label}>
+                    {#each entry.children as child (child.id)}
+                      {#if child.href}
+                        <a
+                          class="ui-nav-item"
+                          href={child.href}
+                          aria-current={location.path === child.href ? 'page' : undefined}
+                          data-active={location.path === child.href ? 'true' : undefined}
+                          onclick={(event) => followLink(event, child.href!)}
+                        >
+                          <span data-slot="label">{child.label}</span>
+                        </a>
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {:else if entry.href}
+              <a
+                class="ui-nav-item"
+                href={entry.href}
+                aria-current={location.path === entry.href ? 'page' : undefined}
+                data-active={location.path === entry.href ? 'true' : undefined}
+                onclick={(event) => followLink(event, entry.href!)}
               >
-                {entry.label}
-                <span class="chevron" aria-hidden="true"></span>
-              </button>
-              {#if open}
-                <div class="settings-menu" role="menu" aria-label={entry.label}>
-                  {#each entry.children as child (child.id)}
-                    {#if child.href}
-                      <a
-                        role="menuitem"
-                        href={child.href}
-                        class:active={location.path === child.href}
-                        onclick={(event) => followLink(event, child.href!)}
-                      >{child.label}</a>
-                    {/if}
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {:else if entry.href}
-            <a href={entry.href} class:active={location.path === entry.href} onclick={(event) => followLink(event, entry.href!)}>{entry.label}</a>
-          {/if}
-        {/each}
-      </nav>
-      <div class="settings-body">
-        {@render outlet(page)}
+                <span data-slot="label">{entry.label}</span>
+              </a>
+            {/if}
+          {/each}
+        </nav>
+        <div class="settings-body">
+          {@render outlet(page)}
+        </div>
       </div>
-    </div>
-  {:else if inReports}
-    <div class="settings">
-      <nav class="settings-nav" aria-label="Reports">
-        {#each reports as entry (entry.href)}
-          <a href={entry.href} class:active={location.path === entry.href} onclick={(event) => followLink(event, entry.href)}>{entry.label}</a>
-        {/each}
-      </nav>
-      <div class="settings-body">
-        {@render outlet(page)}
+    {:else if inReports}
+      <div class="settings-layout">
+        <nav class="settings-rail" aria-label="Reports">
+          {#each reports as entry (entry.href)}
+            <a
+              class="ui-nav-item"
+              href={entry.href}
+              aria-current={location.path === entry.href ? 'page' : undefined}
+              data-active={location.path === entry.href ? 'true' : undefined}
+              onclick={(event) => followLink(event, entry.href)}
+            >
+              <span data-slot="label">{entry.label}</span>
+            </a>
+          {/each}
+        </nav>
+        <div class="settings-body">
+          {@render outlet(page)}
+        </div>
       </div>
-    </div>
-  {:else}
-    {@render outlet(page)}
-  {/if}
+    {:else}
+      {@render outlet(page)}
+    {/if}
+  </div>
 </div>
 
 {#snippet outlet(current: UiPage | null)}

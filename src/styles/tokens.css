@@ -1,4 +1,12 @@
 /* Semantic tokens. `@theme` also exposes them as utilities (`bg-primary`, `text-danger`, `rounded-control`). */
+@font-face {
+  font-family: Urbanist;
+  src: url('./fonts/Urbanist-Regular.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
   --color-surface: oklch(1 0 0);
   --color-surface-muted: oklch(0.984 0.003 247.858);
@@ -17,7 +25,7 @@
   --color-focus: oklch(0.511 0.096 186.391);
   --radius-control: 0.75rem;
   --radius-card: 1.125rem;
-  --font-sans: "Segoe UI", "Avenir Next", "Trebuchet MS", sans-serif;
+  --font-sans: Urbanist, "Segoe UI", "Avenir Next", sans-serif;
   --animate-slide-in: slide-in 0.22s cubic-bezier(0.22, 0.75, 0.3, 1);
   --animate-pop-in: pop-in 0.2s ease;
   --animate-shimmer: shimmer 1.2s infinite;

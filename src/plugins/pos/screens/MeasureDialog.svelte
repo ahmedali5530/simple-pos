@@ -4,6 +4,7 @@
   import type { PosItem } from '../../../lib/types'
   import { toast } from '../../../lib/toast'
   import { Button, Input } from '../../../lib/ui'
+  import { portal } from '../../../lib/ui/portal'
 
   interface Props {
     item: PosItem
@@ -39,7 +40,7 @@
   }
 </script>
 
-<div class="sheet-backdrop" data-density="touch" role="presentation" onclick={onClose}>
+<div class="sheet-backdrop" data-density="touch" role="presentation" use:portal onclick={onClose}>
   <div
     class="sheet measure-sheet"
     role="dialog"

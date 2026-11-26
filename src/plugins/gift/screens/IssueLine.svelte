@@ -39,9 +39,9 @@
 <div class="gift-issue">
   <strong>Issue gift card</strong>
   <div class="row">
-    <input class="input" placeholder="Card code" maxlength="64" bind:value={code} />
-    <input class="input" placeholder="Item id" inputmode="numeric" bind:value={itemId} />
-    <button type="button" class="btn" onclick={issue}>Add</button>
+    <input class="ui-input input" placeholder="Card code" maxlength="64" bind:value={code} />
+    <input class="ui-input input" placeholder="Item id" inputmode="numeric" bind:value={itemId} />
+    <button type="button" class="ui-btn btn btn-primary" onclick={issue}>Add</button>
   </div>
   {#if message}<p class="hint">{message}</p>{/if}
 </div>

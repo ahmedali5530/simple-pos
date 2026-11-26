@@ -221,11 +221,11 @@
 >
   <div class="catalog">
   <div class="scan">
-    <label for="scan-{section.id}">Scan, search, or +quantity</label>
+    <label class="ui-label" for="scan-{section.id}">Scan, search, or +quantity</label>
     <div class="scan-row">
       <input
         id="scan-{section.id}"
-        class="input"
+        class="ui-input input"
         data-scan={section.id}
         role="combobox"
         aria-expanded={hits.length > 0}
@@ -237,13 +237,13 @@
         type="search"
       />
       <input
-        class="input scan-qty"
+        class="ui-input input scan-qty"
         inputmode="numeric"
         aria-label="Quantity to add"
         bind:value={scanQty}
         onkeydown={onScanKey}
       />
-      <button type="button" class="add" onclick={submitScan}>Scan / Add</button>
+      <Button onclick={submitScan}>Scan / Add</Button>
     </div>
     {#if hits.length > 0}
       <div class="suggest" id="suggest-{section.id}" role="listbox" bind:this={suggestEl}>
@@ -269,12 +269,17 @@
   </div>
 
   <div class="filters" aria-label="Categories in {section.short_name}">
-    <button type="button" class="chip" class:active={filter === 'all'} onclick={() => onFilter('all')}>All</button>
+    <button
+      type="button"
+      class="ui-pill"
+      aria-pressed={filter === 'all'}
+      onclick={() => onFilter('all')}
+    >All</button>
     {#each visibleCategories as category (category.id)}
       <button
         type="button"
-        class="chip"
-        class:active={filter === category.id}
+        class="ui-pill"
+        aria-pressed={filter === category.id}
         onclick={() => onFilter(category.id)}
       >{category.name}</button>
     {/each}
@@ -284,8 +289,8 @@
     {#snippet children(item)}
       <button
         type="button"
-        class="card"
-        class:out={!sellable(item)}
+        class="ui-tile"
+        data-out-of-stock={!sellable(item) ? 'true' : undefined}
         disabled={!sellable(item)}
         aria-label={
           item.variants.length || hasItemOptions(item.id)
@@ -306,16 +311,16 @@
           {/if}
           <span class="card-sub">
             <span>{item.category_name}</span>
-            {#if item.barcode}<span class="card-code">{item.barcode}</span>{/if}
+            {#if item.barcode}<span class="ui-badge">{item.barcode}</span>{/if}
           </span>
           {#if item.variants.length}
             <span class="card-options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
           {:else if hasItemOptions(item.id)}
-            <span class="card-tag">Choose IMEI</span>
+            <span class="ui-badge" data-tone="info">Choose IMEI</span>
           {:else if item.prompt === 'quantity'}
-            <span class="card-tag">Asks quantity / weight</span>
+            <span class="ui-badge" data-tone="info">Asks quantity / weight</span>
           {:else if item.prompt === 'price'}
-            <span class="card-tag ask-price">Asks price</span>
+            <span class="ui-badge" data-tone="warning">Asks price</span>
           {/if}
           <span class="card-foot">
             <span class="price">{priceLabel(item)}</span>
@@ -340,17 +345,16 @@
     />
     <div class="bill-lines">
       {#if lines.length === 0}
-        <p class="empty">No items in this bill yet. Scan a barcode or tap an item.</p>
+        <p class="ui-hint empty">No items in this bill yet. Scan a barcode or tap an item.</p>
       {:else}
         {#each lines as line (line.key)}
-          <div class="line">
-            <div class="line-main">
-              <strong>{line.name}</strong>
-              <span>{money(line.rate * line.qty)}</span>
-            </div>
-            <div class="line-meta">
-              <span class="rate">{money(line.rate)}</span>
-              <span class="qty">
+          <div class="cart-line-block">
+            <div class="ui-cart-line" data-state="open">
+              <div>
+                <strong>{line.name}</strong>
+                <div class="ui-hint">{money(line.rate)} each</div>
+              </div>
+              <div class="ui-stepper">
                 <button
                   type="button"
                   aria-label="Decrease {line.name}"
@@ -358,7 +362,6 @@
                   onclick={() => onQty(line.key, line.qty - 1)}
                 >-</button>
                 <input
-                  class="input"
                   inputmode="numeric"
                   aria-label="Quantity for {line.name}"
                   readonly={line.source === 'mobile.device'}
@@ -375,8 +378,17 @@
                   disabled={line.source === 'mobile.device'}
                   onclick={() => onQty(line.key, line.qty + 1)}
                 >+</button>
-                <button type="button" class="remove" aria-label="Remove {line.name}" onclick={() => onQty(line.key, 0)}>×</button>
-              </span>
+              </div>
+              <div class="cart-line-amount">
+                <strong>{money(line.rate * line.qty)}</strong>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="text-danger"
+                  aria-label="Remove {line.name}"
+                  onclick={() => onQty(line.key, 0)}
+                >×</Button>
+              </div>
             </div>
             <Slot
               name="pos.line-detail"
@@ -391,10 +403,10 @@
         {/each}
       {/if}
     </div>
-    <label class="bill-customer">
-      Customer
+    <label class="bill-customer ui-field">
+      <span class="ui-label">Customer</span>
       <input
-        class="input"
+        class="ui-input input"
         maxlength="80"
         placeholder="Optional"
         value={customer}
@@ -414,15 +426,22 @@
     {#if receipts}
       <Switch class="skip-print" checked={skipPrint} label="Skip receipt" onchange={onSkipPrint} />
     {/if}
-    <div class="total-row">
-      <div>
+    <div class="ui-totals">
+      <div data-grand>
         <span>Total ({section.short_name})</span>
         <strong>{money(total)}</strong>
       </div>
-      <button type="button" class="post" disabled={lines.length === 0 || posting} onclick={onPost}>
+      <Button
+        class="post-bill"
+        size="xl"
+        variant="success"
+        disabled={lines.length === 0 || posting}
+        loading={posting}
+        onclick={onPost}
+      >
         {posting ? 'Posting…' : 'Add Bill (One Entry)'}
-      </button>
+      </Button>
     </div>
-    {#if posted}<p class="posted">{posted}</p>{/if}
+    {#if posted}<p class="ui-hint posted">{posted}</p>{/if}
   </footer>
 </div>
