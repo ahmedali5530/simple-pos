@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 1420 --strictPort",
+    "typecheck": "tsc --noEmit",
     "app": "sh scripts/till.sh"
   },
   "devDependencies": {

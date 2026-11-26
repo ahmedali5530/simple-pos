@@ -106,45 +106,34 @@ fn default_bill_prefix() -> String {
     "BILL".into()
 }
 
+/// POS-owned till settings (bill numbering and barcode scale rules).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShopConfig {
-    pub name: String,
-    pub currency: String,
-    pub locale: String,
+pub struct PosSettings {
     #[serde(default = "default_bill_prefix")]
     pub bill_prefix: String,
     #[serde(default)]
     pub barcode_rules: Vec<BarcodeRule>,
 }
 
-impl ShopConfig {
-    pub fn checked(self) -> Result<Self, String> {
-        let name = self.name.trim().to_string();
-        let currency = self.currency.trim().to_uppercase();
-        let locale = self.locale.trim().to_string();
-        let bill_prefix = self.bill_prefix.trim().to_uppercase();
-        if name.is_empty() {
-            return Err("shop.name is required".into());
+/// Profile + till settings used while posting bills and building the POS snapshot.
+#[derive(Debug, Clone)]
+pub struct TillShop {
+    pub name: String,
+    pub currency: String,
+    pub locale: String,
+    pub bill_prefix: String,
+    pub barcode_rules: Vec<BarcodeRule>,
+}
+
+impl TillShop {
+    pub fn fallback() -> Self {
+        Self {
+            name: "Shop".into(),
+            currency: "PKR".into(),
+            locale: "en-PK".into(),
+            bill_prefix: "BILL".into(),
+            barcode_rules: BarcodeRule::defaults(),
         }
-        if bill_prefix.len() < 1
-            || bill_prefix.len() > 8
-            || !bill_prefix.chars().all(|ch| ch.is_ascii_alphanumeric())
-        {
-            return Err("shop.bill_prefix is 1 to 8 letters or digits".into());
-        }
-        if currency.len() != 3 || !currency.chars().all(|ch| ch.is_ascii_alphabetic()) {
-            return Err("shop.currency must be a 3-letter ISO 4217 code".into());
-        }
-        if locale.is_empty() {
-            return Err("shop.locale is required".into());
-        }
-        Ok(Self {
-            name,
-            currency,
-            locale,
-            bill_prefix,
-            barcode_rules: self.barcode_rules,
-        })
     }
 }
 
@@ -162,10 +151,7 @@ pub struct PosSnapshot {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ShopProfileForm {
-    pub name: String,
-    pub currency: String,
-    pub locale: String,
+pub struct PosSettingsForm {
     #[serde(default = "default_bill_prefix")]
     pub bill_prefix: String,
     #[serde(default)]

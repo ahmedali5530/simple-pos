@@ -4,9 +4,14 @@
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Select } from '../../../lib/ui'
 
+  export type SystemView = ShopSnapshot & {
+    bill_prefix: string
+    barcode_rules: BarcodeRule[]
+  }
+
   interface Props {
-    snapshot: ShopSnapshot
-    onChange: (shop: ShopSnapshot) => void
+    snapshot: SystemView
+    onChange: (shop: SystemView) => void
   }
 
   let { snapshot, onChange }: Props = $props()
@@ -40,7 +45,7 @@
     locale = snapshot.locale
     rules = snapshot.barcode_rules.map((rule) => ({
       prefix: rule.prefix,
-      mode: rule.mode,
+      mode: rule.mode === 'weight' ? 'weight' : 'price',
       scale: String(rule.scale),
     }))
   })
@@ -105,7 +110,7 @@
 
 <div class="settings-page">
   <h2>System</h2>
-  <p class="hint">Shop name, bill prefix, and money. Item rates stay as stored whole units when the currency code changes.</p>
+  <p class="hint">Shop name and money are core settings. Bill prefix and barcode rules belong to the till.</p>
   <div class="system-form">
     <label>
       Shop name

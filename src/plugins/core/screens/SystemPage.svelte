@@ -1,15 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { loadCoreSnapshot } from '../../../lib/api'
-  import type { ShopSnapshot } from '../../../lib/types'
-  import SystemSettings from './SystemSettings.svelte'
+  import { loadCoreSnapshot, loadPos } from '../../../lib/api'
+  import type { BarcodeRule, ShopSnapshot } from '../../../lib/types'
+  import SystemSettings, { type SystemView } from './SystemSettings.svelte'
 
-  let snapshot = $state<ShopSnapshot | null>(null)
+  let snapshot = $state<SystemView | null>(null)
   let failed = $state(false)
 
+  async function load() {
+    const shop: ShopSnapshot = await loadCoreSnapshot()
+    let bill_prefix = 'BILL'
+    let barcode_rules: BarcodeRule[] = []
+    try {
+      const pos = await loadPos()
+      bill_prefix = pos.bill_prefix
+      barcode_rules = pos.barcode_rules
+    } catch {
+      // Till plugin may be off.
+    }
+    snapshot = { ...shop, bill_prefix, barcode_rules }
+  }
+
   onMount(() => {
-    loadCoreSnapshot()
-      .then((shop) => (snapshot = shop))
+    load()
+      .then(() => {})
       .catch(() => (failed = true))
   })
 </script>

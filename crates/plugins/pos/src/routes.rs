@@ -2,9 +2,7 @@ use crate::billing::{
     load_pos_catalog_tx, load_pos_shop_tx, post_bill_tx, set_pos_focus_tx, set_pos_sections_tx,
     PostBillOutcome,
 };
-use crate::models::{
-    BarcodeRule, PostBillRequest, SetFocusRequest, SetSectionsRequest, ShopConfig,
-};
+use crate::models::{PostBillRequest, SetFocusRequest, SetSectionsRequest, TillShop};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -30,14 +28,8 @@ impl IntoResponse for Fail {
     }
 }
 
-fn till_fallback() -> ShopConfig {
-    ShopConfig {
-        name: "Shop".into(),
-        currency: "PKR".into(),
-        locale: "en-PK".into(),
-        bill_prefix: "BILL".into(),
-        barcode_rules: BarcodeRule::defaults(),
-    }
+fn till_fallback() -> TillShop {
+    TillShop::fallback()
 }
 
 fn catalog_needed(action: &str) -> AppError {
@@ -58,7 +50,7 @@ async fn snapshot(db: TenantDb) -> Result<Json<crate::models::PosSnapshot>, Fail
 
 async fn settings(
     db: TenantDb,
-    Json(body): Json<crate::models::ShopProfileForm>,
+    Json(body): Json<crate::models::PosSettingsForm>,
 ) -> Result<Json<crate::models::PosSnapshot>, Fail> {
     let catalog = db.provider::<CatalogApi>();
     let mut tx = db.begin(false).await?;

@@ -1,4 +1,5 @@
 import type {
+  BarcodeRule,
   CashDesk,
   Category,
   Portion,
@@ -84,7 +85,7 @@ function asPrompt(value: string): PosItem['prompt'] {
 /** Build the catalog settings view from catalog + core (no POS plugin). */
 export function catalogViewFrom(
   catalog: CatalogApiSnapshot,
-  shop?: Pick<ShopSnapshot, 'shop_name' | 'currency' | 'locale' | 'bill_prefix' | 'barcode_rules'> | null,
+  shop?: Pick<ShopSnapshot, 'shop_name' | 'currency' | 'locale'> | null,
 ): PosSnapshot {
   const items: PosItem[] = catalog.items.map((item) => ({
     id: item.id,
@@ -129,10 +130,10 @@ export function catalogViewFrom(
   }))
   return {
     shop_name: shop?.shop_name ?? 'Shop',
-    bill_prefix: shop?.bill_prefix ?? 'BILL',
+    bill_prefix: 'BILL',
     currency: shop?.currency ?? 'PKR',
     locale: shop?.locale ?? 'en-PK',
-    barcode_rules: shop?.barcode_rules ?? [],
+    barcode_rules: [],
     sections,
     all_sections,
     categories,
@@ -291,12 +292,31 @@ export async function saveShopProfile(body: {
   locale: string
   bill_prefix: string
   barcode_rules: { prefix: string; mode: 'weight' | 'price'; scale: number }[]
-}): Promise<ShopSnapshot> {
+}): Promise<ShopSnapshot & { bill_prefix: string; barcode_rules: BarcodeRule[] }> {
   const shop = await request<ShopSnapshot>('/api/v1/core/settings', {
     method: 'PUT',
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      name: body.name,
+      currency: body.currency,
+      locale: body.locale,
+    }),
   })
-  return shop
+  let bill_prefix = body.bill_prefix
+  let barcode_rules = body.barcode_rules
+  try {
+    const pos = await request<PosSnapshot>('/api/v1/pos/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        bill_prefix: body.bill_prefix,
+        barcode_rules: body.barcode_rules,
+      }),
+    })
+    bill_prefix = pos.bill_prefix
+    barcode_rules = pos.barcode_rules
+  } catch {
+    // POS plugin may be off; profile still saved.
+  }
+  return { ...shop, bill_prefix, barcode_rules }
 }
 
 export interface PrinterSettings {

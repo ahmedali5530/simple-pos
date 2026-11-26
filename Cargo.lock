@@ -1832,6 +1832,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "platform-testkit"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "http-body-util",
+ "platform-kernel",
+ "platform-runtime",
+ "plugin-core",
+ "serde_json",
+ "sqlx 0.8.6",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "plugin-cash"
 version = "0.1.0"
 dependencies = [

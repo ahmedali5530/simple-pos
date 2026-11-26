@@ -25,8 +25,9 @@ Verification: `cargo xtask plugins check` (composition, backend/UI parity, slot 
 against a disposable database all pass. The full web binary serves `/` (SPA) and `/api/bootstrap` without the old fallback panic. The
 workspace transaction helper has rollback, commit, and new-parent cleanup tests. CI now runs `cargo run -p shop-api -- --migrate-only` before
 the test suite because the platform integration tests expect the legacy `shop-api` schema first.
-Still to add: fault-injection coverage for the CLI install/remove shell commands themselves, and a
-test that proves the same bootstrap step from a genuinely empty database.
+Verification also covers empty-database bootstrap (`shop-api` `empty_bootstrap` test) and xtask
+install rollback via `CHASKA_XTASK_FAIL_AT` fault injection. CI runs shell-only and catalog-only
+`cargo check` plus `npm run typecheck`.
 
 ## Phase 1: make the host independent of business plugins
 
@@ -37,10 +38,10 @@ test that proves the same bootstrap step from a genuinely empty database.
 
 User/session persistence is owned by `platform-identity`; the core profile is stored and served by
 `platform-runtime`; POS layout, bill-prefix, and barcode settings are plugin-owned. The catalog-only
-variant passed its composition test. `ShopConfig` still combines profile fields with POS-owned
-settings as a Rust runtime value; that is remaining type cleanup, not host ownership. Printing now
-loads core shop profile data directly and printer settings are no longer part of the POS snapshot.
-Characterization tests now build the real platform-backed router instead of the legacy-only router.
+variant passed its composition test. Core exposes profile-only `ShopSnapshot`; POS owns
+`PosSettings` / `TillShop` for till fields. Printing loads core shop profile data directly and
+printer settings are no longer part of the POS snapshot. Characterization tests now build the real
+platform-backed router instead of the legacy-only router.
 
 ## Phase 2: use contracts across plugin boundaries
 
@@ -87,9 +88,12 @@ permission catalog flag rather than engine code.
 
 ## Phase 3: stabilize plugin authoring
 
-- Generate backend composition and frontend registration from one manifest source.
-- Publish stable Rust and TypeScript SDKs, testkit, compatibility ranges, and deprecation rules.
-- Verify an external clean-repo plugin can install, build, enable, and run.
+- [x] Generate backend composition and frontend registration from one manifest source
+  (Rust `PluginManifest` → `manifest.generated.ts`; page loaders stay hand-authored).
+- [x] Document compatibility ranges / deprecation rules; ship `platform-testkit` probe harness
+  and keep `defineUiPlugin` as the TypeScript helper surface.
+- [x] Verify an external clean-repo plugin can install, build, and remove
+  (`fixtures/external-hello` + `scripts/prove-external-plugin.sh` in CI).
 
 ## Phase 4: prove meaningful extension
 

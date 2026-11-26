@@ -4,6 +4,19 @@ The engine knows tenants, identity, plugins, events, capabilities, settings, fil
 
 Plugins are compiled into the binary. Adding one is a directory plus one command: the composition root and the UI registry discover it, so no core file needs hand-editing.
 
+## Compatibility
+
+| Surface | Rule |
+|---|---|
+| Kernel API | Manifests declare `kernel_api: "^1.0"`. The binary refuses plugins outside the supported range. |
+| Manifest schema | Version `1` and `2` are accepted. Prefer `PluginManifest::v1` until you need v2 fields; the type is `#[non_exhaustive]`. |
+| Plugin version | On boot, stored versions adopt **forward** to the compiled version. A stored version **newer** than the binary is treated as a downgrade and skipped (plugin stays off). |
+| UI metadata | Rust `PluginManifest` is the source of truth. `cargo xtask plugins check` regenerates `src/plugins/<id>/manifest.generated.ts`. Hand-edit only page loaders and slot `component`s in `index.ts`. |
+| Contracts | Shared shapes live in `crates/contracts/*-contract`. Prefer versioned provider traits over reading another plugin's tables. |
+| Deprecation | Remove a permission, event, or slot only after a release that stops advertising it; keep reading old rows until a migration cleans them up. |
+
+Authoring SDK surface today: `platform-kernel` (Plugin trait, manifests, routes, events) + contract crates. Integration harness: `platform-testkit` (probe plugin + boot helpers). TypeScript helpers: `src/platform/registry.ts` (`defineUiPlugin`).
+
 ## Installing a plugin
 
 ```sh

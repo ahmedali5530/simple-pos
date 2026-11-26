@@ -50,11 +50,23 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Typecheck frontend
+        run: npm run typecheck
+
       - name: Build frontend
         run: npm run build
 
       - name: Composition is generated
         run: cargo xtask plugins check
+
+      - name: Shell-only host compiles
+        run: cargo check -p shop-api --no-default-features --features web
+
+      - name: Catalog-only host compiles
+        run: cargo check -p shop-api --no-default-features --features web,plugin-core,plugin-catalog
+
+      - name: External plugin install proof
+        run: bash scripts/prove-external-plugin.sh
 
       - name: Prepare test database
         run: cargo run -q -p shop-api -- --migrate-only

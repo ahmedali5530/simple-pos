@@ -1,7 +1,7 @@
 use crate::barcode::{codes_match, embedded_sale, parse_embedded, prompt_sale};
 use crate::models::{
     BarcodeRule, BillLineInput, Category, ItemVariant, PosItem, PosSection, PosSnapshot,
-    PostedBill, SectionChoice, SectionLayout, ShopConfig,
+    PostedBill, SectionChoice, SectionLayout, TillShop,
 };
 use platform_kernel::error::AppError;
 use sales_contract::{BillPostedV3, SaleLine};
@@ -107,8 +107,8 @@ struct RuleRow {
 
 pub async fn current_shop_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    fallback: &ShopConfig,
-) -> Result<ShopConfig, AppError> {
+    fallback: &TillShop,
+) -> Result<TillShop, AppError> {
     let row = sqlx::query_as::<_, ShopRow>(
         r#"
         SELECT profile.name, profile.currency, profile.locale,
@@ -128,7 +128,7 @@ pub async fn current_shop_tx(
     )
     .fetch_all(&mut **tx)
     .await?;
-    Ok(ShopConfig {
+    Ok(TillShop {
         name: row.name,
         currency: row.currency,
         locale: row.locale,
@@ -147,7 +147,7 @@ pub async fn current_shop_tx(
 /// Shop settings and empty till layout when no catalog provider is registered.
 pub async fn load_pos_shop_tx(
     tx: &mut platform_kernel::context::TenantTx<'_>,
-    shop: &ShopConfig,
+    shop: &TillShop,
 ) -> Result<PosSnapshot, AppError> {
     let shop = current_shop_tx(tx.transaction(), shop).await?;
     let last_section_id =
@@ -172,7 +172,7 @@ pub async fn load_pos_shop_tx(
 /// catalog tables for the main till view.
 pub async fn load_pos_catalog_tx(
     tx: &mut platform_kernel::context::TenantTx<'_>,
-    shop: &ShopConfig,
+    shop: &TillShop,
     catalog: &catalog_contract::CatalogApi,
 ) -> Result<PosSnapshot, AppError> {
     let shop = current_shop_tx(tx.transaction(), shop).await?;
@@ -290,7 +290,7 @@ pub async fn set_pos_focus_tx(
 
 pub async fn set_pos_sections_tx(
     tx: &mut platform_kernel::context::TenantTx<'_>,
-    shop: &ShopConfig,
+    shop: &TillShop,
     catalog: &catalog_contract::CatalogApi,
     layout: &[SectionLayout],
 ) -> Result<PosSnapshot, AppError> {
@@ -349,7 +349,7 @@ fn map_bill_line_error(err: sqlx::Error) -> AppError {
 
 pub async fn post_bill_tx(
     tx: &mut platform_kernel::context::TenantTx<'_>,
-    shop: &ShopConfig,
+    shop: &TillShop,
     catalog: &catalog_contract::CatalogApi,
     user_id: i32,
     section_id: i32,

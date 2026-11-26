@@ -68,15 +68,20 @@ export interface PosUser {
   active: boolean
 }
 
+/** Core-owned shop identity (name, money labels). */
 export interface ShopSnapshot {
   shop_name: string
-  bill_prefix: string
   currency: string
   locale: string
+}
+
+/** POS-owned till settings. */
+export interface PosSettings {
+  bill_prefix: string
   barcode_rules: BarcodeRule[]
 }
 
-export interface PosSnapshot extends ShopSnapshot {
+export interface PosSnapshot extends ShopSnapshot, PosSettings {
   sections: PosSection[]
   all_sections: SectionChoice[]
   categories: Category[]

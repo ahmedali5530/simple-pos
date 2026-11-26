@@ -1,0 +1,21 @@
+[package]
+name = "platform-testkit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Harness for mounting a probe plugin against platform-runtime in tests"
+
+[dependencies]
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros"] }
+platform-kernel = { path = "../platform-kernel" }
+platform-runtime = { path = "../platform-runtime" }
+plugin-core = { path = "../plugins/core" }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"

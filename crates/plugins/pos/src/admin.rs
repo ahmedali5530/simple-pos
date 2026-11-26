@@ -1,4 +1,4 @@
-use crate::models::{BarcodeRule, PosSnapshot, ShopConfig, ShopProfileForm};
+use crate::models::{BarcodeRule, PosSnapshot, TillShop, PosSettingsForm};
 use platform_kernel::error::AppError;
 
 fn friendly_unique(err: sqlx::Error) -> AppError {
@@ -22,8 +22,8 @@ fn friendly_unique(err: sqlx::Error) -> AppError {
 pub async fn save_shop_profile(
     tx: &mut platform_kernel::context::TenantTx<'_>,
     catalog: Option<&catalog_contract::CatalogApi>,
-    fallback: &ShopConfig,
-    form: &ShopProfileForm,
+    fallback: &TillShop,
+    form: &PosSettingsForm,
 ) -> Result<PosSnapshot, AppError> {
     let bill_prefix = form.bill_prefix.trim().to_ascii_uppercase();
     if bill_prefix.is_empty()

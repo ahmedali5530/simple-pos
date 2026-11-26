@@ -8,12 +8,12 @@ use platform_kernel::plugin::Plugin;
 pub fn plugins() -> Vec<Arc<dyn Plugin>> {
     #[allow(unused_mut)]
     let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
-    #[cfg(feature = "plugin-core")]
-    plugins.push(plugin_core::plugin());
     #[cfg(feature = "plugin-cash")]
     plugins.push(plugin_cash::plugin());
     #[cfg(feature = "plugin-catalog")]
     plugins.push(plugin_catalog::plugin());
+    #[cfg(feature = "plugin-core")]
+    plugins.push(plugin_core::plugin());
     #[cfg(feature = "plugin-inventory")]
     plugins.push(plugin_inventory::plugin());
     #[cfg(feature = "plugin-mobile")]

@@ -1,20 +1,8 @@
 import { defineUiPlugin } from '../../platform/registry'
+import { metadata } from './manifest.generated'
 
 export const posPlugin = defineUiPlugin({
-  id: 'pos',
-  permissions: ['pos.read', 'pos.bills.post', 'settings.write'],
-  nav: [
-    {
-      id: 'billing',
-      label: 'POS Billing',
-      href: '/billing',
-      permission: 'pos.bills.post',
-      order: 10,
-    },
-  ],
-  settingsPages: [],
-  reportPages: [],
-  slotsProvided: ['pos.line-source', 'pos.line-detail', 'pos.item-options'],
+  ...metadata,
   pages: [
     {
       path: '/billing',

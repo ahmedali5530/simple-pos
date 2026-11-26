@@ -157,7 +157,16 @@ fn sync() -> Result<()> {
     Ok(())
 }
 
+/// Test hook: set `CHASKA_XTASK_FAIL_AT` to a stage name to abort install/remove mid-flight.
+fn maybe_fault(stage: &str) -> Result<()> {
+    if std::env::var("CHASKA_XTASK_FAIL_AT").ok().as_deref() == Some(stage) {
+        bail!("injected failure at {stage}");
+    }
+    Ok(())
+}
+
 fn check() -> Result<()> {
+    maybe_fault("check")?;
     let plugins = plugin_crates()?;
     let rendered = render(&plugins);
     let current = fs::read_to_string(compose_path()).unwrap_or_default();
@@ -194,6 +203,11 @@ fn check() -> Result<()> {
     let manifest_path = root().join("target/plugin-manifests.json");
     fs::create_dir_all(manifest_path.parent().expect("target directory"))?;
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifests)?)?;
+    run(
+        "node",
+        &["scripts/codegen-plugin-ui.mjs"],
+        &root(),
+    )?;
     run(
         "node",
         &[
@@ -339,10 +353,13 @@ fn install(args: &[String]) -> Result<()> {
             }
             add_dependency(id)?;
             sync()?;
+            maybe_fault("after-sync")?;
+            // Validate composition (and regenerate UI manifests) before rebuilding the SPA.
+            maybe_fault("before-check")?;
+            check()?;
             if ui_destination.is_dir() {
                 run(npm(), &["run", "build"], &root())?;
             }
-            check()?;
             Ok(())
         },
     )?;
@@ -394,6 +411,7 @@ fn remove(args: &[String]) -> Result<()> {
         || {
             remove_dependency(&id)?;
             sync()?;
+            maybe_fault("remove-after-sync")?;
             fs::create_dir_all(root().join("crates/plugins-disabled"))?;
             if crate_dir.is_dir() {
                 if disabled_dir.exists() {
@@ -405,6 +423,7 @@ fn remove(args: &[String]) -> Result<()> {
             if !keep_source && ui.exists() {
                 fs::remove_dir_all(&ui)?;
             }
+            maybe_fault("remove-before-check")?;
             check()?;
             // Rebuild even when the UI directory was removed, otherwise the
             // bundled production frontend keeps the deleted plugin's chunks.
@@ -535,13 +554,26 @@ fn scaffold(args: &[String]) -> Result<()> {
         fs::write(
             ui_dir.join("index.ts"),
             format!(
-                "import {{ defineUiPlugin }} from '../../platform/registry'\n\n\
-                 export const {id}Plugin = defineUiPlugin({{\n  id: '{id}',\n  \
-                 permissions: ['{id}.read', '{id}.write'],\n  \
-                 nav: [{{ id: '{id}', label: '{title}', href: '/{id}', permission: '{id}.read', order: 60 }}],\n  \
-                 settingsPages: [],\n  reportPages: [],\n  pages: [\n    \
+                "import {{ defineUiPlugin }} from '../../platform/registry'\n\
+                 import {{ metadata }} from './manifest.generated'\n\n\
+                 export const {id}Plugin = defineUiPlugin({{\n  ...metadata,\n  \
+                 pages: [\n    \
                  {{ path: '/{id}', title: '{title}', permission: '{id}.read', load: () => import('./screens/HomePage.svelte') }},\n  \
                  ],\n}})\n"
+            ),
+        )?;
+        fs::write(
+            ui_dir.join("manifest.generated.ts"),
+            format!(
+                "/* Placeholder until `cargo xtask plugins check` regenerates from Rust. */\n\
+                 import type {{ UiPlugin }} from '../../platform/registry'\n\n\
+                 export const metadata = {{\n  id: '{id}',\n  requiresBackend: true as const,\n  \
+                 permissions: ['{id}.read', '{id}.write'] as string[],\n  \
+                 nav: [{{ id: '{id}', label: '{title}', href: '/{id}', permission: '{id}.read', order: 60 }}] as UiPlugin['nav'],\n  \
+                 settingsPages: [] as UiPlugin['settingsPages'],\n  \
+                 reportPages: [] as UiPlugin['reportPages'],\n  \
+                 slotsProvided: [] as string[],\n  \
+                 contributions: [] as Array<{{ id: string; slot: string; order: number }}>,\n}}\n"
             ),
         )?;
         fs::write(
@@ -843,6 +875,79 @@ mod transaction_tests {
         assert!(result.is_err());
         assert!(!parent.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_fault_fixture(dir: &Path) {
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            r#"[package]
+name = "plugin-xtaskfault"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+platform-kernel = { path = "../../platform-kernel" }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/lib.rs"),
+            r#"use std::sync::Arc;
+use platform_kernel::contract::Registrar;
+use platform_kernel::manifest::PluginManifest;
+use platform_kernel::migrate::Migration;
+use platform_kernel::plugin::Plugin;
+use platform_kernel::routes::{PluginRoutes, RegistrationError};
+
+pub struct XtaskFaultPlugin;
+
+impl Plugin for XtaskFaultPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::v1("xtaskfault", "Xtask Fault", "0.1.0")
+    }
+    fn migrations(&self) -> &'static [Migration] { &[] }
+    fn register(&self, _: &mut Registrar) {}
+    fn routes(&self, _: &mut PluginRoutes) -> Result<(), RegistrationError> { Ok(()) }
+}
+
+pub fn plugin() -> Arc<dyn Plugin> {
+    Arc::new(XtaskFaultPlugin)
+}
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn install_rolls_back_when_check_is_faulted() {
+        let fixture = temp_path().join("plugin-xtaskfault");
+        write_fault_fixture(&fixture);
+        let plugin_dir = super::root().join("crates/plugins/xtaskfault");
+        let compose_before = fs::read_to_string(super::compose_path()).unwrap_or_default();
+        let manifest_before = fs::read_to_string(super::shop_api_manifest()).unwrap();
+        assert!(!plugin_dir.exists(), "xtaskfault must not already be installed");
+
+        std::env::set_var("CHASKA_XTASK_FAIL_AT", "after-sync");
+        let result = super::install(&[fixture.to_string_lossy().into_owned()]);
+        std::env::remove_var("CHASKA_XTASK_FAIL_AT");
+        let _ = fs::remove_dir_all(&fixture);
+
+        assert!(result.is_err(), "install should fail from injected fault");
+        assert!(
+            !plugin_dir.exists(),
+            "plugin crate must be rolled back after failure"
+        );
+        assert_eq!(
+            fs::read_to_string(super::compose_path()).unwrap_or_default(),
+            compose_before,
+            "compose.rs must be restored"
+        );
+        assert_eq!(
+            fs::read_to_string(super::shop_api_manifest()).unwrap(),
+            manifest_before,
+            "shop-api Cargo.toml must be restored"
+        );
     }
 }
 
