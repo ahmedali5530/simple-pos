@@ -1,0 +1,10 @@
+[package]
+name = "printing-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+platform-kernel = { path = "../../platform-kernel" }
+serde = { version = "1", features = ["derive"] }

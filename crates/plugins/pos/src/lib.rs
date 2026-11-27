@@ -157,6 +157,7 @@ impl SalesReceiptQuery for PgSalesReceiptQuery {
             });
         }
         Ok(ReceiptData {
+            bill_id: head.id,
             bill_no: head.bill_no,
             total: head.total,
             sold_at: head.sold_at,

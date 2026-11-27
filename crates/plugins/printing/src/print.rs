@@ -11,6 +11,7 @@ use inventory_contract::ProductMix;
 use platform_kernel::context::TenantTx;
 use platform_kernel::error::AppError;
 use platform_runtime::shop_profile::ShopProfile;
+use printing_contract::ReceiptExtras;
 use sales_contract::ReceiptData;
 use sqlx::{Postgres, Transaction};
 
@@ -52,10 +53,12 @@ struct Receipt {
 }
 
 /// Print a saved bill on the shop printer. A turned-off printer is not an error.
+/// `extras` come from other plugins (fiscal QR, loyalty, …) via `ReceiptContribute`.
 pub async fn print_saved_bill(
     tx: &mut Transaction<'_, Postgres>,
     shop: &ShopProfile,
     data: ReceiptData,
+    extras: &ReceiptExtras,
 ) -> Result<PrintOutcome, AppError> {
     let Some(printer) = enabled_printer_tx(tx).await? else {
         return Ok(PrintOutcome { printed: false });
@@ -96,7 +99,7 @@ pub async fn print_saved_bill(
         total: data.total,
         tenders,
     };
-    let bytes = build_final_receipt(&receipt);
+    let bytes = build_final_receipt(&receipt, extras);
     dispatch(&printer, &bytes, "The sale is saved.")?;
     Ok(PrintOutcome { printed: true })
 }
@@ -162,7 +165,7 @@ async fn enabled_printer_tx(
     Ok(printer.filter(|row| row.print_enabled))
 }
 
-fn build_final_receipt(receipt: &Receipt) -> Vec<u8> {
+fn build_final_receipt(receipt: &Receipt, extras: &ReceiptExtras) -> Vec<u8> {
     let mut out = EscPos::new();
     out.init();
     if !receipt.shop_name.is_empty() {
@@ -206,7 +209,29 @@ fn build_final_receipt(receipt: &Receipt) -> Vec<u8> {
         let label = tender_label(&tender.method, &tender.reference);
         out.pair(&label, &money(&receipt.currency, tender.amount));
     }
-    out.normal();
+    if !extras.lines.is_empty() || !extras.qr_payloads.is_empty() {
+        out.rule();
+        out.normal();
+        for line in &extras.lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            out.align_center();
+            out.text(&clip(trimmed, WIDTH));
+        }
+        for payload in &extras.qr_payloads {
+            let trimmed = payload.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            out.feed(1);
+            out.align_center();
+            out.qr(trimmed, 4);
+            out.feed(1);
+        }
+        out.normal();
+    }
     out.feed(1);
     out.align_center();
     out.text("Thank you!");
@@ -630,6 +655,34 @@ impl EscPos {
         }
     }
 
+    /// ESC/POS QR Code (GS ( k), model 2. `module` is 1–16 (dot size).
+    fn qr(&mut self, payload: &str, module: u8) {
+        let data = plain(payload);
+        if data.is_empty() {
+            return;
+        }
+        let size = module.clamp(1, 16);
+        // Model 2
+        self.bytes
+            .extend_from_slice(b"\x1d\x28\x6b\x04\x00\x31\x41\x32\x00");
+        // Module size
+        self.bytes
+            .extend_from_slice(&[0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, size]);
+        // Error correction M
+        self.bytes
+            .extend_from_slice(b"\x1d\x28\x6b\x03\x00\x31\x45\x31");
+        // Store data: pL pH cn fn m + bytes
+        let store_len = data.len() + 3;
+        let p_l = (store_len & 0xff) as u8;
+        let p_h = ((store_len >> 8) & 0xff) as u8;
+        self.bytes
+            .extend_from_slice(&[0x1d, 0x28, 0x6b, p_l, p_h, 0x31, 0x50, 0x30]);
+        self.bytes.extend_from_slice(data.as_bytes());
+        // Print symbol
+        self.bytes
+            .extend_from_slice(b"\x1d\x28\x6b\x03\x00\x31\x51\x30");
+    }
+
     /// The blade sits above the print head, so the last line has to travel before the cut.
     fn feed_for_cut(&mut self) {
         self.bytes.extend_from_slice(b"\x1b\x64\x0a");
@@ -746,7 +799,7 @@ mod tests {
                 reference: String::new(),
             }],
         };
-        let bytes = build_final_receipt(&receipt);
+        let bytes = build_final_receipt(&receipt, &ReceiptExtras::default());
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("Corner Shop"));
         assert!(text.contains("Final Bill"));
@@ -758,6 +811,37 @@ mod tests {
         assert!(text.contains("Cash"));
         assert!(text.contains("Check Closed"));
         assert!(bytes.windows(3).any(|chunk| chunk == b"\x1d\x56\x00"));
+    }
+
+    #[test]
+    fn final_receipt_prints_plugin_footer_and_qr() {
+        let receipt = Receipt {
+            shop_name: "Corner Shop".into(),
+            currency: "PKR".into(),
+            bill_no: "BILL-1001".into(),
+            sold_at: "2026-11-16 08:10 PM".into(),
+            cashier: "Kashif".into(),
+            customer: None,
+            lines: vec![],
+            total: 0,
+            tenders: vec![],
+        };
+        let extras = ReceiptExtras {
+            lines: vec!["FBR Invoice: INV-9".into()],
+            qr_payloads: vec!["https://verify.example/INV-9".into()],
+        };
+        let bytes = build_final_receipt(&receipt, &extras);
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("FBR Invoice: INV-9"));
+        assert!(
+            bytes
+                .windows(8)
+                .any(|chunk| chunk == b"\x1d\x28\x6b\x03\x00\x31\x51\x30"),
+            "expected ESC/POS QR print command"
+        );
+        assert!(bytes.windows(b"https://verify.example/INV-9".len()).any(|chunk| {
+            chunk == b"https://verify.example/INV-9"
+        }));
     }
 
     #[test]

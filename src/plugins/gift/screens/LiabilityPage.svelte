@@ -2,118 +2,108 @@
   import { onMount } from 'svelte'
   import { formatMoney } from '../../../lib/money'
   import ShopLocaleGate from '../../../platform/ShopLocaleGate.svelte'
+  import { toast, toastError } from '../../../lib/toast'
   import { giftLiability, type GiftLiability } from '../api'
 
   let report = $state<GiftLiability | null>(null)
-  let error = $state('')
+  let failed = $state(false)
+  let query = $state('')
+
+  const rows = $derived(
+    report?.rows.filter((row) => {
+      const needle = query.trim().toLowerCase()
+      if (!needle) return true
+      return [row.code, row.issued_bill_no].some((part) => part.toLowerCase().includes(needle))
+    }) ?? [],
+  )
 
   onMount(() => {
     giftLiability()
       .then((value) => (report = value))
-      .catch((err: unknown) => {
-        error = err instanceof Error ? err.message : 'Could not load gift liability.'
+      .catch((reason) => {
+        failed = true
+        toastError(reason, 'Could not load gift liability.')
       })
   })
 </script>
 
 <ShopLocaleGate>
   {#snippet children(shop)}
-    <main class="stage">
-      <header>
-        <h1>Gift liability</h1>
-        <p>Outstanding balances on active gift cards.</p>
-      </header>
-
-      {#if error}<p class="error">{error}</p>{/if}
-
-      {#if report}
-        <div class="totals">
-          <p>
-            <span>Total issued</span>
+    <div class="report-board">
+      {#if !report}
+        {#if !failed}<p class="hint">Opening the report…</p>{/if}
+      {:else}
+        <div class="kpi-row">
+          <article class="kpi">
+            <header>
+              <span>Total issued</span>
+              <i class="kpi-icon purple" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16v3H4zm0 5h16v3H4zm2 5h12v2H6z" /></svg>
+              </i>
+            </header>
             <strong>{formatMoney(report.issued, shop.currency, shop.locale)}</strong>
-          </p>
-          <p>
-            <span>Balance outstanding</span>
+            <p>Face value on active cards</p>
+          </article>
+          <article class="kpi">
+            <header>
+              <span>Balance outstanding</span>
+              <i class="kpi-icon green" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M5 16l5-5 3 3 6-7v4h2V5h-6v2h4l-5 6-3-3-6 6z" /></svg>
+              </i>
+            </header>
             <strong>{formatMoney(report.outstanding, shop.currency, shop.locale)}</strong>
-          </p>
-          <p>
-            <span>Cards</span>
+            <p>Still available to redeem</p>
+          </article>
+          <article class="kpi">
+            <header>
+              <span>Cards</span>
+              <i class="kpi-icon slate" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zm2 2v8h14V8zm2 2h4v2H7zm6 0h4v2h-4z" /></svg>
+              </i>
+            </header>
             <strong>{report.cards}</strong>
-          </p>
+            <p>{report.cards === 1 ? '1 active card' : `${report.cards} active cards`}</p>
+          </article>
         </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Issued</th>
-              <th>Balance</th>
-              <th>Issued on</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each report.rows as row}
-              <tr>
-                <td>{row.code}</td>
-                <td>{formatMoney(row.issued, shop.currency, shop.locale)}</td>
-                <td>{formatMoney(row.balance, shop.currency, shop.locale)}</td>
-                <td>{row.issued_at ? row.issued_at.slice(0, 10) : row.issued_bill_no || '—'}</td>
-              </tr>
-            {:else}
-              <tr><td colspan="4">No outstanding liability.</td></tr>
-            {/each}
-          </tbody>
-        </table>
+        <section class="report-card">
+          <div class="summary-head">
+            <div>
+              <h2>Gift liability</h2>
+              <p class="hint">Outstanding balances on active gift cards</p>
+            </div>
+          </div>
+          <input class="input mb-2" placeholder="Search cards" bind:value={query} />
+          <div class="report-scroll">
+            <table class="bill-log">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Issued</th>
+                  <th>Balance</th>
+                  <th>Issued on</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each rows as row}
+                  <tr>
+                    <td class="bill-no">{row.code}</td>
+                    <td>{formatMoney(row.issued, shop.currency, shop.locale)}</td>
+                    <td class="bill-total">{formatMoney(row.balance, shop.currency, shop.locale)}</td>
+                    <td>{row.issued_at ? row.issued_at.slice(0, 10) : row.issued_bill_no || '—'}</td>
+                  </tr>
+                {:else}
+                  <tr>
+                    <td colspan="4">
+                      {query.trim() ? 'Nothing matches that search.' : 'No outstanding liability.'}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
       {/if}
-    </main>
+    </div>
   {/snippet}
 </ShopLocaleGate>
-
-<style>
-  .stage {
-    padding: 1rem 1.25rem;
-    display: grid;
-    gap: 0.85rem;
-  }
-  header h1 {
-    margin: 0;
-    font-size: 1.35rem;
-    font-weight: 600;
-  }
-  header p {
-    margin: 0.35rem 0 0;
-    color: var(--ui-text-muted);
-  }
-  .totals {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1.25rem 2rem;
-  }
-  .totals p {
-    margin: 0;
-    display: grid;
-    gap: 0.2rem;
-  }
-  .totals span {
-    color: var(--ui-text-muted);
-    font-size: 0.75rem;
-  }
-  .totals strong {
-    font-size: 1.1rem;
-    font-weight: 600;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.45rem 0.5rem;
-    border-bottom: 1px solid var(--ui-border);
-  }
-  .error {
-    margin: 0;
-    color: var(--ui-danger, tomato);
-  }
-</style>

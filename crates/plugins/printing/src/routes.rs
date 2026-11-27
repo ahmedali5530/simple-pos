@@ -3,6 +3,9 @@ use cash_contract::CashClosingProvider;
 use inventory_contract::InventoryReportsProvider;
 use platform_kernel::error::AppError;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
+use printing_contract::{
+    ReceiptBillFact, ReceiptBillLine, ReceiptContributeProvider, ReceiptExtras,
+};
 use sales_contract::SalesReceiptProvider;
 
 use crate::print::{print_cash_shift, print_product_mix, print_saved_bill, PrintRequest};
@@ -18,10 +21,31 @@ async fn receipt(
     let provider = db.provider::<SalesReceiptProvider>().ok_or_else(|| {
         AppError::BadRequest("The POS plugin is required to print a bill.".into())
     })?;
+    let contributors = db.provider::<ReceiptContributeProvider>();
     let mut tx = db.begin(false).await?;
     let profile = platform_runtime::shop_profile::load_tx(&mut tx).await?;
     let receipt = provider.0.receipt(&mut tx, bill_no).await?;
-    let outcome = print_saved_bill(tx.transaction(), &profile, receipt).await?;
+    let bill = ReceiptBillFact {
+        bill_id: receipt.bill_id,
+        bill_no: receipt.bill_no.clone(),
+        total: receipt.total,
+        sold_at: receipt.sold_at.clone(),
+        customer: receipt.customer.clone(),
+        lines: receipt
+            .lines
+            .iter()
+            .map(|line| ReceiptBillLine {
+                name: line.name.clone(),
+                qty: line.qty,
+                amount: line.amount,
+            })
+            .collect(),
+    };
+    let extras = match &contributors {
+        Some(bag) => bag.gather(&mut tx, &bill).await?,
+        None => ReceiptExtras::default(),
+    };
+    let outcome = print_saved_bill(tx.transaction(), &profile, receipt, &extras).await?;
     tx.commit().await?;
     Ok(Json(outcome))
 }

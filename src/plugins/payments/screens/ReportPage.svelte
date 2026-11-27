@@ -8,9 +8,20 @@
 
   let report = $state<PaymentsReport | null>(null)
   let failed = $state(false)
+  let query = $state('')
+  let rangeLabel = $state('')
+
+  const rows = $derived(
+    report?.totals.filter((row) => {
+      const needle = query.trim().toLowerCase()
+      if (!needle) return true
+      return [row.label, row.method].some((part) => part.toLowerCase().includes(needle))
+    }) ?? [],
+  )
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
     failed = false
+    rangeLabel = span.from || span.to ? 'Selected range' : 'All dates'
     try {
       report = await loadPaymentsReport(span.from, span.to)
     } catch (reason) {
@@ -23,13 +34,9 @@
 
 <ShopLocaleGate>
   {#snippet children(shop)}
-    <main class="stage">
-      <header>
-        <h1>Payment mix</h1>
-        <p>Breakdown from mirrored bill tenders (cash + configured payment types).</p>
-      </header>
-
+    <div class="report-board">
       <ReportRange
+        label={rangeLabel}
         onchange={reload}
         oninvalid={(message) => toast.error(message)}
       />
@@ -37,65 +44,65 @@
       {#if !report}
         {#if !failed}<p class="hint">Opening the report…</p>{/if}
       {:else}
-        <p class="grand">
-          Collected {formatMoney(report.collected, shop.currency, shop.locale)}
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Method</th>
-              <th>Bills</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each report.totals as row}
-              <tr>
-                <td>{row.label || row.method}</td>
-                <td>{row.bills}</td>
-                <td>{formatMoney(row.amount, shop.currency, shop.locale)}</td>
-              </tr>
-            {:else}
-              <tr><td colspan="3">No payments in this range.</td></tr>
-            {/each}
-          </tbody>
-        </table>
+        <div class="kpi-row">
+          <article class="kpi">
+            <header>
+              <span>Collected</span>
+              <i class="kpi-icon green" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16v3H4zm0 5h16v3H4zm2 5h12v2H6z" /></svg>
+              </i>
+            </header>
+            <strong>{formatMoney(report.collected, shop.currency, shop.locale)}</strong>
+            <p>Cash and configured payment types</p>
+          </article>
+          <article class="kpi">
+            <header>
+              <span>Methods</span>
+              <i class="kpi-icon slate" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z" /></svg>
+              </i>
+            </header>
+            <strong>{report.totals.length}</strong>
+            <p>{report.totals.length === 1 ? '1 tender method' : `${report.totals.length} tender methods`}</p>
+          </article>
+        </div>
+
+        <section class="report-card">
+          <div class="summary-head">
+            <div>
+              <h2>Payment mix</h2>
+              <p class="hint">Breakdown from mirrored bill tenders</p>
+            </div>
+          </div>
+          <input class="input mb-2" placeholder="Search methods" bind:value={query} />
+          <div class="report-scroll">
+            <table class="bill-log">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Bills</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each rows as row}
+                  <tr>
+                    <td class="bill-no">{row.label || row.method}</td>
+                    <td>{row.bills}</td>
+                    <td class="bill-total">{formatMoney(row.amount, shop.currency, shop.locale)}</td>
+                  </tr>
+                {:else}
+                  <tr>
+                    <td colspan="3">
+                      {query.trim() ? 'Nothing matches that search.' : 'No payments in this range.'}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
       {/if}
-    </main>
+    </div>
   {/snippet}
 </ShopLocaleGate>
-
-<style>
-  .stage {
-    padding: 1rem 1.25rem;
-    display: grid;
-    gap: 0.85rem;
-  }
-  header h1 {
-    margin: 0;
-    font-size: 1.35rem;
-    font-weight: 600;
-  }
-  header p {
-    margin: 0.35rem 0 0;
-    color: var(--ui-text-muted);
-  }
-  .grand {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.45rem 0.5rem;
-    border-bottom: 1px solid var(--ui-border);
-  }
-  .hint {
-    color: var(--ui-text-muted);
-  }
-</style>

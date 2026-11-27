@@ -19,7 +19,8 @@ impl Plugin for PrintingPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::v1("printing", "Printing", "0.1.0");
         manifest.default_enabled = true;
-        manifest.description = "Receipt printer settings and ESC/POS dispatch.".into();
+        manifest.description =
+            "Receipt printer settings and ESC/POS dispatch. Other plugins can add footer lines and QR codes via printing-contract.".into();
         manifest.optional = vec![
             Dependency::new("pos", "^0.1"),
             Dependency::new("inventory", "^0.1"),

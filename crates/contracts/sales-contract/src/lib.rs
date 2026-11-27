@@ -204,6 +204,7 @@ pub struct SalesQueryProvider(pub std::sync::Arc<dyn SalesQuery>);
 /// POS-owned receipt data. Consumers render it without reading POS tables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptData {
+    pub bill_id: i32,
     pub bill_no: String,
     pub total: i32,
     pub sold_at: String,
