@@ -22,11 +22,22 @@
   }
 
   let plugins = $state<PluginRow[]>([])
+  let query = $state('')
   let tokenName = $state('')
   let tokenResult = $state('')
   let pending = $state('')
   let prompt = $state<{ plugin: PluginRow; enabled: boolean; consent: SwitchConsent } | null>(null)
   let accepted = $state(false)
+
+  const visible = $derived.by(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return plugins
+    return plugins.filter((plugin) =>
+      [plugin.name, plugin.id, plugin.description ?? ''].some((part) =>
+        part.toLowerCase().includes(needle),
+      ),
+    )
+  })
 
   $effect(() => {
     request<{ available?: PluginRow[] }>('/api/v1/platform/manifest')
@@ -110,8 +121,15 @@
 <section class="place">
   <h2>Plugins</h2>
   <p class="hint">Turn a plugin off without deleting its data. A plugin stays off while something else still needs it.</p>
+  <Input
+    type="search"
+    placeholder="Search plugins"
+    aria-label="Search plugins"
+    bind:value={query}
+    class="mt-3 mb-5"
+  />
   <ul class="plugin-list">
-    {#each plugins as plugin (plugin.id)}
+    {#each visible as plugin (plugin.id)}
       <li>
         <div class="plugin-copy">
           <div class="flex gap-5 items-center">
@@ -125,6 +143,10 @@
         <Button variant={plugin.enabled ? 'primary' : 'secondary'} size="sm" disabled={pending === plugin.id} onclick={() => toggle(plugin)}>
           {plugin.enabled ? 'On' : 'Off'}
         </Button>
+      </li>
+    {:else}
+      <li class="empty">
+        <p class="hint">{query.trim() ? 'No plugins match that search.' : 'No plugins available.'}</p>
       </li>
     {/each}
   </ul>

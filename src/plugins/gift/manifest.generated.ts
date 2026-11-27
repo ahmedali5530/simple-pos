@@ -10,5 +10,5 @@ export const metadata = {
   settingsPages: [{ id: "gift", label: "Gift cards", href: "/settings/gift", permission: "gift.write", order: 62 }] as UiPlugin['settingsPages'],
   reportPages: [{ id: "gift_liability", label: "Gift liability", href: "/reports/gift", permission: "gift.read", order: 40 }] as UiPlugin['reportPages'],
   slotsProvided: [] as string[],
-  contributions: [{ id: "gift.issue", slot: "pos.line-source", order: 30 }, { id: "gift.redeem", slot: "pos.tender", order: 10 }] as Array<{ id: string; slot: string; order: number }>,
+  contributions: [{ id: "gift.redeem", slot: "pos.tender", order: 10 }] as Array<{ id: string; slot: string; order: number }>,
 }

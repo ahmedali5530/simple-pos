@@ -9,10 +9,21 @@ export interface GiftCard {
   issued_at: string | null
 }
 
+export interface GiftLiabilityRow {
+  id: number
+  code: string
+  issued: number
+  balance: number
+  status: string
+  issued_bill_no: string
+  issued_at: string | null
+}
+
 export interface GiftLiability {
   cards: number
+  issued: number
   outstanding: number
-  rows: GiftCard[]
+  rows: GiftLiabilityRow[]
 }
 
 export interface GiftBalance {
@@ -32,6 +43,13 @@ export function giftBalance(code: string): Promise<GiftBalance> {
 
 export function giftLiability(): Promise<GiftLiability> {
   return request('/api/v1/gift/liability')
+}
+
+export function issueGiftCard(code: string, amount: number): Promise<GiftCard> {
+  return request('/api/v1/gift/issue', {
+    method: 'POST',
+    body: JSON.stringify({ code, amount }),
+  })
 }
 
 export function voidGiftCard(code: string): Promise<GiftCard> {

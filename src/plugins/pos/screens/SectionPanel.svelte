@@ -4,9 +4,10 @@
   import VirtualGrid from '../../../lib/ui/VirtualGrid.svelte'
   import { formatMoney } from '../../../lib/money'
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../../../lib/types'
-  import { Button, Switch } from '../../../lib/ui'
+  import { Button } from '../../../lib/ui'
   import Slot from '../../../platform/Slot.svelte'
   import { hasItemOptions } from '../../../platform/itemOptions'
+  import { slotsFor } from '../../../plugins/registry'
   import type { AddPosLine, LineMetadataPatch, PosTender } from '../../../platform/slots'
 
   interface Props {
@@ -15,7 +16,6 @@
     lines: CartLine[]
     focused: boolean
     filter: number | 'all'
-    posted: string
     currency: string
     locale: string
     onFilter: (filter: number | 'all') => void
@@ -33,9 +33,6 @@
     onCustomer: (name: string) => void
     tenders: PosTender[]
     onTenders: (tenders: PosTender[]) => void
-    skipPrint: boolean
-    receipts: boolean
-    onSkipPrint: (skip: boolean) => void
   }
 
   let {
@@ -44,7 +41,6 @@
     lines,
     focused,
     filter,
-    posted,
     currency,
     locale,
     onFilter,
@@ -62,9 +58,6 @@
     onCustomer,
     tenders,
     onTenders,
-    skipPrint,
-    receipts,
-    onSkipPrint,
   }: Props = $props()
 
   let scanCode = $state('')
@@ -128,6 +121,7 @@
   )
 
   const total = $derived(lines.reduce((sum, line) => sum + line.rate * line.qty, 0))
+  const hasLineDetails = $derived(slotsFor('pos.line-detail').length > 0)
 
   function money(amount: number) {
     return formatMoney(amount, currency, locale)
@@ -178,12 +172,12 @@
   }
 
   function onScanKey(event: KeyboardEvent) {
-    if (event.key === 'ArrowDown' && hits.length > 0) {
+    if (!(event.ctrlKey || event.metaKey) && event.key === 'ArrowDown' && hits.length > 0) {
       event.preventDefault()
       void moveHighlight((highlight + 1) % hits.length)
       return
     }
-    if (event.key === 'ArrowUp' && hits.length > 0) {
+    if (!(event.ctrlKey || event.metaKey) && event.key === 'ArrowUp' && hits.length > 0) {
       event.preventDefault()
       void moveHighlight((highlight - 1 + hits.length) % hits.length)
       return
@@ -210,6 +204,35 @@
     if (qty < 1) return
     if (!onQty(line.key, qty)) input.value = String(line.qty)
   }
+
+  let billLinesEl = $state<HTMLDivElement | null>(null)
+
+  function qtyFields() {
+    return [
+      ...(billLinesEl?.querySelectorAll<HTMLInputElement>('input[data-cart-qty]') ?? []),
+    ]
+  }
+
+  function focusQty(index: number) {
+    const fields = qtyFields()
+    if (fields.length === 0) return
+    const next = fields[((index % fields.length) + fields.length) % fields.length]
+    next.focus()
+    next.select()
+  }
+
+  function onCartKeydown(event: KeyboardEvent) {
+    if (!(event.ctrlKey || event.metaKey)) return
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const fields = qtyFields()
+    if (fields.length === 0) return
+    const active = document.activeElement
+    const current = fields.findIndex((field) => field === active)
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'ArrowDown') focusQty(current < 0 ? 0 : current + 1)
+    else focusQty(current < 0 ? fields.length - 1 : current - 1)
+  }
 </script>
 
 <div
@@ -218,6 +241,7 @@
   style="--accent: {section.accent}"
   role="group"
   aria-label={section.name}
+  onkeydown={onCartKeydown}
 >
   <div class="catalog">
   <div class="scan">
@@ -285,7 +309,7 @@
     {/each}
   </div>
 
-  <VirtualGrid class="items" items={visibleItems} estimate={170} min={220} gap={14} reset="{section.id}:{filter}" key={(item) => item.id}>
+  <VirtualGrid class="items" items={visibleItems} estimate={128} min={160} gap={10} reset="{section.id}:{filter}" key={(item) => item.id}>
     {#snippet children(item)}
       <button
         type="button"
@@ -343,63 +367,70 @@
       name="pos.line-source"
       context={{ section, addLine: onExternalLine, currency, locale, lines }}
     />
-    <div class="bill-lines">
+    <div class="bill-lines" bind:this={billLinesEl}>
       {#if lines.length === 0}
         <p class="ui-hint empty">No items in this bill yet. Scan a barcode or tap an item.</p>
       {:else}
-        {#each lines as line (line.key)}
-          <div class="cart-line-block">
-            <div class="ui-cart-line" data-state="open">
-              <div>
-                <strong>{line.name}</strong>
-                <div class="ui-hint">{money(line.rate)} each</div>
-              </div>
-              <div class="ui-stepper">
-                <button
-                  type="button"
-                  aria-label="Decrease {line.name}"
-                  disabled={line.source === 'mobile.device'}
-                  onclick={() => onQty(line.key, line.qty - 1)}
-                >-</button>
-                <input
-                  inputmode="numeric"
-                  aria-label="Quantity for {line.name}"
-                  readonly={line.source === 'mobile.device'}
-                  value={line.qty}
-                  oninput={(event) => commitQty(line, event.currentTarget.value, event.currentTarget)}
-                  onblur={(event) => {
-                    const qty = Number(event.currentTarget.value)
-                    if (!Number.isInteger(qty) || qty < 1) onQty(line.key, 0)
-                  }}
-                />
-                <button
-                  type="button"
-                  aria-label="Increase {line.name}"
-                  disabled={line.source === 'mobile.device'}
-                  onclick={() => onQty(line.key, line.qty + 1)}
-                >+</button>
-              </div>
-              <div class="cart-line-amount">
-                <strong>{money(line.rate * line.qty)}</strong>
-                <Button
-                  variant="ghost"
-                  class="text-danger cart-remove"
-                  aria-label="Remove {line.name}"
-                  onclick={() => onQty(line.key, 0)}
-                >×</Button>
-              </div>
-            </div>
-            <Slot
-              name="pos.line-detail"
-              context={{
-                line,
-                patch: (patch: LineMetadataPatch) => onLinePatch(line.key, patch),
-                currency,
-                locale,
-              }}
-            />
-          </div>
-        {/each}
+        <table class="cart-table">
+          <thead>
+            <tr>
+              <th scope="col">Item</th>
+              <th scope="col">Qty</th>
+              <th scope="col">Amount</th>
+              <th scope="col"><span class="sr-only">Remove</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each lines as line (line.key)}
+              <tr class="cart-row">
+                <td class="cart-item">
+                  <strong>{line.name}</strong>
+                  <span class="cart-rate">{money(line.rate)}</span>
+                </td>
+                <td class="cart-qty">
+                  <input
+                    class="cart-qty-input"
+                    data-cart-qty=""
+                    inputmode="numeric"
+                    aria-label="Quantity for {line.name}"
+                    readonly={line.source === 'mobile.device'}
+                    value={line.qty}
+                    oninput={(event) => commitQty(line, event.currentTarget.value, event.currentTarget)}
+                    onblur={(event) => {
+                      const qty = Number(event.currentTarget.value)
+                      if (!Number.isInteger(qty) || qty < 1) onQty(line.key, 0)
+                    }}
+                    onfocus={(event) => event.currentTarget.select()}
+                  />
+                </td>
+                <td class="cart-amount">{money(line.rate * line.qty)}</td>
+                <td class="cart-remove-cell">
+                  <button
+                    type="button"
+                    class="cart-remove"
+                    aria-label="Remove {line.name}"
+                    onclick={() => onQty(line.key, 0)}
+                  >×</button>
+                </td>
+              </tr>
+              {#if hasLineDetails}
+                <tr class="cart-detail-row">
+                  <td colspan="4">
+                    <Slot
+                      name="pos.line-detail"
+                      context={{
+                        line,
+                        patch: (patch: LineMetadataPatch) => onLinePatch(line.key, patch),
+                        currency,
+                        locale,
+                      }}
+                    />
+                  </td>
+                </tr>
+              {/if}
+            {/each}
+          </tbody>
+        </table>
       {/if}
     </div>
     <label class="bill-customer ui-field">
@@ -422,9 +453,6 @@
         setTenders: onTenders,
       }}
     />
-    {#if receipts}
-      <Switch class="skip-print" checked={skipPrint} label="Skip receipt" onchange={onSkipPrint} />
-    {/if}
     <div class="ui-totals">
       <div data-grand>
         <span>Total ({section.short_name})</span>
@@ -441,6 +469,5 @@
         {posting ? 'Posting…' : 'Add Bill (One Entry)'}
       </Button>
     </div>
-    {#if posted}<p class="ui-hint posted">{posted}</p>{/if}
   </footer>
 </div>

@@ -119,32 +119,32 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.35rem;
+  gap: 0.2rem;
   width: 100%;
-  min-height: 7rem;
-  padding: 0.75rem 0.875rem 0.875rem;
+  min-height: 5.25rem;
+  padding: 0.55rem 0.65rem 0.6rem;
 }
 
 .ui-tile .card-thumb {
   position: absolute;
-  top: 0.75rem;
-  right: 0.875rem;
-  width: 3.125rem;
-  height: 3.125rem;
-  border-radius: 0.625rem;
+  top: 0.5rem;
+  right: 0.55rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
   object-fit: cover;
   background: var(--ui-surface-2);
 }
 
 .ui-tile .card-body.has-photo .card-name,
 .ui-tile .card-body.has-photo .card-sub {
-  padding-right: 3.6rem;
+  padding-right: 2.9rem;
 }
 
 .ui-tile .card-name {
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   font-weight: 500;
-  line-height: 1.25;
+  line-height: 1.2;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -154,15 +154,20 @@
 .ui-tile .card-sub {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.35rem;
   color: var(--ui-text-muted);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   font-weight: 500;
 }
 
 .ui-tile .card-options {
   color: var(--ui-text-muted);
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .ui-tile .card-foot {
@@ -171,19 +176,19 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding-top: 0.5rem;
+  gap: 0.35rem;
+  padding-top: 0.3rem;
 }
 
 .ui-tile .price {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .ui-tile .card-stock {
   color: var(--ui-text-muted);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
 }
 
 .ui-tile[data-out-of-stock='true'] .card-stock {
@@ -248,34 +253,114 @@
   touch-action: pan-y;
 }
 
-.cart-line-block {
-  border-bottom: 1px solid var(--ui-border);
+.cart-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
 
-.cart-line-block .ui-cart-line {
-  border-bottom: 0;
+.cart-table th {
+  padding: 0.2rem 0.25rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ui-text-muted);
+  text-align: left;
+  border: 0;
+}
+
+.cart-table th:nth-child(2),
+.cart-table th:nth-child(3),
+.cart-table th:nth-child(4),
+.cart-table td.cart-qty,
+.cart-table td.cart-amount,
+.cart-table td.cart-remove-cell {
+  text-align: right;
+}
+
+.cart-table td {
+  padding: 0.28rem 0.25rem;
+  vertical-align: middle;
+  border: 0;
+}
+
+.cart-table .cart-item {
+  width: 48%;
+  min-width: 0;
+}
+
+.cart-table .cart-item strong {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cart-table .cart-rate {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--ui-text-muted);
+  font-size: 0.6875rem;
+}
+
+.cart-table .cart-qty {
+  width: 3.75rem;
+}
+
+.cart-qty-input {
+  width: 100%;
+  min-height: 2.25rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm, 0.4rem);
+  background: var(--ui-surface);
+  text-align: center;
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cart-qty-input:focus {
+  outline: 2px solid var(--ui-ring);
+  outline-offset: 1px;
+}
+
+.cart-table .cart-amount {
+  width: 4.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cart-table .cart-remove-cell {
+  width: 2.25rem;
   padding-inline: 0;
 }
 
-.cart-line-amount {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.35rem;
-  min-width: 7.5rem;
+.cart-remove {
+  appearance: none;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 0.4rem);
+  background: transparent;
+  color: var(--ui-danger);
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.cart-line-amount > strong {
-  font-size: 1rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-align: end;
+.cart-remove:hover {
+  background: color-mix(in oklch, var(--ui-danger) 12%, transparent);
 }
 
-.cart-line-amount .cart-remove {
-  flex: none;
-  padding-inline: 0.35rem;
+.cart-detail-row td {
+  padding: 0 0.25rem 0.15rem;
 }
 
 .bill-customer {
@@ -287,9 +372,6 @@
   color: var(--ui-text-muted);
 }
 
-.skip-print {
-  margin-top: 0.65rem;
-}
 
 .ui-totals {
   margin-top: 0.5rem;
@@ -356,7 +438,7 @@
 .stage {
   flex: 1;
   min-height: 0;
-  padding: 0.75rem 0.875rem 0.875rem;
+  padding: 0.75rem 0.875rem 0;
   display: flex;
 }
 
@@ -423,55 +505,39 @@
 }
 
 .stage[data-density='touch'] .ui-tile .card-body {
-  min-height: 8.5rem;
-  padding: 1rem;
-  gap: 0.45rem;
-}
-
-.stage[data-density='touch'] .ui-tile .card-name {
-  font-size: 1.05rem;
-}
-
-.stage[data-density='touch'] .ui-tile .price {
-  font-size: 1.125rem;
-}
-
-.stage[data-density='touch'] .ui-tile .card-thumb {
-  width: 3.5rem;
-  height: 3.5rem;
-}
-
-.stage[data-density='touch'] .suggest button {
-  min-height: 4rem;
-  padding: 0.75rem 1rem;
-  font-size: 1.05rem;
-}
-
-.stage[data-density='touch'] .ui-cart-line {
-  gap: 0.75rem;
-  padding-block: 0.85rem;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-}
-
-.stage[data-density='touch'] .cart-line-amount {
-  min-width: 8.5rem;
+  min-height: 5.75rem;
+  padding: 0.6rem 0.7rem 0.65rem;
   gap: 0.25rem;
 }
 
-.stage[data-density='touch'] .cart-line-amount > strong {
-  font-size: 1.05rem;
+.stage[data-density='touch'] .ui-tile .card-name {
+  font-size: 0.9rem;
 }
 
-.stage[data-density='touch'] .ui-stepper > button {
-  width: var(--ui-h-lg);
-  height: var(--ui-h-lg);
-  font-size: 1.5rem;
+.stage[data-density='touch'] .ui-tile .price {
+  font-size: 0.95rem;
 }
 
-.stage[data-density='touch'] .ui-stepper > input {
-  width: 4.25rem;
-  min-height: var(--ui-h-lg);
-  font-size: 1.2rem;
+.stage[data-density='touch'] .ui-tile .card-thumb {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.stage[data-density='touch'] .suggest button {
+  min-height: 3.25rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.95rem;
+}
+
+.stage[data-density='touch'] .cart-qty-input {
+  min-height: 2.5rem;
+  font-size: 1rem;
+}
+
+.stage[data-density='touch'] .cart-remove {
+  width: 2.35rem;
+  height: 2.35rem;
+  font-size: 1.3rem;
 }
 
 .stage[data-density='touch'] .ui-btn.post-bill,
@@ -479,15 +545,6 @@
   --btn-h: var(--ui-h-xl);
   min-height: var(--ui-h-xl);
   font-size: 1.2rem;
-}
-
-.stage[data-density='touch'] .cart-remove {
-  --btn-h: 2.75rem;
-  width: 2.75rem;
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  font-size: 1.5rem;
-  line-height: 1;
 }
 
 .stage[data-density='touch'] .payments-tender .method {
@@ -511,11 +568,30 @@
 .keys {
   display: flex;
   flex-shrink: 0;
-  gap: 0.875rem;
-  padding: 0.5rem 1rem 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 1rem 0.65rem;
   color: var(--ui-text-muted);
   font-size: 0.6875rem;
   font-weight: 500;
+}
+
+.keys-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.keys-skip {
+  flex: none;
+  margin-top: 0;
+  margin-inline-start: auto;
+  color: var(--ui-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .suggest {

@@ -1,6 +1,8 @@
 export { default as Button } from './Button.svelte'
+export { default as ConfirmDialog } from './ConfirmDialog.svelte'
 export { default as Field } from './Field.svelte'
 export { default as Input } from './Input.svelte'
+export { default as Modal } from './Modal.svelte'
 export { default as Segmented } from './Segmented.svelte'
 export { default as Select } from './Select.svelte'
 export { default as Switch } from './Switch.svelte'

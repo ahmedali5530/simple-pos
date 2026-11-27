@@ -15,11 +15,25 @@ struct CardView {
     issued_at: Option<String>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct LiabilityRow {
+    id: i32,
+    code: String,
+    issued: i32,
+    balance: i32,
+    status: String,
+    issued_bill_no: String,
+    issued_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct LiabilityReport {
     cards: i64,
+    /// Sum of original issue amounts on active cards with a remaining balance.
+    issued: i64,
+    /// Sum of remaining balances (outstanding liability).
     outstanding: i64,
-    rows: Vec<CardView>,
+    rows: Vec<LiabilityRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,12 +53,77 @@ struct VoidBody {
     code: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct IssueBody {
+    code: String,
+    amount: i32,
+}
+
 pub fn mount(routes: &mut PluginRoutes) -> Result<(), RegistrationError> {
     routes.get("cards", list_cards, "gift.read")?;
     routes.get("balance", balance, "gift.read")?;
     routes.get("liability", liability, "gift.read")?;
+    routes.post("issue", issue_card, "gift.write")?;
     routes.post("void", void_card, "gift.write")?;
     Ok(())
+}
+
+async fn issue_card(db: TenantDb, Json(body): Json<IssueBody>) -> Result<Json<CardView>, AppError> {
+    let code = normalize_code(&body.code)?;
+    if body.amount < 1 {
+        return Err(AppError::BadRequest(
+            "Enter a gift card amount greater than zero.".into(),
+        ));
+    }
+    let mut tx = db.begin(false).await?;
+    let existing: Option<(i32, String)> =
+        sqlx::query_as("SELECT id, status FROM gift_cards WHERE code = $1")
+            .bind(&code)
+            .fetch_optional(tx.conn())
+            .await?;
+    if let Some((_, status)) = existing {
+        return Err(AppError::BadRequest(if status == "void" {
+            format!("Gift card {code} is void and cannot be reissued.")
+        } else {
+            format!("Gift card {code} already exists.")
+        }));
+    }
+    let id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO gift_cards
+            (code, balance, status, issued_bill_id, issued_bill_no, issued_at)
+        VALUES ($1, $2, 'active', NULL, '', now())
+        RETURNING id
+        "#,
+    )
+    .bind(&code)
+    .bind(body.amount)
+    .fetch_one(tx.conn())
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO gift_ledger
+            (card_id, kind, amount, balance_after, bill_id, bill_no, note)
+        VALUES ($1, 'issue', $2, $2, NULL, '', 'issued in settings')
+        "#,
+    )
+    .bind(id)
+    .bind(body.amount)
+    .execute(tx.conn())
+    .await?;
+    let row = sqlx::query_as::<_, CardView>(
+        r#"
+        SELECT id, code, balance, status, issued_bill_no,
+               issued_at::text AS issued_at
+        FROM gift_cards
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_one(tx.conn())
+    .await?;
+    tx.commit().await?;
+    Ok(Json(row))
 }
 
 async fn list_cards(db: TenantDb) -> Result<Json<Vec<CardView>>, AppError> {
@@ -87,22 +166,34 @@ async fn balance(
 
 async fn liability(db: TenantDb) -> Result<Json<LiabilityReport>, AppError> {
     let mut tx = db.begin(true).await?;
-    let rows = sqlx::query_as::<_, CardView>(
+    let rows = sqlx::query_as::<_, LiabilityRow>(
         r#"
-        SELECT id, code, balance, status, issued_bill_no,
-               issued_at::text AS issued_at
-        FROM gift_cards
-        WHERE status = 'active' AND balance > 0
-        ORDER BY balance DESC, code
+        SELECT
+            c.id,
+            c.code,
+            COALESCE((
+                SELECT SUM(l.amount)::int
+                FROM gift_ledger l
+                WHERE l.card_id = c.id AND l.kind = 'issue'
+            ), c.balance) AS issued,
+            c.balance,
+            c.status,
+            c.issued_bill_no,
+            c.issued_at::text AS issued_at
+        FROM gift_cards c
+        WHERE c.status = 'active' AND c.balance > 0
+        ORDER BY c.balance DESC, c.code
         "#,
     )
     .fetch_all(tx.conn())
     .await?;
     let cards = rows.len() as i64;
+    let issued = rows.iter().map(|row| i64::from(row.issued)).sum();
     let outstanding = rows.iter().map(|row| i64::from(row.balance)).sum();
     tx.commit().await?;
     Ok(Json(LiabilityReport {
         cards,
+        issued,
         outstanding,
         rows,
     }))

@@ -15,6 +15,7 @@
   import { session } from '../../../lib/session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../../../lib/types'
   import type { LineMetadataPatch, PosLineDraft, PosTender } from '../../../platform/slots'
+  import { Switch } from '../../../lib/ui'
   import AttentionDialog from './AttentionDialog.svelte'
   import MeasureDialog from './MeasureDialog.svelte'
   import SectionPanel from './SectionPanel.svelte'
@@ -27,7 +28,6 @@
   let attention = $state<{ tone: 'error' | 'warning'; message: string } | null>(null)
   let carts = $state<Record<number, CartLine[]>>({})
   let filters = $state<Record<number, number | 'all'>>({})
-  let posted = $state<Record<number, string>>({})
   let focusId = $state<number | null>(null)
   let measure = $state<{ sectionId: number; itemId: number } | null>(null)
   let postingId = $state<number | null>(null)
@@ -153,7 +153,6 @@
         : [...lines, { key, item_id: item.id, variant_id: variant?.id ?? null, name, rate, units, qty, code, entry }],
     }
     lastKey = { ...lastKey, [sectionId]: key }
-    posted = { ...posted, [sectionId]: '' }
     attention = null
     return true
   }
@@ -233,7 +232,6 @@
           ],
     }
     lastKey = { ...lastKey, [sectionId]: key }
-    posted = { ...posted, [sectionId]: '' }
     attention = null
     return true
   }
@@ -448,10 +446,6 @@
       carts = { ...carts, [sectionId]: [] }
       customers = { ...customers, [sectionId]: '' }
       tendersBySection = { ...tendersBySection, [sectionId]: [] }
-      posted = {
-        ...posted,
-        [sectionId]: `${result.bill_no} posted · ${formatMoney(result.total, result.pos.currency, result.pos.locale)}`,
-      }
       try {
         if (printThis) await printReceipt(result.bill_no)
       } catch (error) {
@@ -627,7 +621,6 @@
           lines={linesFor(active.id)}
           focused={true}
           filter={filters[active.id] ?? 'all'}
-          posted={posted[active.id] ?? ''}
           currency={snapshot.currency}
           locale={snapshot.locale}
           onFilter={(filter) => (filters = { ...filters, [active.id]: filter })}
@@ -649,17 +642,25 @@
           onCustomer={(name) => (customers = { ...customers, [active.id]: name })}
           tenders={tendersBySection[active.id] ?? []}
           onTenders={(tenders) => (tendersBySection = { ...tendersBySection, [active.id]: tenders })}
-          {skipPrint}
-          receipts={pluginEnabled('printing')}
-          onSkipPrint={(skip) => (skipPrint = skip)}
         />
       {/if}
     </main>
   <footer class="keys" data-density="touch">
-    <span>F1–F8 switch section</span>
-    <span>Enter adds, selects, or applies +qty</span>
-    <span>F12 posts the focused bill</span>
-    <span>Esc clears it</span>
+    <div class="keys-hints">
+      <span>F1–F8 switch section</span>
+      <span>Enter adds, selects, or applies +qty</span>
+      <span>Ctrl ↑/↓ moves cart qty</span>
+      <span>F12 posts the focused bill</span>
+      <span>Esc clears it</span>
+    </div>
+    {#if pluginEnabled('printing')}
+      <Switch
+        class="keys-skip"
+        label="Skip receipt"
+        checked={skipPrint}
+        onchange={(skip) => (skipPrint = skip)}
+      />
+    {/if}
   </footer>
 {/if}
 

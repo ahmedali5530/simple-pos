@@ -18,9 +18,6 @@ export const giftPlugin = defineUiPlugin({
     },
   ],
   contributions: metadata.contributions.map((entry) => {
-    if (entry.id === 'gift.issue') {
-      return { ...entry, component: () => import('./screens/IssueLine.svelte') }
-    }
     if (entry.id === 'gift.redeem') {
       return { ...entry, component: () => import('./screens/RedeemTender.svelte') }
     }

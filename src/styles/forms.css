@@ -235,8 +235,7 @@
 
   .hint,
   .empty,
-  .field-error,
-  .posted {
+  .field-error {
     margin: 0.5rem 0 0;
     color: var(--color-ink-muted);
     font-size: 0.75rem;
@@ -246,11 +245,6 @@
     color: var(--color-danger);
     font-weight: 500;
     white-space: pre-wrap;
-  }
-
-  .posted {
-    color: var(--color-success);
-    font-weight: 600;
   }
 
   .check {
