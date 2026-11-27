@@ -1,3 +1,5 @@
+use axum::extract::Query;
+use axum::response::Response;
 use axum::Json;
 use platform_kernel::error::AppError;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
@@ -5,6 +7,7 @@ use sales_contract::SalesReceiptProvider;
 use serde::Deserialize;
 
 use crate::authority::SubmitLine;
+use crate::export::{self, ExportFormat};
 use crate::settings::{self, FiscalSettingsForm};
 use crate::submit;
 
@@ -83,10 +86,32 @@ async fn retry_submission(
     Ok(Json(row))
 }
 
+#[derive(Deserialize)]
+struct ExportQuery {
+    format: String,
+}
+
+async fn export_report(
+    db: TenantDb,
+    Query(query): Query<ExportQuery>,
+) -> Result<Response, AppError> {
+    let format = ExportFormat::parse(&query.format)?;
+    let mut tx = db.begin(true).await?;
+    let rows = submit::list_recent(&mut tx, 10_000).await?;
+    tx.commit().await?;
+    let bytes = export::build(format, &rows)?;
+    Ok(export::file_response(
+        &format!("fiscal-submissions.{}", format.extension()),
+        format.content_type(),
+        bytes,
+    ))
+}
+
 pub fn mount(routes: &mut PluginRoutes) -> Result<(), RegistrationError> {
     routes.get("settings", get_settings, "fiscal.write")?;
     routes.put("settings", put_settings, "fiscal.write")?;
     routes.get("submissions", list_submissions, "fiscal.read")?;
+    routes.get("export", export_report, "fiscal.read")?;
     routes.post("retry", retry_submission, "fiscal.write")?;
     Ok(())
 }

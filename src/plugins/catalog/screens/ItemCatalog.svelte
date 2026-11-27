@@ -7,6 +7,10 @@
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Segmented, Select } from '../../../lib/ui'
   import Slot from '../../../platform/Slot.svelte'
+  import {
+    hasExclusiveItemOptions,
+    prepareItemOptions,
+  } from '../../../platform/itemOptions'
   import type { ExtraSave } from '../../../platform/slots'
 
   interface Props {
@@ -55,6 +59,14 @@
         units = []
       })
   })
+
+  $effect(() => {
+    void prepareItemOptions()
+  })
+
+  const matrixItem = $derived(
+    typeof editing === 'number' ? hasExclusiveItemOptions(editing) : false,
+  )
   let baseRate = $state('')
   let scale = $state('1')
   let variants = $state<DraftOption[]>([])
@@ -203,6 +215,9 @@
   }
 
   function summary(item: PosItem) {
+    if (hasExclusiveItemOptions(item.id) || item.variants.length > 4) {
+      if (item.variants.length) return `${item.variants.length} variants`
+    }
     if (item.variants.length) return item.variants.map((variant) => variant.name).join(' · ')
     if (item.prompt === 'quantity') return 'Asks quantity / weight'
     if (item.prompt === 'price') return 'Asks price'
@@ -228,7 +243,7 @@
       toast.error('Choose a section and a category.')
       return
     }
-    const asking = variants.length ? 'none' : prompt
+    const asking = matrixItem || variants.length ? 'none' : prompt
     let nextBase: number | null = null
     let nextScale = 1
     if (asking !== 'none') {
@@ -243,27 +258,30 @@
       nextBase = Number(baseRate)
       nextScale = Number(scale)
     }
+    // Matrix owns SKUs; do not rewrite them from the hand-edited options list.
     const options = []
-    for (const variant of variants) {
-      if (!variant.name.trim()) {
-        toast.error('Name each option.')
-        return
+    if (!matrixItem) {
+      for (const variant of variants) {
+        if (!variant.name.trim()) {
+          toast.error('Name each option.')
+          return
+        }
+        if (!whole(variant.rate) || Number(variant.rate) < 1) {
+          toast.error(`${variant.name.trim()} needs a rate above 0.`)
+          return
+        }
+        if (!whole(variant.units) || Number(variant.units) < 1) {
+          toast.error(`${variant.name.trim()} must take at least 1 from stock.`)
+          return
+        }
+        options.push({
+          id: variant.id,
+          name: variant.name.trim(),
+          rate: Number(variant.rate),
+          units: Number(variant.units),
+          barcode: variant.barcode.trim() || null,
+        })
       }
-      if (!whole(variant.rate) || Number(variant.rate) < 1) {
-        toast.error(`${variant.name.trim()} needs a rate above 0.`)
-        return
-      }
-      if (!whole(variant.units) || Number(variant.units) < 1) {
-        toast.error(`${variant.name.trim()} must take at least 1 from stock.`)
-        return
-      }
-      options.push({
-        id: variant.id,
-        name: variant.name.trim(),
-        rate: Number(variant.rate),
-        units: Number(variant.units),
-        barcode: variant.barcode.trim() || null,
-      })
     }
     try {
       const result = await onSave(
@@ -304,7 +322,18 @@
       }
       loaded = result.item.id
       editing = result.item.id
-      fill(result.item)
+      // Reload after plugin extras (matrix generate) so variants match the database.
+      try {
+        const catalog = await loadCatalog()
+        onImported(catalog)
+        const refreshed =
+          catalog.sections
+            .flatMap((section) => section.items)
+            .find((entry) => entry.id === result.item.id) ?? result.item
+        fill(refreshed)
+      } catch {
+        fill(result.item)
+      }
       if (problems.length) toast.error(problems.join(' '))
       else toastSaved('Item saved.')
     } catch (error) {
@@ -428,35 +457,46 @@
         </Select>
       </label>
 
-      <div class="option-block">
-        <h3>Options</h3>
-        <p class="hint">Piece and pack, or full and half. Each option has its own rate and takes its own amount from stock.</p>
-        {#each variants as variant, index (variant.id ?? `new-${index}`)}
-          <div class="variant-edit">
-            <label>
-              Name
-              <Input bind:value={variant.name} />
-            </label>
-            <label>
-              Rate
-              <Input inputmode="numeric" bind:value={variant.rate} />
-            </label>
-            <label>
-              Stock units
-              <Input inputmode="numeric" bind:value={variant.units} />
-            </label>
-            <label>
-              Barcode
-              <Input bind:value={variant.barcode} />
-            </label>
-            <Button variant="link" class="text-danger" onclick={() => removeOption(index)}>Remove</Button>
-          </div>
-        {/each}
-        <Button variant="secondary" class="my-3" onclick={addOption}>Add option</Button>
-      </div>
+      {#if matrixItem}
+        <div class="option-block">
+          <h3>Variants</h3>
+          <p class="hint">
+            {variants.length
+              ? `${variants.length} variants from the matrix below. Edit groups and generate there — not as hand options.`
+              : 'Enable the matrix below and generate variants.'}
+          </p>
+        </div>
+      {:else}
+        <div class="option-block">
+          <h3>Options</h3>
+          <p class="hint">Piece and pack, or full and half. Each option has its own rate and takes its own amount from stock.</p>
+          {#each variants as variant, index (variant.id ?? `new-${index}`)}
+            <div class="variant-edit">
+              <label>
+                Name
+                <Input bind:value={variant.name} />
+              </label>
+              <label>
+                Rate
+                <Input inputmode="numeric" bind:value={variant.rate} />
+              </label>
+              <label>
+                Stock units
+                <Input inputmode="numeric" bind:value={variant.units} />
+              </label>
+              <label>
+                Barcode
+                <Input bind:value={variant.barcode} />
+              </label>
+              <Button variant="link" class="text-danger" onclick={() => removeOption(index)}>Remove</Button>
+            </div>
+          {/each}
+          <Button variant="secondary" class="my-3" onclick={addOption}>Add option</Button>
+        </div>
+      {/if}
 
-      {#if variants.length}
-        <p class="field-error">This item sells by its options, so the cashier is not asked for a quantity or a price.</p>
+      {#if matrixItem || variants.length}
+        <p class="field-error">This item sells by its variants, so the cashier is not asked for a quantity or a price.</p>
       {:else}
         <Segmented
           label="What the cashier enters"
@@ -490,7 +530,7 @@
         name="catalog.item-form"
         context={{
           item: selected?.item ?? null,
-          itemId: typeof editing === 'number' ? editing : null,
+          itemId: typeof editing === 'number' ? editing : selected?.item.id ?? null,
           editing,
           registerExtraSave,
         }}

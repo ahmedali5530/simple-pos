@@ -12,6 +12,7 @@ use platform_kernel::routes::{PluginRoutes, RegistrationError};
 use printing_contract::register_receipt_contribute;
 
 mod authority;
+mod export;
 mod receipt;
 mod routes;
 mod sale;

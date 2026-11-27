@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadReports } from '../../../lib/api'
+  import { exportReport, loadReports } from '../../../lib/api'
   import { formatCost, formatMoney } from '../../../lib/money'
   import type { ReportSpan } from '../../../lib/range'
   import type { Reports } from '../../../lib/types'
@@ -20,6 +20,8 @@
   let headId = $state('all')
   let query = $state('')
   let openBill = $state<number | null>(null)
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
+  let lastSpan = $state<Extract<ReportSpan, { kind: 'ready' }> | null>(null)
 
   function money(amount: number) {
     return formatMoney(amount, currency, locale)
@@ -58,6 +60,7 @@
   )
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
+    lastSpan = span
     failed = false
     try {
       report = await loadReports(span.from, span.to)
@@ -65,6 +68,18 @@
       report = null
       failed = true
       toastError(reason, 'The report did not open.')
+    }
+  }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    if (!lastSpan) return
+    exporting = format
+    try {
+      await exportReport('sales', format, lastSpan.from, lastSpan.to)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
     }
   }
 </script>
@@ -125,15 +140,23 @@
           <h2>Sales Report — “One Entry” Bill Log</h2>
           <p class="hint">Profit is the bill total minus the cost of those items</p>
         </div>
-        <label class="head-filter">
-          <span class="sr-only">Business head</span>
-          <Select bind:value={headId}>
-            <option value="all">All Business Heads</option>
-            {#each report.sections as section (section.id)}
-              <option value={section.short_name}>{section.short_name}</option>
-            {/each}
-          </Select>
-        </label>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
+          <label class="head-filter">
+            <span class="sr-only">Business head</span>
+            <Select bind:value={headId}>
+              <option value="all">All Business Heads</option>
+              {#each report.sections as section (section.id)}
+                <option value={section.short_name}>{section.short_name}</option>
+              {/each}
+            </Select>
+          </label>
+        </div>
       </div>
       <input class="input mb-2" placeholder="Search bills" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={bills} estimate={58} columns={7} reset="{headId}:{query}" key={(bill) => bill.id}>

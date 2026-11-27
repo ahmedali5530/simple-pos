@@ -1,8 +1,11 @@
+use axum::extract::Query;
+use axum::response::Response;
 use axum::Json;
 use platform_kernel::error::AppError;
 use platform_kernel::routes::{PluginRoutes, RegistrationError, TenantDb};
 use serde::{Deserialize, Serialize};
 
+use crate::export::{self, ExportFormat};
 use crate::tender::normalize_code;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -16,14 +19,19 @@ struct CardView {
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
-struct LiabilityRow {
-    id: i32,
-    code: String,
-    issued: i32,
-    balance: i32,
-    status: String,
-    issued_bill_no: String,
-    issued_at: Option<String>,
+pub struct LiabilityRow {
+    pub id: i32,
+    pub code: String,
+    pub issued: i32,
+    pub balance: i32,
+    pub status: String,
+    pub issued_bill_no: String,
+    pub issued_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    format: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,9 +71,30 @@ pub fn mount(routes: &mut PluginRoutes) -> Result<(), RegistrationError> {
     routes.get("cards", list_cards, "gift.read")?;
     routes.get("balance", balance, "gift.read")?;
     routes.get("liability", liability, "gift.read")?;
+    routes.get("export", export_report, "gift.read")?;
     routes.post("issue", issue_card, "gift.write")?;
     routes.post("void", void_card, "gift.write")?;
     Ok(())
+}
+
+async fn export_report(
+    db: TenantDb,
+    Query(query): Query<ExportQuery>,
+) -> Result<Response, AppError> {
+    let format = ExportFormat::parse(&query.format)?;
+    let report = load_liability(&db).await?;
+    let bytes = export::build(
+        format,
+        report.cards,
+        report.issued,
+        report.outstanding,
+        &report.rows,
+    )?;
+    Ok(export::file_response(
+        &format!("gift-liability.{}", format.extension()),
+        format.content_type(),
+        bytes,
+    ))
 }
 
 async fn issue_card(db: TenantDb, Json(body): Json<IssueBody>) -> Result<Json<CardView>, AppError> {
@@ -164,7 +193,7 @@ async fn balance(
     }))
 }
 
-async fn liability(db: TenantDb) -> Result<Json<LiabilityReport>, AppError> {
+async fn load_liability(db: &TenantDb) -> Result<LiabilityReport, AppError> {
     let mut tx = db.begin(true).await?;
     let rows = sqlx::query_as::<_, LiabilityRow>(
         r#"
@@ -191,12 +220,16 @@ async fn liability(db: TenantDb) -> Result<Json<LiabilityReport>, AppError> {
     let issued = rows.iter().map(|row| i64::from(row.issued)).sum();
     let outstanding = rows.iter().map(|row| i64::from(row.balance)).sum();
     tx.commit().await?;
-    Ok(Json(LiabilityReport {
+    Ok(LiabilityReport {
         cards,
         issued,
         outstanding,
         rows,
-    }))
+    })
+}
+
+async fn liability(db: TenantDb) -> Result<Json<LiabilityReport>, AppError> {
+    Ok(Json(load_liability(&db).await?))
 }
 
 async fn void_card(db: TenantDb, Json(body): Json<VoidBody>) -> Result<Json<CardView>, AppError> {

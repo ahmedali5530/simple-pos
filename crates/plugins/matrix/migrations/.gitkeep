@@ -1,0 +1,1 @@
+Plugin SQL migrations live here. Migration::new(1, "name", include_str!("../migrations/001_x.sql")).

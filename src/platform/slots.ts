@@ -50,6 +50,25 @@ export interface PosItemOptionsContext {
   locale: string
 }
 
+/** Stock In/Out form extension when a catalog item is selected. */
+export interface InventoryStockFormContext {
+  item: PosItem
+  direction: 'in' | 'out'
+  kind: string
+  currency: string
+  locale: string
+  onAdjusted: () => void | Promise<void>
+}
+
+/** Extra rows under the live stock summary table. */
+export interface InventoryStockSummaryContext {
+  currency: string
+  locale: string
+  headId: string
+  query: string
+  refreshKey: number
+}
+
 export type LineMetadataPatch = Partial<Pick<CartLine, 'source' | 'reference' | 'details'>>
 
 export interface PosLineDetailContext {

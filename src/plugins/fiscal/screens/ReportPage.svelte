@@ -4,6 +4,7 @@
   import { toast, toastError } from '../../../lib/toast'
   import { Button } from '../../../lib/ui'
   import {
+    exportFiscalReport,
     listFiscalSubmissions,
     retryFiscalSubmission,
     type FiscalSubmission,
@@ -14,6 +15,7 @@
   let loading = $state(true)
   let pending = $state('')
   let query = $state('')
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
   let span = $state<Extract<ReportSpan, { kind: 'ready' }>>({ kind: 'ready' })
   let rangeLabel = $state('All dates')
 
@@ -75,6 +77,17 @@
       pending = ''
     }
   }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    exporting = format
+    try {
+      await exportFiscalReport(format)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
+    }
+  }
 </script>
 
 <div class="report-board">
@@ -125,6 +138,14 @@
         <div>
           <h2>Fiscal submissions</h2>
           <p class="hint">Invoices sent to FBR/PRA. Failed rows can be retried without posting the sale again.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
         </div>
       </div>
       <input class="input mb-2" placeholder="Search bills or invoices" bind:value={query} />

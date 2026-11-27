@@ -6,7 +6,7 @@
   import type { CartLine, Category, ItemVariant, PosItem, PosSection } from '../../../lib/types'
   import { Button } from '../../../lib/ui'
   import Slot from '../../../platform/Slot.svelte'
-  import { hasItemOptions } from '../../../platform/itemOptions'
+  import { hasExclusiveItemOptions, hasItemOptions } from '../../../platform/itemOptions'
   import { slotsFor } from '../../../plugins/registry'
   import type { AddPosLine, LineMetadataPatch, PosTender } from '../../../platform/slots'
 
@@ -94,7 +94,9 @@
   })
 
   const reserved = (itemId: number) =>
-    lines.filter((line) => line.item_id === itemId).reduce((sum, line) => sum + line.qty * line.units, 0)
+    lines
+      .filter((line) => line.item_id === itemId && !(line.reference && line.source))
+      .reduce((sum, line) => sum + line.qty * line.units, 0)
 
   const minimum = (item: PosItem) =>
     item.variants.length ? Math.min(...item.variants.map((variant) => variant.units)) : 1
@@ -338,9 +340,13 @@
             {#if item.barcode}<span class="ui-badge">{item.barcode}</span>{/if}
           </span>
           {#if item.variants.length}
-            <span class="card-options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
+            {#if hasExclusiveItemOptions(item.id) || item.variants.length > 4}
+              <span class="ui-badge" data-tone="info">{item.variants.length} variants</span>
+            {:else}
+              <span class="card-options">{item.variants.map((variant) => variant.name).join(' · ')}</span>
+            {/if}
           {:else if hasItemOptions(item.id)}
-            <span class="ui-badge" data-tone="info">Choose IMEI</span>
+            <span class="ui-badge" data-tone="info">Choose variant</span>
           {:else if item.prompt === 'quantity'}
             <span class="ui-badge" data-tone="info">Asks quantity / weight</span>
           {:else if item.prompt === 'price'}
@@ -349,7 +355,13 @@
           <span class="card-foot">
             <span class="price">{priceLabel(item)}</span>
             <span class="card-stock">
-              {hasItemOptions(item.id) ? 'IMEI tracked' : `${item.stock} on hand`}
+              {#if hasExclusiveItemOptions(item.id)}
+                {item.variants.length ? `${item.variants.length} variants` : 'Variants'}
+              {:else if hasItemOptions(item.id)}
+                Variants
+              {:else}
+                {item.stock} on hand
+              {/if}
             </span>
           </span>
         </span>

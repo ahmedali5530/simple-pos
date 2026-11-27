@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use catalog_contract::CatalogApi;
 
@@ -261,17 +261,22 @@ pub async fn stock_report(
 ) -> Result<inventory_contract::StockReport, AppError> {
     check_range_tx(tx, from, to).await?;
     let snapshot = catalog.0.snapshot(tx).await?;
+    let matrix_item_ids = matrix_item_ids(tx).await?;
     let stock_units = snapshot
         .items
         .iter()
+        .filter(|item| !matrix_item_ids.contains(&item.id))
         .map(|item| i64::from(item.stock))
-        .sum();
+        .sum::<i64>()
+        + matrix_stock_units(tx).await?;
     let stock_value = snapshot
         .items
         .iter()
+        .filter(|item| !matrix_item_ids.contains(&item.id))
         .map(|item| i64::from(item.stock).saturating_mul(item.cost))
-        .sum();
-    let movement_count = sqlx::query_scalar::<_, i64>(
+        .sum::<i64>()
+        + matrix_stock_value(tx).await?;
+    let mut movement_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
         FROM stock_movements m
@@ -283,6 +288,20 @@ pub async fn stock_report(
     .bind(to)
     .fetch_one(tx.conn())
     .await?;
+    if matrix_tables_present(tx).await? {
+        movement_count += sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM matrix_sku_movements m
+            WHERE ($1::text IS NULL OR m.created_at >= $1::timestamptz)
+              AND ($2::text IS NULL OR m.created_at < $2::timestamptz)
+            "#,
+        )
+        .bind(from)
+        .bind(to)
+        .fetch_one(tx.conn())
+        .await?;
+    }
     let movements = movements_tx(tx, catalog, None, from, to, LIST_LIMIT).await?;
     let mix = product_mix_tx(tx, catalog, from, to).await?;
     Ok(inventory_contract::StockReport {
@@ -319,6 +338,7 @@ async fn product_mix_tx(
 ) -> Result<ProductMix, AppError> {
     check_range_tx(tx, from, to).await?;
     let snapshot = catalog.0.snapshot(tx).await?;
+    let matrix_item_ids = matrix_item_ids(tx).await?;
     let range: Vec<(i32, i64, i64)> = sqlx::query_as(
         r#"
         SELECT item_id,
@@ -355,7 +375,7 @@ async fn product_mix_tx(
         .iter()
         .map(|section| (section.id, (section.short_name.clone(), section.pos_order)))
         .collect();
-    let item_section: HashMap<i32, i32> = snapshot
+    let mut sort_order: HashMap<i32, i32> = snapshot
         .items
         .iter()
         .map(|item| {
@@ -371,6 +391,7 @@ async fn product_mix_tx(
     let mut lines: Vec<MixLine> = snapshot
         .items
         .iter()
+        .filter(|item| !matrix_item_ids.contains(&item.id))
         .filter_map(|item| {
             let (qty_in, qty_out) = *range.get(&item.id)?;
             let (section_name, _) = sections
@@ -388,12 +409,86 @@ async fn product_mix_tx(
             })
         })
         .collect();
+    if matrix_tables_present(tx).await? {
+        #[derive(sqlx::FromRow)]
+        struct MatrixMixRow {
+            variant_id: i32,
+            item_id: i32,
+            stock: i32,
+            variant_name: String,
+            barcode: Option<String>,
+            parent_name: String,
+            section_id: i32,
+            qty_in: i64,
+            qty_out: i64,
+        }
+        let matrix_range: Vec<MatrixMixRow> = sqlx::query_as(
+            r#"
+            SELECT
+                s.variant_id,
+                s.item_id,
+                s.stock,
+                v.name AS variant_name,
+                v.barcode,
+                i.name AS parent_name,
+                i.section_id,
+                COALESCE(SUM(CASE WHEN m.qty > 0 THEN m.qty ELSE 0 END), 0)::bigint AS qty_in,
+                COALESCE(SUM(CASE WHEN m.qty < 0 THEN -m.qty ELSE 0 END), 0)::bigint AS qty_out
+            FROM matrix_skus s
+            JOIN item_variants v ON v.id = s.variant_id
+            JOIN items i ON i.id = s.item_id
+            JOIN matrix_sku_movements m ON m.variant_id = s.variant_id
+            WHERE ($1::text IS NULL OR m.created_at >= $1::timestamptz)
+              AND ($2::text IS NULL OR m.created_at < $2::timestamptz)
+            GROUP BY s.variant_id, s.item_id, s.stock, v.name, v.barcode, i.name, i.section_id
+            "#,
+        )
+        .bind(from)
+        .bind(to)
+        .fetch_all(tx.conn())
+        .await?;
+        let matrix_later: Vec<(i32, i64)> = sqlx::query_as(
+            r#"
+            SELECT variant_id, COALESCE(SUM(qty), 0)::bigint
+            FROM matrix_sku_movements
+            WHERE ($1::text IS NULL OR created_at >= $1::timestamptz)
+            GROUP BY variant_id
+            "#,
+        )
+        .bind(from)
+        .fetch_all(tx.conn())
+        .await?;
+        let matrix_later: HashMap<i32, i64> = matrix_later.into_iter().collect();
+        for row in matrix_range {
+            let line_id = -row.variant_id;
+            let order = sections
+                .get(&row.section_id)
+                .map(|(_, pos_order)| *pos_order)
+                .unwrap_or(0);
+            sort_order.insert(line_id, order);
+            let (section_name, _) = sections
+                .get(&row.section_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), 0));
+            lines.push(MixLine {
+                id: line_id,
+                barcode: row.barcode,
+                name: format!("{} · {}", row.parent_name, row.variant_name),
+                section_name,
+                qty_in: row.qty_in,
+                qty_out: row.qty_out,
+                opening: i64::from(row.stock)
+                    - matrix_later.get(&row.variant_id).copied().unwrap_or(0),
+            });
+            let _ = row.item_id;
+        }
+    }
     lines.sort_by(|a, b| {
-        item_section
+        sort_order
             .get(&a.id)
             .copied()
             .unwrap_or(0)
-            .cmp(&item_section.get(&b.id).copied().unwrap_or(0))
+            .cmp(&sort_order.get(&b.id).copied().unwrap_or(0))
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
     });
@@ -437,15 +532,15 @@ async fn movements_tx(
     limit: i64,
 ) -> Result<Vec<StockMovement>, AppError> {
     let snapshot = catalog.0.snapshot(tx).await?;
-    let items: HashMap<i32, &str> = snapshot
+    let items: HashMap<i32, String> = snapshot
         .items
         .iter()
-        .map(|item| (item.id, item.name.as_str()))
+        .map(|item| (item.id, item.name.clone()))
         .collect();
-    let sections: HashMap<i32, &str> = snapshot
+    let sections: HashMap<i32, String> = snapshot
         .sections
         .iter()
-        .map(|section| (section.id, section.short_name.as_str()))
+        .map(|section| (section.id, section.short_name.clone()))
         .collect();
     let item_sections: HashMap<i32, i32> = snapshot
         .items
@@ -475,28 +570,133 @@ async fn movements_tx(
     .bind(limit)
     .fetch_all(tx.conn())
     .await?;
-    Ok(rows
+    let mut movements: Vec<StockMovement> = rows
         .into_iter()
         .map(|row| StockMovement {
             id: row.id,
             item_id: row.item_id,
             item_name: items
                 .get(&row.item_id)
-                .copied()
-                .unwrap_or("Unknown item")
-                .to_string(),
+                .cloned()
+                .unwrap_or_else(|| "Unknown item".into()),
             section_name: item_sections
                 .get(&row.item_id)
                 .and_then(|section_id| sections.get(section_id))
-                .copied()
-                .unwrap_or("")
-                .to_string(),
+                .cloned()
+                .unwrap_or_default(),
             qty: row.qty,
             reason: row.reason,
             bill_no: row.bill_no,
             created_at: row.created_at,
         })
-        .collect())
+        .collect();
+    if matrix_tables_present(tx).await? {
+        #[derive(sqlx::FromRow)]
+        struct MatrixMoveRow {
+            id: i32,
+            item_id: i32,
+            qty: i32,
+            reason: String,
+            created_at: String,
+            parent_name: String,
+            variant_name: String,
+            section_id: i32,
+        }
+        let matrix_rows = sqlx::query_as::<_, MatrixMoveRow>(
+            r#"
+            SELECT
+                m.id,
+                m.item_id,
+                m.qty,
+                m.reason,
+                to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                i.name AS parent_name,
+                v.name AS variant_name,
+                i.section_id
+            FROM matrix_sku_movements m
+            JOIN matrix_skus s ON s.variant_id = m.variant_id
+            JOIN item_variants v ON v.id = m.variant_id
+            JOIN items i ON i.id = m.item_id
+            WHERE ($1::int IS NULL OR m.item_id = $1)
+              AND ($2::text IS NULL OR m.created_at >= $2::timestamptz)
+              AND ($3::text IS NULL OR m.created_at < $3::timestamptz)
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT $4
+            "#,
+        )
+        .bind(item_id)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .fetch_all(tx.conn())
+        .await?;
+        movements.extend(matrix_rows.into_iter().map(|row| StockMovement {
+            id: -row.id,
+            item_id: row.item_id,
+            item_name: format!("{} · {}", row.parent_name, row.variant_name),
+            section_name: sections.get(&row.section_id).cloned().unwrap_or_default(),
+            qty: row.qty,
+            reason: row.reason,
+            bill_no: None,
+            created_at: row.created_at,
+        }));
+        movements.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.abs().cmp(&a.id.abs()))
+        });
+        movements.truncate(limit as usize);
+    }
+    Ok(movements)
+}
+
+async fn matrix_tables_present(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+) -> Result<bool, AppError> {
+    let present = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('public.matrix_skus') IS NOT NULL",
+    )
+    .fetch_one(tx.conn())
+    .await?;
+    Ok(present)
+}
+
+async fn matrix_item_ids(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+) -> Result<HashSet<i32>, AppError> {
+    if !matrix_tables_present(tx).await? {
+        return Ok(HashSet::new());
+    }
+    let ids = sqlx::query_scalar::<_, i32>("SELECT DISTINCT item_id FROM matrix_skus")
+        .fetch_all(tx.conn())
+        .await?;
+    Ok(ids.into_iter().collect())
+}
+
+async fn matrix_stock_units(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+) -> Result<i64, AppError> {
+    if !matrix_tables_present(tx).await? {
+        return Ok(0);
+    }
+    let units = sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(stock), 0)::bigint FROM matrix_skus")
+        .fetch_one(tx.conn())
+        .await?;
+    Ok(units)
+}
+
+async fn matrix_stock_value(
+    tx: &mut platform_kernel::context::TenantTx<'_>,
+) -> Result<i64, AppError> {
+    if !matrix_tables_present(tx).await? {
+        return Ok(0);
+    }
+    let value = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(stock::bigint * avg_cost), 0)::bigint FROM matrix_skus",
+    )
+    .fetch_one(tx.conn())
+    .await?;
+    Ok(value)
 }
 
 async fn check_range_tx(

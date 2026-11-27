@@ -34,11 +34,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde"] }
 plugin-payments = { path = "../plugins/payments", optional = true }
 plugin-fiscal = { path = "../plugins/fiscal", optional = true }
+plugin-matrix = { path = "../plugins/matrix", optional = true }
 
 [features]
 # Compile-time plugin selection. The default deployment includes the current whole plugin set.
 default = ["plugins-all"]
-plugins-all = ["plugin-core", "plugin-catalog", "plugin-inventory", "plugin-pos", "plugin-cash", "plugin-printing", "plugin-reports", "plugin-tailor", "plugin-mobile", "plugin-gift", "plugin-payments", "plugin-fiscal"]
+plugins-all = ["plugin-core", "plugin-catalog", "plugin-inventory", "plugin-pos", "plugin-cash", "plugin-printing", "plugin-reports", "plugin-tailor", "plugin-mobile", "plugin-gift", "plugin-payments", "plugin-fiscal", "plugin-matrix"]
 plugin-core = ["dep:plugin-core"]
 plugin-catalog = ["dep:plugin-catalog"]
 # Inventory/POS/cash/reports/mobile stay compile-standalone; pair providers at deploy time.
@@ -56,6 +57,7 @@ plugin-fiscal = ["dep:plugin-fiscal"]
 web = ["dep:axum-frontend", "dep:rust-embed"]
 # Desktop till: the web files plus a private Postgres. Do not use this on a VPS.
 bundle = ["web", "dep:postgresql_embedded"]
+plugin-matrix = ["dep:plugin-matrix"]
 
 [dev-dependencies]
 plugin-pos = { path = "../plugins/pos" }

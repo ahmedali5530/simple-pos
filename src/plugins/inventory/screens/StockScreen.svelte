@@ -6,6 +6,11 @@
   import type { Category, PosSection, PosSnapshot, StockBalance } from '../../../lib/types'
   import { toast, toastError, toastSaved } from '../../../lib/toast'
   import { Button, Input, Segmented, Select } from '../../../lib/ui'
+  import {
+    hasExclusiveItemOptions,
+    prepareItemOptions,
+  } from '../../../platform/itemOptions'
+  import Slot from '../../../platform/Slot.svelte'
 
   interface Props {
     sections: PosSection[]
@@ -46,6 +51,7 @@
   let balances = $state<StockBalance[]>([])
   let saving = $state(false)
   let savingItem = $state(false)
+  let summaryRefresh = $state(0)
   let newSection = $state('')
   let newBarcode = $state('')
   let newName = $state('')
@@ -57,6 +63,7 @@
 
   const catalog = $derived(sections.flatMap((section) => section.items.map((item) => ({ item, section }))))
   const selected = $derived(catalog.find((row) => String(row.item.id) === itemId) ?? null)
+  const matrixExclusive = $derived(selected ? hasExclusiveItemOptions(selected.item.id) : false)
   const itemHits = $derived.by(() => {
     const needle = itemQuery.trim().toLowerCase()
     const rows = needle
@@ -83,6 +90,7 @@
   })
 
   onMount(() => {
+    void prepareItemOptions()
     loadStockSummary()
       .then((rows) => {
         balances = rows
@@ -91,6 +99,15 @@
         toast.error('The stock summary did not open.')
       })
   })
+
+  async function refreshSummaryOnly() {
+    try {
+      balances = await loadStockSummary()
+      summaryRefresh += 1
+    } catch {
+      toast.error('The stock summary did not refresh.')
+    }
+  }
 
   function stockOf(id: number, fallback: number) {
     return balances.find((row) => row.id === id)?.stock ?? fallback
@@ -382,42 +399,56 @@
         </div>
       {/if}
     </div>
-    <div class="stock-pair">
-      <label>
-        Quantity
-        <Input inputmode="numeric" bind:value={qty} />
-      </label>
-      <label>
-        Total amount ({currency})
-        <Input inputmode="numeric" bind:value={amount} placeholder="Optional" />
-      </label>
-    </div>
-    <div class="stock-pair">
-      <label>
-        Unit price
-        <Input readonly tabindex="-1" value={unitPrice == null ? '' : money(unitPrice)} />
-      </label>
-      <label>
-        Reason / Note
-        <Input bind:value={note} placeholder="e.g. Supplier / Damage" />
-      </label>
-    </div>
-    {#if selected}
-      <p class="hint">
-        Average cost {formatCost(selected.item.cost, currency, locale)}.
-        {stockOf(selected.item.id, selected.item.stock)} on hand is worth {formatCost(stockOf(selected.item.id, selected.item.stock) * selected.item.cost, currency, locale)}.
-      </p>
+    {#if selected && matrixExclusive}
+      <Slot
+        name="inventory.stock-form"
+        context={{
+          item: selected.item,
+          direction,
+          kind,
+          currency,
+          locale,
+          onAdjusted: refreshSummaryOnly,
+        }}
+      />
+    {:else}
+      <div class="stock-pair my-3">
+        <label>
+          Quantity
+          <Input inputmode="numeric" bind:value={qty} />
+        </label>
+        <label>
+          Total amount ({currency})
+          <Input inputmode="numeric" bind:value={amount} placeholder="Optional" />
+        </label>
+      </div>
+      <div class="stock-pair">
+        <label>
+          Unit price
+          <Input readonly tabindex="-1" value={unitPrice == null ? '' : money(unitPrice)} />
+        </label>
+        <label>
+          Reason / Note
+          <Input bind:value={note} placeholder="e.g. Supplier / Damage" />
+        </label>
+      </div>
+      {#if selected}
+        <p class="hint">
+          Average cost {formatCost(selected.item.cost, currency, locale)}.
+          {stockOf(selected.item.id, selected.item.stock)} on hand is worth {formatCost(stockOf(selected.item.id, selected.item.stock) * selected.item.cost, currency, locale)}.
+        </p>
+      {/if}
+      {#if projected != null}
+        <p class="hint">This purchase sets the average cost to {formatCost(projected, currency, locale)}.</p>
+      {:else if kind === 'purchase' && selected}
+        <p class="hint">Enter the total you paid and this purchase will update the average cost.</p>
+      {/if}
+      <Button size="sm" class="mt-4 w-full" disabled={saving} onclick={updateBalance}>{saving ? 'Saving…' : 'Update Stock Balance'}</Button>
     {/if}
-    {#if projected != null}
-      <p class="hint">This purchase sets the average cost to {formatCost(projected, currency, locale)}.</p>
-    {:else if kind === 'purchase' && selected}
-      <p class="hint">Enter the total you paid and this purchase will update the average cost.</p>
-    {/if}
-    <Button class="mt-4 w-full" disabled={saving} onclick={updateBalance}>{saving ? 'Saving…' : 'Update Stock Balance'}</Button>
     <p class="stock-label">Excel</p>
     <div class="mt-2.5 grid grid-cols-2 gap-2">
-      <Button variant="secondary" class="w-full" disabled={sheetBusy} onclick={exportWorkbook}>Export movements</Button>
-      <label class="btn btn-secondary w-full">
+      <Button size="sm" variant="secondary" class="w-full" disabled={sheetBusy} onclick={exportWorkbook}>Export movements</Button>
+      <label class="btn btn-secondary btn-sm w-full">
         Import movements
         <input class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange={importWorkbook} />
       </label>
@@ -455,7 +486,7 @@
           <Input inputmode="numeric" bind:value={newOpening} />
         </label>
       </div>
-      <Button variant="success" class="mt-4 w-full" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</Button>
+      <Button size="sm" variant="success" class="mt-4 w-full" disabled={savingItem} onclick={saveItem}>{savingItem ? 'Saving…' : 'Save New Item'}</Button>
     </div>
     {/if}
   </aside>
@@ -517,5 +548,15 @@
         {/if}
       {/snippet}
     </VirtualTable>
+    <Slot
+      name="inventory.stock-summary"
+      context={{
+        currency,
+        locale,
+        headId,
+        query,
+        refreshKey: summaryRefresh,
+      }}
+    />
   </section>
 </div>

@@ -4,12 +4,14 @@
   import ReportRange from '../../reports/screens/ReportRange.svelte'
   import ShopLocaleGate from '../../../platform/ShopLocaleGate.svelte'
   import { toast, toastError } from '../../../lib/toast'
-  import { loadPaymentsReport, type PaymentsReport } from '../api'
+  import { exportPaymentsReport, loadPaymentsReport, type PaymentsReport } from '../api'
 
   let report = $state<PaymentsReport | null>(null)
   let failed = $state(false)
   let query = $state('')
   let rangeLabel = $state('')
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
+  let lastSpan = $state<Extract<ReportSpan, { kind: 'ready' }> | null>(null)
 
   const rows = $derived(
     report?.totals.filter((row) => {
@@ -20,6 +22,7 @@
   )
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
+    lastSpan = span
     failed = false
     rangeLabel = span.from || span.to ? 'Selected range' : 'All dates'
     try {
@@ -28,6 +31,18 @@
       report = null
       failed = true
       toastError(reason, 'Could not load payment mix.')
+    }
+  }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    if (!lastSpan) return
+    exporting = format
+    try {
+      await exportPaymentsReport(format, lastSpan.from, lastSpan.to)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
     }
   }
 </script>
@@ -72,6 +87,14 @@
             <div>
               <h2>Payment mix</h2>
               <p class="hint">Breakdown from mirrored bill tenders</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+                {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+              </button>
+              <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+                {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+              </button>
             </div>
           </div>
           <input class="input mb-2" placeholder="Search methods" bind:value={query} />

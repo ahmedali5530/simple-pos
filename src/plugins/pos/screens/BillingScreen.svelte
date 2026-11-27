@@ -10,7 +10,11 @@
   import { formatMoney } from '../../../lib/money'
   import { printReceipt } from '../../../lib/print'
   import { pluginEnabled } from '../../../platform/enabled.svelte'
-  import { hasItemOptions, prepareItemOptions } from '../../../platform/itemOptions'
+  import {
+    hasExclusiveItemOptions,
+    hasItemOptions,
+    prepareItemOptions,
+  } from '../../../platform/itemOptions'
   import { location, screenOf } from '../../../lib/route.svelte'
   import { session } from '../../../lib/session.svelte'
   import type { CartLine, ItemVariant, PosItem, PosSnapshot } from '../../../lib/types'
@@ -69,7 +73,7 @@
 
   function reserved(sectionId: number, itemId: number) {
     return linesFor(sectionId)
-      .filter((line) => line.item_id === itemId)
+      .filter((line) => line.item_id === itemId && !(line.reference && line.source))
       .reduce((sum, line) => sum + line.qty * line.units, 0)
   }
 
@@ -188,8 +192,7 @@
     }
     const reference = draft.reference?.trim() ?? ''
     // A referenced line names an external unit the plugin has already checked
-    // (an IMEI, a job). Do not block it on this snapshot's catalog quantity,
-    // which may be stale; the server still enforces stock when the bill posts.
+    // (an IMEI, a job, a matrix SKU). Do not block it on parent catalog stock.
     if (
       !reference &&
       item.stock - reserved(sectionId, item.id) < units * qty
@@ -198,8 +201,11 @@
       return false
     }
     const lines = linesFor(sectionId)
+    // Unique references are one physical unit (IMEI). Matrix SKUs may repeat and
+    // just bump quantity on the same line.
+    const uniqueUnit = reference.length > 0 && source !== 'matrix.sku'
     if (
-      reference &&
+      uniqueUnit &&
       lines.some((line) => line.reference === reference && (line.source ?? '') === source)
     ) {
       attention = { tone: 'warning', message: 'That line is already on this bill.' }
@@ -209,10 +215,25 @@
     let name = variant ? `${item.name} · ${variant.name}` : item.name
     if (draft.label) name = `${name} · ${draft.label}`
     const existing = lines.find((line) => line.key === key)
+    const details = draft.details ?? {}
+    if (existing && source === 'matrix.sku') {
+      const onHand = Number(details.stock ?? existing.details?.stock)
+      if (Number.isFinite(onHand) && existing.qty + qty > onHand) {
+        attention = {
+          tone: 'warning',
+          message: `Only ${onHand} left for ${variant?.name ?? item.name}.`,
+        }
+        return false
+      }
+    }
     carts = {
       ...carts,
       [sectionId]: existing
-        ? lines.map((line) => (line.key === key ? { ...line, qty: line.qty + qty } : line))
+        ? lines.map((line) =>
+            line.key === key
+              ? { ...line, qty: line.qty + qty, details: { ...line.details, ...details } }
+              : line,
+          )
         : [
             ...lines,
             {
@@ -227,7 +248,7 @@
               entry: null,
               source,
               reference,
-              details: draft.details ?? {},
+              details,
             },
           ],
     }
@@ -288,6 +309,19 @@
     const byVariant = section?.items.find((item) => item.variants.some((variant) => variant.barcode === code))
     if (byVariant) {
       const variant = byVariant.variants.find((entry) => entry.barcode === code) ?? null
+      if (variant && hasExclusiveItemOptions(byVariant.id)) {
+        return addExternalLine(sectionId, {
+          item_id: byVariant.id,
+          variant_id: variant.id,
+          rate: variant.rate,
+          qty,
+          source: 'matrix.sku',
+          reference: `sku:${variant.id}`,
+          label: variant.name,
+        })
+          ? 'done'
+          : 'rejected'
+      }
       return addLine(sectionId, byVariant, variant, qty) ? 'done' : 'rejected'
     }
     const item = section?.items.find((entry) => entry.barcode === code)
@@ -318,6 +352,19 @@
         attention = null
         return 'done'
       }
+      if (found.variant && hasExclusiveItemOptions(found.item.id)) {
+        return addExternalLine(sectionId, {
+          item_id: found.item.id,
+          variant_id: found.variant.id,
+          rate: found.variant.rate,
+          qty,
+          source: 'matrix.sku',
+          reference: `sku:${found.variant.id}`,
+          label: found.variant.name,
+        })
+          ? 'done'
+          : 'rejected'
+      }
       const unitRate = found.variant?.rate ?? found.item.rate
       const priced = embeddedSale(unitRate, embedded)
       if (!priced) {
@@ -331,7 +378,20 @@
 
   function pick(sectionId: number, item: PosItem, variant: ItemVariant | null, qty: number) {
     focusId = sectionId
-    if (variant) return addLine(sectionId, item, variant, qty)
+    if (variant) {
+      if (hasExclusiveItemOptions(item.id)) {
+        return addExternalLine(sectionId, {
+          item_id: item.id,
+          variant_id: variant.id,
+          rate: variant.rate,
+          qty,
+          source: 'matrix.sku',
+          reference: `sku:${variant.id}`,
+          label: variant.name,
+        })
+      }
+      return addLine(sectionId, item, variant, qty)
+    }
     if (item.variants.length > 0 || hasItemOptions(item.id)) {
       pending = { sectionId, itemId: item.id }
       attention = null
@@ -384,12 +444,29 @@
       return true
     }
     const item = section.items.find((entry) => entry.id === current.item_id)
-    const other = linesFor(sectionId)
-      .filter((line) => line.item_id === current.item_id && line.key !== key)
-      .reduce((sum, line) => sum + line.qty * line.units, 0)
-    if (item && other + qty * current.units > item.stock) {
-      attention = { tone: 'warning', message: `Only ${item.stock} left for ${item.name}.` }
-      return false
+    // Plugin-owned lines (matrix SKU, IMEI, …) do not consume parent item stock.
+    if (current.source === 'matrix.sku') {
+      const onHand = Number(current.details?.stock)
+      if (Number.isFinite(onHand) && qty > onHand) {
+        attention = {
+          tone: 'warning',
+          message: `Only ${onHand} left for ${current.name}.`,
+        }
+        return false
+      }
+    } else if (!(current.reference && current.source)) {
+      const other = linesFor(sectionId)
+        .filter(
+          (line) =>
+            line.item_id === current.item_id &&
+            line.key !== key &&
+            !(line.reference && line.source),
+        )
+        .reduce((sum, line) => sum + line.qty * line.units, 0)
+      if (item && other + qty * current.units > item.stock) {
+        attention = { tone: 'warning', message: `Only ${item.stock} left for ${item.name}.` }
+        return false
+      }
     }
     carts = {
       ...carts,

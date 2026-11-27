@@ -1,3 +1,4 @@
+import { downloadWorkbook } from '../../lib/api'
 import { request } from '../../platform/http'
 
 export interface PaymentType {
@@ -44,4 +45,13 @@ export function loadPaymentsReport(from?: string, to?: string): Promise<Payments
   if (to) query.set('to', to)
   const suffix = query.size ? `?${query}` : ''
   return request(`/api/v1/payments/report${suffix}`)
+}
+
+export async function exportPaymentsReport(format: 'xlsx' | 'pdf', from?: string, to?: string) {
+  const params = new URLSearchParams({ format })
+  if (from && to) {
+    params.set('from', from)
+    params.set('to', to)
+  }
+  await downloadWorkbook(`/api/v1/payments/export?${params}`, `payment-mix.${format}`)
 }

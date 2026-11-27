@@ -10,6 +10,11 @@ export interface ItemOptionsProvider {
   /** Load whatever `hasOptions` needs. Called for the current tenant. */
   prepare: () => Promise<void>
   hasOptions: (itemId: number) => boolean
+  /**
+   * When true, the POS variant sheet hides native multi-select rows and only
+   * shows plugin contributions (matrix pick-one, etc.).
+   */
+  exclusive?: (itemId: number) => boolean
   /** Drop tenant-scoped state when the session changes. */
   reset?: () => void
 }
@@ -36,6 +41,12 @@ export async function prepareItemOptions() {
 
 export function hasItemOptions(itemId: number) {
   return activeProviders().some((provider) => provider.hasOptions(itemId))
+}
+
+export function hasExclusiveItemOptions(itemId: number) {
+  return activeProviders().some(
+    (provider) => provider.hasOptions(itemId) && (provider.exclusive?.(itemId) ?? false),
+  )
 }
 
 export function resetItemOptions() {

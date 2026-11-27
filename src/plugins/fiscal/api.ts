@@ -1,3 +1,4 @@
+import { downloadWorkbook } from '../../lib/api'
 import { request } from '../../platform/http'
 
 export interface FiscalSettings {
@@ -51,4 +52,9 @@ export function retryFiscalSubmission(bill_no: string): Promise<FiscalSubmission
     method: 'POST',
     body: JSON.stringify({ bill_no }),
   })
+}
+
+export async function exportFiscalReport(format: 'xlsx' | 'pdf') {
+  const params = new URLSearchParams({ format })
+  await downloadWorkbook(`/api/v1/fiscal/export?${params}`, `fiscal-submissions.${format}`)
 }

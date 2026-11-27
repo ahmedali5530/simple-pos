@@ -9,6 +9,6 @@ export const metadata = {
   nav: [{ id: "stock", label: "Stock In / Out", href: "/stock", permission: "inventory.write", order: 20 }] as UiPlugin['nav'],
   settingsPages: [] as UiPlugin['settingsPages'],
   reportPages: [] as UiPlugin['reportPages'],
-  slotsProvided: [] as string[],
+  slotsProvided: ["inventory.stock-form", "inventory.stock-summary"] as string[],
   contributions: [] as Array<{ id: string; slot: string; order: number }>,
 }

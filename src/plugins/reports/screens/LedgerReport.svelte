@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadReports } from '../../../lib/api'
+  import { exportReport, loadReports } from '../../../lib/api'
   import { formatCost } from '../../../lib/money'
   import type { ReportSpan } from '../../../lib/range'
   import type { Reports, StockMovement } from '../../../lib/types'
@@ -17,6 +17,8 @@
   let report = $state<Reports | null>(null)
   let failed = $state(false)
   let query = $state('')
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
+  let lastSpan = $state<Extract<ReportSpan, { kind: 'ready' }> | null>(null)
 
   function money(cents: number) {
     return formatCost(cents, currency, locale)
@@ -45,6 +47,7 @@
   )
 
   async function reload(span: Extract<ReportSpan, { kind: 'ready' }>) {
+    lastSpan = span
     failed = false
     try {
       report = await loadReports(span.from, span.to)
@@ -52,6 +55,18 @@
       report = null
       failed = true
       toastError(reason, 'The report did not open.')
+    }
+  }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    if (!lastSpan) return
+    exporting = format
+    try {
+      await exportReport('ledger', format, lastSpan.from, lastSpan.to)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
     }
   }
 </script>
@@ -79,6 +94,14 @@
         <div>
           <h2>Stock In / Out Ledger</h2>
           <p class="hint">Restocks, manual adjustments, and POS deductions</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
         </div>
       </div>
       <input class="input mb-2" placeholder="Search the ledger" bind:value={query} />

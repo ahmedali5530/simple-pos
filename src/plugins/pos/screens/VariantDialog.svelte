@@ -3,6 +3,7 @@
   import type { CartLine, ItemVariant, PosItem, PosSection } from '../../../lib/types'
   import { Button } from '../../../lib/ui'
   import { portal } from '../../../lib/ui/portal'
+  import { hasExclusiveItemOptions } from '../../../platform/itemOptions'
   import Slot from '../../../platform/Slot.svelte'
   import type { AddPosLine } from '../../../platform/slots'
 
@@ -31,6 +32,8 @@
   }: Props = $props()
 
   let counts = $state<Record<number, number>>({})
+  const exclusive = $derived(hasExclusiveItemOptions(item.id))
+  const showNative = $derived(!exclusive && item.variants.length > 0)
 
   const planned = $derived(
     item.variants.reduce((sum, variant) => sum + (counts[variant.id] ?? 0) * variant.units, 0),
@@ -108,54 +111,58 @@
     <div class="ui-modal-header">
       <div>
         <h2 class="ui-modal-title" id="variant-title">{item.name}</h2>
-        {#if item.variants.length > 0}
+        {#if exclusive}
+          <p class="ui-modal-desc">Search and pick one variant. Arrow keys move; Enter adds.</p>
+        {:else if showNative}
           <p class="ui-modal-desc">
             {available} in stock. Choose one option, or several. Each option has its own rate.
           </p>
         {:else}
-          <p class="ui-modal-desc">Choose an IMEI for this item. Each device is one unit.</p>
+          <p class="ui-modal-desc">Choose a variant for this item.</p>
         {/if}
       </div>
     </div>
     <div class="ui-modal-body">
-      {#each item.variants as variant, index (variant.id)}
-        <div class="variant-row">
-          <div>
-            <strong>{variant.name}</strong>
-            <div class="ui-hint">
-              {money(variant.rate)}
-              {#if variant.units > 1} · takes {variant.units} from stock{/if}
+      {#if showNative}
+        {#each item.variants as variant, index (variant.id)}
+          <div class="variant-row">
+            <div>
+              <strong>{variant.name}</strong>
+              <div class="ui-hint">
+                {money(variant.rate)}
+                {#if variant.units > 1} · takes {variant.units} from stock{/if}
+              </div>
             </div>
+            <span class="ui-stepper">
+              <button
+                type="button"
+                aria-label="Decrease {variant.name}"
+                disabled={(counts[variant.id] ?? 0) === 0}
+                onclick={() => setCount(variant, (counts[variant.id] ?? 0) - 1)}
+              >-</button>
+              <input
+                inputmode="numeric"
+                aria-label="Quantity for {variant.name}"
+                value={counts[variant.id] ?? 0}
+                use:focusFirst={index === 0}
+                oninput={(event) => onQtyInput(variant, event.currentTarget)}
+                onfocus={(event) => event.currentTarget.select()}
+                onkeydown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  confirm()
+                }}
+              />
+              <button
+                type="button"
+                aria-label="Increase {variant.name}"
+                disabled={planned + variant.units > available}
+                onclick={() => setCount(variant, (counts[variant.id] ?? 0) + 1)}
+              >+</button>
+            </span>
           </div>
-          <span class="ui-stepper">
-            <button
-              type="button"
-              aria-label="Decrease {variant.name}"
-              disabled={(counts[variant.id] ?? 0) === 0}
-              onclick={() => setCount(variant, (counts[variant.id] ?? 0) - 1)}
-            >-</button>
-            <input
-              inputmode="numeric"
-              aria-label="Quantity for {variant.name}"
-              value={counts[variant.id] ?? 0}
-              use:focusFirst={index === 0}
-              oninput={(event) => onQtyInput(variant, event.currentTarget)}
-              onfocus={(event) => event.currentTarget.select()}
-              onkeydown={(event) => {
-                if (event.key !== 'Enter') return
-                event.preventDefault()
-                confirm()
-              }}
-            />
-            <button
-              type="button"
-              aria-label="Increase {variant.name}"
-              disabled={planned + variant.units > available}
-              onclick={() => setCount(variant, (counts[variant.id] ?? 0) + 1)}
-            >+</button>
-          </span>
-        </div>
-      {/each}
+        {/each}
+      {/if}
       <Slot
         name="pos.item-options"
         context={{
@@ -171,9 +178,9 @@
     </div>
     <div class="ui-modal-footer">
       <Button variant="secondary" onclick={onClose}>
-        {item.variants.length > 0 ? 'Cancel' : 'Close'}
+        {showNative ? 'Cancel' : 'Close'}
       </Button>
-      {#if item.variants.length > 0}
+      {#if showNative}
         <Button disabled={planned === 0} onclick={confirm}>Add to bill</Button>
       {/if}
     </div>

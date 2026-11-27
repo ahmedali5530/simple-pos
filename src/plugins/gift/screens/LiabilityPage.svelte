@@ -3,11 +3,12 @@
   import { formatMoney } from '../../../lib/money'
   import ShopLocaleGate from '../../../platform/ShopLocaleGate.svelte'
   import { toast, toastError } from '../../../lib/toast'
-  import { giftLiability, type GiftLiability } from '../api'
+  import { exportGiftLiability, giftLiability, type GiftLiability } from '../api'
 
   let report = $state<GiftLiability | null>(null)
   let failed = $state(false)
   let query = $state('')
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
 
   const rows = $derived(
     report?.rows.filter((row) => {
@@ -25,6 +26,17 @@
         toastError(reason, 'Could not load gift liability.')
       })
   })
+
+  async function download(format: 'xlsx' | 'pdf') {
+    exporting = format
+    try {
+      await exportGiftLiability(format)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
+    }
+  }
 </script>
 
 <ShopLocaleGate>
@@ -71,6 +83,14 @@
             <div>
               <h2>Gift liability</h2>
               <p class="hint">Outstanding balances on active gift cards</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+                {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+              </button>
+              <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+                {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+              </button>
             </div>
           </div>
           <input class="input mb-2" placeholder="Search cards" bind:value={query} />

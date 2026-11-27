@@ -11,6 +11,7 @@ use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
 use sales_contract::register_tender_apply;
 
+mod export;
 mod routes;
 mod sale;
 mod tender;

@@ -1915,8 +1915,10 @@ dependencies = [
  "chrono",
  "platform-kernel",
  "platform-runtime",
+ "platform-sheets",
  "printing-contract",
  "reqwest 0.12.28",
+ "rust_xlsxwriter",
  "sales-contract",
  "serde",
  "serde_json",
@@ -1931,6 +1933,8 @@ dependencies = [
  "async-trait",
  "axum",
  "platform-kernel",
+ "platform-sheets",
+ "rust_xlsxwriter",
  "sales-contract",
  "serde",
  "serde_json",
@@ -1955,6 +1959,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-matrix"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "platform-kernel",
+ "sales-contract",
+ "serde",
+ "serde_json",
+ "sqlx 0.8.6",
+ "tracing",
+]
+
+[[package]]
 name = "plugin-mobile"
 version = "0.1.0"
 dependencies = [
@@ -1976,6 +1994,8 @@ dependencies = [
  "async-trait",
  "axum",
  "platform-kernel",
+ "platform-sheets",
+ "rust_xlsxwriter",
  "sales-contract",
  "serde",
  "serde_json",
@@ -2037,6 +2057,8 @@ dependencies = [
  "inventory-contract",
  "platform-kernel",
  "platform-runtime",
+ "platform-sheets",
+ "rust_xlsxwriter",
  "sales-contract",
  "serde",
  "serde_json",
@@ -2864,6 +2886,7 @@ dependencies = [
  "plugin-fiscal",
  "plugin-gift",
  "plugin-inventory",
+ "plugin-matrix",
  "plugin-mobile",
  "plugin-payments",
  "plugin-pos",

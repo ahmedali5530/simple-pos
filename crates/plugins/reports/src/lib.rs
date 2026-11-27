@@ -5,6 +5,7 @@ use platform_kernel::permission::Permission;
 use platform_kernel::plugin::Plugin;
 use platform_kernel::routes::{PluginRoutes, RegistrationError};
 
+mod export;
 mod routes;
 
 pub struct ReportsPlugin;

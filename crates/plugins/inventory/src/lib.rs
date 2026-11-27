@@ -80,6 +80,10 @@ impl Plugin for InventoryPlugin {
             order: 20,
             children: Vec::new(),
         }];
+        manifest.slots_provided = vec![
+            "inventory.stock-form".into(),
+            "inventory.stock-summary".into(),
+        ];
         manifest
     }
 

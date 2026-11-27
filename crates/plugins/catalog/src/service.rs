@@ -431,17 +431,57 @@ pub async fn save_item(
             .iter()
             .filter_map(|variant| variant.id)
             .collect();
-        sqlx::query("DELETE FROM item_variants WHERE item_id = $1 AND NOT (id = ANY($2))")
+        // Plugin-owned SKUs (e.g. matrix) live in item_variants but are not edited
+        // on the catalog options list. Keep them — and their barcodes — intact.
+        let matrix_skus = sqlx::query_scalar::<_, bool>(
+            "SELECT to_regclass('public.matrix_skus') IS NOT NULL",
+        )
+        .fetch_one(tx.conn())
+        .await
+        .unwrap_or(false);
+        if matrix_skus {
+            sqlx::query(
+                r#"
+                DELETE FROM item_variants v
+                WHERE v.item_id = $1
+                  AND NOT (v.id = ANY($2))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM matrix_skus s WHERE s.variant_id = v.id
+                  )
+                "#,
+            )
             .bind(id)
             .bind(&keep)
             .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
-        sqlx::query("UPDATE item_variants SET barcode = NULL WHERE item_id = $1")
+            sqlx::query(
+                r#"
+                UPDATE item_variants v
+                SET barcode = NULL
+                WHERE v.item_id = $1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM matrix_skus s WHERE s.variant_id = v.id
+                  )
+                "#,
+            )
             .bind(id)
             .execute(tx.conn())
             .await
             .map_err(catalog_error)?;
+        } else {
+            sqlx::query("DELETE FROM item_variants WHERE item_id = $1 AND NOT (id = ANY($2))")
+                .bind(id)
+                .bind(&keep)
+                .execute(tx.conn())
+                .await
+                .map_err(catalog_error)?;
+            sqlx::query("UPDATE item_variants SET barcode = NULL WHERE item_id = $1")
+                .bind(id)
+                .execute(tx.conn())
+                .await
+                .map_err(catalog_error)?;
+        }
         id
     } else {
         let sort_order = sqlx::query_scalar::<_, i32>(

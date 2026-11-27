@@ -1,12 +1,11 @@
 <script lang="ts">
-  import { loadReports } from '../../../lib/api'
+  import { exportReport, loadReports } from '../../../lib/api'
   import { printProductMix } from '../../../lib/print'
   import { pluginEnabled } from '../../../platform/enabled.svelte'
   import type { ReportSpan } from '../../../lib/range'
   import type { Reports } from '../../../lib/types'
   import ReportRange from './ReportRange.svelte'
   import { toast, toastError } from '../../../lib/toast'
-  import { Button } from '../../../lib/ui'
   import VirtualTable from '../../../lib/ui/VirtualTable.svelte'
 
   interface Props {
@@ -20,6 +19,7 @@
   let failed = $state(false)
   let query = $state('')
   let printing = $state(false)
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
   let span = $state<Extract<ReportSpan, { kind: 'ready' }>>({ kind: 'ready' })
 
   function hit(needle: string, parts: Array<string | null | undefined>) {
@@ -54,6 +54,17 @@
       printing = false
     }
   }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    exporting = format
+    try {
+      await exportReport('mix', format, span.from, span.to)
+    } catch (reason) {
+      toastError(reason, 'The export did not download.')
+    } finally {
+      exporting = ''
+    }
+  }
 </script>
 
 <div class="report-board">
@@ -67,9 +78,17 @@
           <h2>Product Mix</h2>
           <p class="hint">Opening is the stock before {report.range_label}. Net is what is left after the movement in that range.</p>
         </div>
-        {#if pluginEnabled('printing')}
-          <Button disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</Button>
-        {/if}
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting || printing} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting || printing} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
+          {#if pluginEnabled('printing')}
+            <button type="button" class="inline-flex h-10 items-center rounded-xl bg-slate-900 px-3 text-sm font-extrabold text-white disabled:opacity-50" disabled={printing || !!exporting} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
+          {/if}
+        </div>
       </div>
       <input class="input mb-2 mt-2" placeholder="Search items" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={mix} estimate={49} columns={6} reset={query} key={(line) => line.id}>

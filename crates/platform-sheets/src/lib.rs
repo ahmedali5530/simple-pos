@@ -1,11 +1,15 @@
-//! Neutral Excel helpers shared by catalog and inventory plugins.
+//! Neutral Excel / PDF helpers shared by catalog, inventory, and reports plugins.
 
 use std::collections::HashMap;
 use std::io::Cursor;
 
 use calamine::{Data, Reader, Xlsx};
 use platform_kernel::error::AppError;
-use rust_xlsxwriter::Workbook;
+use rust_xlsxwriter::{Format, Workbook, Worksheet};
+
+mod pdf;
+
+pub use pdf::table_pdf;
 
 pub fn open_book(bytes: &[u8]) -> Result<Xlsx<Cursor<&[u8]>>, AppError> {
     Xlsx::new(Cursor::new(bytes))
@@ -51,4 +55,34 @@ pub fn new_workbook() -> Workbook {
 
 pub fn sheet_error(message: impl Into<String>) -> AppError {
     AppError::BadRequest(message.into())
+}
+
+pub fn write_text(
+    sheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    value: &str,
+    format: &Format,
+) -> Result<(), AppError> {
+    sheet
+        .write_string_with_format(row, col, value, format)
+        .sheet()?;
+    Ok(())
+}
+
+pub fn set_widths(sheet: &mut Worksheet, widths: &[f64]) -> Result<(), AppError> {
+    for (col, width) in widths.iter().enumerate() {
+        sheet.set_column_width(col as u16, *width).sheet()?;
+    }
+    Ok(())
+}
+
+pub trait SheetResult<T> {
+    fn sheet(self) -> Result<T, AppError>;
+}
+
+impl<T> SheetResult<T> for Result<T, rust_xlsxwriter::XlsxError> {
+    fn sheet(self) -> Result<T, AppError> {
+        self.map_err(|_| AppError::BadRequest("The workbook could not be built.".into()))
+    }
 }
