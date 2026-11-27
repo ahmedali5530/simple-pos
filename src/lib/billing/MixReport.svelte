@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadReports } from '../api'
+  import { exportReport, loadReports } from '../api'
   import { printProductMix } from '../print'
   import type { ReportSpan } from '../range'
   import type { Reports } from '../types'
@@ -18,6 +18,7 @@
   let query = $state('')
   let printing = $state(false)
   let printNote = $state('')
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
   let span = $state<Extract<ReportSpan, { kind: 'ready' }>>({ kind: 'ready' })
 
   function hit(needle: string, parts: Array<string | null | undefined>) {
@@ -52,6 +53,19 @@
       printing = false
     }
   }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    exporting = format
+    error = ''
+    printNote = ''
+    try {
+      await exportReport('mix', format, span.from, span.to)
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : 'The export did not download.'
+    } finally {
+      exporting = ''
+    }
+  }
 </script>
 
 <div class="report-board">
@@ -67,7 +81,15 @@
           <h2>Product Mix</h2>
           <p class="hint">Opening is the stock before {report.range_label}. Net is what is left after the movement in that range.</p>
         </div>
-        <button type="button" class="save" disabled={printing} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting || printing} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting || printing} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl bg-slate-900 px-3 text-sm font-extrabold text-white disabled:opacity-50" disabled={printing || !!exporting} onclick={printMix}>{printing ? 'Printing…' : 'Print'}</button>
+        </div>
       </div>
       {#if printNote}<p class="mt-2 text-[12px] font-bold {printNote.includes('sent') ? 'text-emerald-700' : 'text-rose-700'}">{printNote}</p>{/if}
       <input class="mb-2 mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search items" bind:value={query} />

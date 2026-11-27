@@ -267,6 +267,25 @@ export function loadReports(from?: string, to?: string): Promise<Reports> {
   return request(`/api/reports${query}`)
 }
 
+export type ReportExportKind = 'sales' | 'ledger' | 'mix'
+export type ReportExportFormat = 'xlsx' | 'pdf'
+
+export async function exportReport(
+  kind: ReportExportKind,
+  format: ReportExportFormat,
+  from?: string,
+  to?: string,
+) {
+  const params = new URLSearchParams({ kind, format })
+  if (from && to) {
+    params.set('from', from)
+    params.set('to', to)
+  }
+  const stem =
+    kind === 'sales' ? 'sales-report' : kind === 'ledger' ? 'stock-ledger' : 'product-mix'
+  await downloadWorkbook(`/api/reports/export?${params}`, `${stem}.${format}`)
+}
+
 export function loadCashDesk(): Promise<CashDesk> {
   return request('/api/cash')
 }

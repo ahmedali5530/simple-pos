@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadReports, removeBill } from '../api'
+  import { exportReport, loadReports, removeBill } from '../api'
   import { formatCost, formatMoney } from '../money'
   import type { ReportSpan } from '../range'
   import { session } from '../session.svelte'
@@ -21,6 +21,7 @@
   let openBill = $state<number | null>(null)
   let confirmVoid = $state<number | null>(null)
   let voiding = $state<number | null>(null)
+  let exporting = $state<'xlsx' | 'pdf' | ''>('')
   let lastSpan = $state<Extract<ReportSpan, { kind: 'ready' }> | null>(null)
   const isManager = $derived(session.user?.role === 'manager')
   const billColumns = $derived(isManager ? 8 : 7)
@@ -69,6 +70,19 @@
     } catch (reason) {
       report = null
       error = reason instanceof Error ? reason.message : 'The report did not open.'
+    }
+  }
+
+  async function download(format: 'xlsx' | 'pdf') {
+    if (!lastSpan) return
+    exporting = format
+    error = ''
+    try {
+      await exportReport('sales', format, lastSpan.from, lastSpan.to)
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : 'The export did not download.'
+    } finally {
+      exporting = ''
     }
   }
 
@@ -148,15 +162,23 @@
           <h2>Sales Report — “One Entry” Bill Log</h2>
           <p class="hint">Profit is the bill total minus the cost of those items</p>
         </div>
-        <label class="head-filter">
-          <span class="sr-only">Business head</span>
-          <select bind:value={headId}>
-            <option value="all">All Business Heads</option>
-            {#each report.sections as section (section.id)}
-              <option value={section.short_name}>{section.short_name}</option>
-            {/each}
-          </select>
-        </label>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </button>
+          <button type="button" class="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900 disabled:opacity-50" disabled={!!exporting} onclick={() => download('xlsx')}>
+            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          </button>
+          <label class="head-filter">
+            <span class="sr-only">Business head</span>
+            <select class="!mt-0 !h-10 !min-h-10 rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-900" bind:value={headId}>
+              <option value="all">All Business Heads</option>
+              {#each report.sections as section (section.id)}
+                <option value={section.short_name}>{section.short_name}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
       </div>
       <input class="mb-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900" placeholder="Search bills" bind:value={query} />
       <VirtualTable class="report-scroll" tableClass="bill-log" items={bills} estimate={58} columns={billColumns} reset="{headId}:{query}:{isManager}" key={(bill) => bill.id}>

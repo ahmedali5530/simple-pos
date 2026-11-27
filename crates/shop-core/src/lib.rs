@@ -6,6 +6,7 @@ mod error;
 mod ledger;
 mod models;
 mod print;
+mod report_export;
 mod sheets;
 
 pub use billing::{
@@ -24,6 +25,7 @@ pub use ledger::{
     adjust_stock, load_reports, product_mix, recent_movements, stock_summary, MixLine, ProductMix, Reports,
     StockBalance, StockMove, StockMovement, StockPage,
 };
+pub use report_export::{export_report, ReportFormat, ReportKind};
 pub use cash::{cash_desk, load_shift, open_shift, save_shift, CashDesk, CashExpense, CashShift, OpenShift, ShiftForm};
 pub use admin::{
     ensure_manager, login, logout, needs_first_user, open_session, remove_category, remove_item,

@@ -1867,7 +1867,7 @@ fn cell_string(cell: &Data) -> String {
     }
 }
 
-fn write_text(
+pub(crate) fn write_text(
     sheet: &mut rust_xlsxwriter::Worksheet,
     row: u32,
     col: u16,
@@ -1878,14 +1878,14 @@ fn write_text(
     Ok(())
 }
 
-fn set_widths(sheet: &mut rust_xlsxwriter::Worksheet, widths: &[f64]) -> Result<(), AppError> {
+pub(crate) fn set_widths(sheet: &mut rust_xlsxwriter::Worksheet, widths: &[f64]) -> Result<(), AppError> {
     for (col, width) in widths.iter().enumerate() {
         sheet.set_column_width(col as u16, *width).sheet()?;
     }
     Ok(())
 }
 
-trait SheetResult<T> {
+pub(crate) trait SheetResult<T> {
     fn sheet(self) -> Result<T, AppError>;
 }
 

@@ -11,7 +11,8 @@ use axum::{
 };
 use shop_core::{
     adjust_stock, cash_desk, clear_item_image, ensure_manager, export_cash_expenses_template,
-    export_categories, export_items, export_movements, import_categories, import_items,
+    export_categories, export_items, export_movements, export_report, import_categories, import_items,
+    ReportFormat, ReportKind,
     import_movements, item_image_ext, load_pos, load_reports, login, logout, needs_first_user,
     open_session, open_shift, parse_cash_expenses_workbook, post_bill, print_cash_shift,
     print_product_mix, print_saved_bill, print_test, recent_movements, remove_category, remove_item,
@@ -218,6 +219,7 @@ async fn open_with(embedded: bool) -> Result<Till, String> {
                 post(post_stock_import).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
             )
             .route("/api/reports", get(get_reports))
+            .route("/api/reports/export", get(get_reports_export))
             .route("/api/items", post(post_item))
             .route("/api/items/export", get(get_items_export))
             .route(
@@ -576,6 +578,14 @@ struct ReportQuery {
     to: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct ReportExportQuery {
+    kind: String,
+    format: String,
+    from: Option<String>,
+    to: Option<String>,
+}
+
 async fn post_stock(
     State(state): State<AppState>,
     Json(body): Json<StockMove>,
@@ -603,6 +613,24 @@ async fn get_reports(
     Ok(Json(
         load_reports(&state.pool, query.from.as_deref(), query.to.as_deref()).await?,
     ))
+}
+
+async fn get_reports_export(
+    State(state): State<AppState>,
+    Query(query): Query<ReportExportQuery>,
+) -> Result<Response, ApiError> {
+    let kind = ReportKind::parse(&query.kind)?;
+    let format = ReportFormat::parse(&query.format)?;
+    let bytes = export_report(
+        &state.pool,
+        kind,
+        format,
+        query.from.as_deref(),
+        query.to.as_deref(),
+    )
+    .await?;
+    let filename = format!("{}.{}", kind.file_stem(), format.extension());
+    Ok(file_response(&filename, format.content_type(), bytes))
 }
 
 async fn get_categories_export(State(state): State<AppState>) -> Result<Response, ApiError> {
@@ -652,17 +680,20 @@ async fn post_stock_import(
 }
 
 fn workbook_response(filename: &str, bytes: Vec<u8>) -> Response {
+    file_response(
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        bytes,
+    )
+}
+
+fn file_response(filename: &str, content_type: &'static str, bytes: Vec<u8>) -> Response {
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-        .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"workbook.xlsx\""));
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"download.bin\""));
     (
         StatusCode::OK,
         [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            ),
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
             (header::CONTENT_DISPOSITION, disposition),
         ],
         bytes,
